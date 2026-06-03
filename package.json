@@ -11,8 +11,12 @@
       "default": "./src/index.js"
     }
   },
+  "bin": {
+    "litectx": "./bin/litectx.js"
+  },
   "files": [
     "src/",
+    "bin/",
     "types/",
     "README.md",
     "litectx.context.md",
@@ -22,7 +26,12 @@
     "typecheck": "tsc --noEmit",
     "build:types": "tsc",
     "prepublishOnly": "npm run build:types",
-    "test": "vitest run"
+    "test": "node --test",
+    "bench": "node poc/bench-lib.mjs",
+    "bench:ablation": "node poc/run.mjs aurora && node poc/run.mjs gitdone"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1"
   },
   "engines": {
     "node": ">=18"

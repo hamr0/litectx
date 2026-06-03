@@ -99,6 +99,22 @@ repo corrected it. That is the POC doing its job.
 - **Keep a multi-repo regression harness** (this `poc/`, dataset-driven) as the calibration gate
   for any future signal/weight change. One repo is not enough — gitdone just proved that.
 
+## Slice-0 library baseline (the bar to beat)
+
+`run.mjs` is the research ablation. `bench-lib.mjs` (`npm run bench`) is the **integration gate** —
+it indexes through the real `LiteCtx` and runs `recall()`, so the library and the gate can't drift.
+The slice-0 walking skeleton (file-granularity, plain BM25) establishes the bar every later slice
+must **hold-or-beat on both repos**:
+
+```
+[aurora]  ALL MRR 0.523  P@1 36%  P@3 64%  P@5 73%   (EASY 0.640 · HARD 0.406)
+[gitdone] ALL MRR 0.416  P@1 25%  P@3 45%  P@5 75%   (EASY 0.277 · HARD 0.555)
+```
+
+Reproduces the ablation `baseline` within noise (aurora 0.511, gitdone 0.423) and the same single
+aurora FTS miss (`decay.py`) — confirming lib ≡ harness. Slice 3 (code-aware BM25) and slice 4
+(activation/spreading) must move these up without regressing either repo.
+
 ## Honest limits of this POC
 
 - **Small n** (22 + 20), **two repos**, **file-granularity** (v1 ranks at symbol level).

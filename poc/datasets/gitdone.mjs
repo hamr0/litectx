@@ -5,6 +5,7 @@ export default {
   name: "gitdone",
   roots: ["/home/hamr/PycharmProjects/gitdone", "/home/hamr/Documents/PycharmProjects/gitdone"],
   pathspecs: ["app/**/*.js"],
+  include: [".js"],         // extensions the litectx library should index
   edges: "cjs",             // resolve relative require('./x') to files
   queries: [
     // ---- EASY (keyword in file name) ----

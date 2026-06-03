@@ -4,6 +4,7 @@ export default {
   name: "aurora",
   roots: ["/home/hamr/PycharmProjects/aurora", "/home/hamr/Documents/PycharmProjects/aurora"],
   pathspecs: ["*.py"],
+  include: [".py"],         // extensions the litectx library should index
   edges: "python",          // resolve `from aurora_x.y import z` to files
   queries: [
     // ---- EASY ----

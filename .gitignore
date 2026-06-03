@@ -7,6 +7,9 @@ node_modules/
 # Build / packaging
 *.tgz
 
+# litectx index output
+.litectx/
+
 # Logs
 *.log
 npm-debug.log*
