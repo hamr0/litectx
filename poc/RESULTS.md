@@ -8,20 +8,20 @@
 
 ```sh
 cd poc
-npm install          # better-sqlite3 (native build)
-node run.mjs         # indexes aurora's 497 .py files, runs the eval, prints the tables
+npm install                # better-sqlite3 (native build)
+node run.mjs aurora        # the kernel we're borrowing (Python, 497 files)
+node run.mjs gitdone       # generalization test (JavaScript/CJS, 100 files)
 ```
 
-- **What it indexes:** every tracked `.py` in the aurora repo (the kernel we're borrowing).
-- **The eval:** 22 developer questions with a hand-verified ground-truth file each
-  (`queries.mjs`), split 11 EASY (keywords in the file/name → BM25 should find it) and
-  11 HARD (intent/synonym phrasing, or many files share the keywords and only one is right).
-- **What it measures:** for each query, where the right file lands under each ranker.
-  MRR / P@1 / P@3 / P@5, broken out EASY vs HARD.
-
-The eval set was authored *before* tuning, from a read of aurora's actual modules — the targets
-are not cherry-picked to make activation win. Read `queries.mjs` and check any row against the
-aurora source.
+- **Datasets** live in `poc/datasets/*.mjs` — each declares the repo, the file glob, the edge
+  style (python imports / cjs requires), and its eval queries with hand-verified ground-truth
+  files. Read them and check any row against the source; targets were authored before tuning,
+  not cherry-picked.
+- **The eval:** developer questions, each split EASY (keywords in the file/name → BM25 should
+  find it) vs HARD (intent/synonym phrasing, or many files — incl. same-named test files —
+  share the keywords and only one is right).
+- **What it measures:** where the right file lands under each ranker. MRR / P@1 / P@3 / P@5,
+  broken out EASY vs HARD.
 
 ## The four rankers (ablation)
 
@@ -32,66 +32,80 @@ query doesn't lexically match). They differ only in how they *order* those candi
 |---|---|
 | `baseline` | `[1.0, 0, 0]` — pure BM25 |
 | `+bla` | `[0.6, 0.4, 0]` — BM25 + git-seeded base-level activation |
-| `+spread` | `[0.6, 0, 0.4]` — BM25 + 1-hop spreading over import edges |
+| `+spread` | `[0.6, 0, 0.4]` — BM25 + 1-hop spreading over code edges |
 | `litectx` | `[0.5, 0.3, 0.2]` — all three (aurora's code weights) |
 
-- **git-bla** = `ln(Σ age_days^-0.5)` with each commit timestamp as a pseudo-access (the PRD §4.1
-  cold-start unification). Recency + frequency, straight from `git log`. No churn-penalty term yet.
-- **graph-spread** = a candidate inherits the best BM25 relevance among its import-graph neighbors
-  (edges regex-extracted from `from/import` statements; 518 intra-repo edges).
+- **git-bla** = `ln(Σ age_days^-0.5)`, each commit timestamp a pseudo-access (PRD §4.1 cold-start).
+  Recency + frequency from `git log`. **No churn-penalty/decay term yet.**
+- **graph-spread** = a candidate inherits the best BM25 relevance among its code-graph neighbors
+  (edges: python `import`s / cjs relative `require`s).
 
-## Results (n=22, aurora @ 750a39d, 497 files)
+## Results
+
+### aurora — Python, 497 files, 518 import-edges (n=22)
 
 ```
-  ALL
-    baseline  MRR 0.511  P@1 36%  P@3 59%  P@5 68%
-    +bla      MRR 0.516  P@1 36%  P@3 59%  P@5 73%   Δmrr +0.005
-    +spread   MRR 0.539  P@1 36%  P@3 68%  P@5 82%   Δmrr +0.028
-    litectx   MRR 0.575  P@1 41%  P@3 73%  P@5 77%   Δmrr +0.064
-
-  EASY (11)
-    baseline  MRR 0.580  P@1 36%  P@3 73%  P@5  91%
-    +bla      MRR 0.689  P@1 55%  P@3 73%  P@5 100%   Δmrr +0.109
-    +spread   MRR 0.586  P@1 36%  P@3 82%  P@5 100%   Δmrr +0.006
-    litectx   MRR 0.735  P@1 55%  P@3 91%  P@5 100%   Δmrr +0.155
-
-  HARD (11)
-    baseline  MRR 0.441  P@1 36%  P@3 45%  P@5 45%
-    +bla      MRR 0.342  P@1 18%  P@3 45%  P@5 45%   Δmrr -0.099   ← BLA HURTS hard queries
-    +spread   MRR 0.491  P@1 36%  P@3 55%  P@5 64%   Δmrr +0.050   ← spread helps everywhere
-    litectx   MRR 0.414  P@1 27%  P@3 55%  P@5 55%   Δmrr -0.027
+  ALL       baseline MRR 0.511  P@1 36%  P@3 59%  P@5 68%
+            +bla     MRR 0.516  ...                       Δmrr +0.005
+            +spread  MRR 0.539  P@3 68%  P@5 82%          Δmrr +0.028
+            litectx  MRR 0.575  P@1 41%  P@3 73%          Δmrr +0.064
+  EASY(11)  +bla Δ+0.109   +spread Δ+0.006   litectx Δ+0.155
+  HARD(11)  +bla Δ-0.099   +spread Δ+0.050   litectx Δ-0.027
 ```
 
-## Verdict: **PASS — build v1**, with one calibration correction
+### gitdone — JavaScript/CJS, 100 files, 153 require-edges (n=20)
 
-1. **The hypothesis holds overall.** litectx beats plain BM25 on every aggregate metric
-   (MRR +0.064, P@3 +14pts). Re-ranking moved 13/22 queries — 9 better, 4 worse.
+```
+  ALL       baseline MRR 0.423  P@1 25%  P@3 45%  P@5 70%
+            +bla     MRR 0.393  ...                       Δmrr -0.030   ← BLA net-negative
+            +spread  MRR 0.444  P@3 55%  P@5 75%          Δmrr +0.021
+            litectx  MRR 0.356  P@1 15%  P@3 40%          Δmrr -0.067   ← combined LOSES to BM25
+  EASY(10)  +bla Δ+0.011   +spread Δ+0.013   litectx Δ-0.022
+  HARD(10)  +bla Δ-0.072   +spread Δ+0.029   litectx Δ-0.112
+            (HARD P@3: baseline 50% → +spread 70%)
+  litectx vs baseline: moved 15/20 — 6 better, 9 worse.
+```
 
-2. **Graph spreading is the robust differentiator.** `+spread` is the *only* signal that improves
-   the HARD set (and never hurts): HARD P@5 45% → 64%, P@3 45% → 55%. This is the part of the bet
-   most at risk — graph-as-substrate — and it earned its place.
+## Verdict: **PASS for graph-aware recall; the activation/cold-start term must be reworked**
 
-3. **Git-seeded BLA, as a flat 0.3 weight, is too aggressive — it must be corrected before v1.**
-   It's a big win on EASY/hot-file queries (P@1 36% → 55%) but it *hurts* HARD (P@1 36% → 18%),
-   because it boosts recently-**churned** files whether or not they answer the query. The cause is
-   structural: we implemented the **recency half** of ACT-R and not the **churn-penalty / decay
-   half** (§4). Half of activation is worse than none on hard queries.
+Two repos, two languages, and the signals separate cleanly:
+
+1. **Graph spreading is confirmed — and it generalizes.** `+spread` is positive on *both* repos
+   and *every* breakdown (aurora ALL +0.028 / HARD +0.050; gitdone ALL +0.021 / HARD +0.029,
+   HARD P@3 50% → 70%), and never hurts an aggregate. This is the part of the bet most at risk —
+   graph-as-substrate — and it earns its place. **Build it.**
+
+2. **Git-seeded BLA, as a flat 0.3 co-equal boost, fails the generalization test — do not ship it
+   as configured.** It looked like a win on aurora (driven by EASY/hot-file queries) but is
+   **net-negative on gitdone** (ALL −0.030, HARD −0.072), and the combined `litectx` preset
+   **loses to plain BM25 on gitdone** (−0.067; 9 of 15 moved queries got *worse*). Root cause is
+   structural: we shipped the **recency half** of ACT-R without the **churn-penalty/decay half**
+   (§4), so "recently changed" reads as "more relevant" even when it isn't — and how well that
+   correlates with the answer is **repo-dependent**, which is exactly what a ranking prior must
+   not be.
+
+**Net:** the gate passes — activation + graph-aware recall beats BM25 — but the win is carried by
+the **graph**, not by naive git-recency. The single-repo aurora run *overstated* BLA; the second
+repo corrected it. That is the POC doing its job.
 
 ## What this changes for v1 (carried into the PRD)
 
-- **Keep** the graph substrate + spreading — confirmed (§2, §4).
-- **Correct** the cold-start model (§4.1, open question #1): git recency is a useful prior **only
-  paired with the churn/decay term** — recently-churned ≠ more relevant. Implement decay+churn
-  before weighting BLA, and weight BLA gentler than 0.3 (or as a tiebreaker). Re-run this harness
-  after, expecting the HARD regression to flip positive.
+- **Ship** the graph substrate + spreading (§2, §4) — validated on two repos.
+- **Rework** the cold-start/activation term before it gets any real weight (§4.1, §14 #1):
+  - implement decay + churn so recency is **penalized when it's instability**, not rewarded;
+  - demote BLA from a co-equal 0.3 boost to a **small term or a tiebreaker** until it earns more;
+  - **re-run this harness on both repos** as the gate — adopt only weights that are ≥ baseline on
+    *every* repo, not just on average.
+- **Keep a multi-repo regression harness** (this `poc/`, dataset-driven) as the calibration gate
+  for any future signal/weight change. One repo is not enough — gitdone just proved that.
 
 ## Honest limits of this POC
 
-- **n=22, one repo, file-granularity** (not symbol-level as v1 will be).
-- The eval leans toward **active modules** (the interesting ones), which flatters BLA's recency on
-  EASY; a colder query set would shrink that win.
-- **1 FTS miss** ("penalize unstable frequently-changing code") — no ranker can rank a target the
-  FTS gate never surfaces. That's a tokenization/chunking gap (the file talks about "churn"/
-  "instability", not the query's words), not a ranking failure — and exactly what the code-aware
-  tokenizer + deps-in-BM25 content (§5) is meant to close.
-- Decay/churn and embeddings tiers are **not** implemented here — out of scope for the gate.
+- **Small n** (22 + 20), **two repos**, **file-granularity** (v1 ranks at symbol level).
+- **aurora's eval leans toward active modules**, which flattered BLA there; **gitdone's baseline is
+  weak** (EASY P@1 only 10%) because many small CJS modules share email/event vocabulary and one
+  ~1700-line file (`email-bodies.js`) skews BM25 — so the EASY/HARD split is less clean on gitdone.
+  Both are real repos; neither was tuned to flatter a ranker.
+- 1 aurora FTS miss (a tokenization gap the code-aware tokenizer + deps-in-BM25 content of §5 is
+  meant to close). Decay/churn and embeddings tiers are **not** implemented here — out of scope
+  for the gate.

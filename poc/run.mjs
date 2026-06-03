@@ -3,79 +3,74 @@
 // Hypothesis to kill or confirm:
 //   Does activation + graph-aware recall measurably beat plain FTS5/BM25?
 //
-// Method: index aurora's .py files into one SQLite FTS5 table. For each eval query,
-// rank candidate files two ways and compare where the ground-truth file lands:
-//   A) baseline  = pure BM25 (FTS5 bm25()).
-//   B) litectx   = re-rank the SAME FTS candidates by 0.5*BM25 + 0.3*activation + 0.2*spreading.
-//        - activation = git-seeded ACT-R base level: BLA = ln(Σ age_days^-d), d=0.5,
-//          commit timestamps as pseudo-accesses (the PRD cold-start unification, validated here).
-//        - spreading  = 1-hop over import edges (regex-derived): a file inherits the best
-//          lexical relevance among its import-neighbors.
-// FTS5 gate: candidates = files that match the query (BLA never surfaces a non-matching file).
+// Usage: node run.mjs [dataset]      dataset = aurora (default) | gitdone
 //
-// Run: node run.mjs   (cwd = poc/, aurora at ../../aurora or ~/PycharmProjects/aurora)
+// Method: index a repo's source files into one SQLite FTS5 table. For each eval query,
+// order the SAME FTS candidate set four ways and see where the ground-truth file lands:
+//   baseline = pure BM25 · +bla = BM25+git-activation · +spread = BM25+graph · litectx = all.
+//   - bla     = git-seeded ACT-R base level: ln(Σ age_days^-d), commits as pseudo-accesses.
+//   - spread  = 1-hop over code edges (python imports OR cjs requires): a file inherits the
+//               best lexical relevance among its graph neighbors.
+// FTS5 gate: candidates = files that match the query (activation never surfaces a non-match).
 
 import Database from "better-sqlite3";
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { QUERIES } from "./queries.mjs";
+import { join, dirname } from "node:path";
 
-const AURORA = ["/home/hamr/PycharmProjects/aurora", "/home/hamr/Documents/PycharmProjects/aurora"]
-  .find(existsSync);
-if (!AURORA) throw new Error("aurora repo not found");
+const DATASET = process.argv[2] || "aurora";
+const ds = (await import(`./datasets/${DATASET}.mjs`)).default;
+const ROOT = ds.roots.find(existsSync);
+if (!ROOT) throw new Error(`repo not found for dataset ${DATASET}`);
 const DECAY = 0.5;
 const W = { bm25: 0.5, bla: 0.3, spread: 0.2 };
-const git = (...a) => execFileSync("git", ["-C", AURORA, ...a], { encoding: "utf8", maxBuffer: 1 << 28 });
+const git = (...a) => execFileSync("git", ["-C", ROOT, ...a], { encoding: "utf8", maxBuffer: 1 << 28 });
 
-// ---- tokenization (code-aware: split snake_case + camelCase, like aurora's tokenizer) ----
-const STOP = new Set("the a an is are be how where what when which does do i of to into for from on in it its and or s as we use used using system code".split(" "));
-function splitIdent(s) {
-  return s
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")     // camelCase -> camel Case
-    .replace(/[^A-Za-z0-9]+/g, " ")              // snake/dots/slashes -> spaces
-    .toLowerCase().split(/\s+/).filter(Boolean);
-}
-function keywords(q) {
-  return [...new Set(splitIdent(q).filter((w) => w.length >= 3 && !STOP.has(w)))];
-}
+// ---- code-aware tokenization (split snake_case + camelCase, like aurora's tokenizer) ----
+const STOP = new Set("the a an is are be how where what when which does do i of to into for from on in it its and or s as we use used using system code module responsible".split(" "));
+const splitIdent = (s) => s
+  .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+  .replace(/[^A-Za-z0-9]+/g, " ")
+  .toLowerCase().split(/\s+/).filter(Boolean);
+const keywords = (q) => [...new Set(splitIdent(q).filter((w) => w.length >= 3 && !STOP.has(w)))];
 
 // ---- collect files ----
-const files = git("ls-files", "*.py").trim().split("\n").filter(Boolean);
+const files = git("ls-files", ...ds.pathspecs).trim().split("\n").filter(Boolean);
 const fileSet = new Set(files);
 
-// ---- module path -> file (for import edges) ----
-const modToFile = new Map();
-for (const f of files) {
-  const i = f.indexOf("/src/");
-  if (i < 0) continue;
-  let mod = f.slice(i + 5).replace(/\.py$/, "").replace(/\//g, ".").replace(/\.__init__$/, "");
-  modToFile.set(mod, f);
-}
-
-// ---- import edges (undirected, intra-repo only) ----
+// ---- edges (undirected, intra-repo) ----
 const neighbors = new Map(files.map((f) => [f, new Set()]));
-const importRe = /^\s*(?:from\s+([\w.]+)\s+import\s+([\w,\s*]+)|import\s+([\w.]+))/gm;
-function resolve(mod) {
-  if (modToFile.has(mod)) return modToFile.get(mod);
-  const cut = mod.split("."); cut.pop();              // from pkg.mod import sym -> try pkg.mod's parent
-  const parent = cut.join(".");
-  return modToFile.get(parent) || null;
-}
-for (const f of files) {
-  const text = readFileSync(join(AURORA, f), "utf8");
-  let m;
-  while ((m = importRe.exec(text))) {
-    const cands = [];
-    if (m[1]) {                                        // from X import a, b
-      cands.push(m[1]);
-      for (const name of m[2].split(",").map((x) => x.trim().split(" ")[0]).filter(Boolean))
-        cands.push(`${m[1]}.${name}`);
+const link = (a, b) => { if (b && b !== a && fileSet.has(b)) { neighbors.get(a).add(b); neighbors.get(b).add(a); } };
+
+if (ds.edges === "python") {
+  const modToFile = new Map();
+  for (const f of files) {
+    const i = f.indexOf("/src/");
+    if (i < 0) continue;
+    const mod = f.slice(i + 5).replace(/\.py$/, "").replace(/\//g, ".").replace(/\.__init__$/, "");
+    modToFile.set(mod, f);
+  }
+  const resolve = (mod) => modToFile.get(mod) || modToFile.get(mod.split(".").slice(0, -1).join(".")) || null;
+  const re = /^\s*(?:from\s+([\w.]+)\s+import\s+([\w,\s*]+)|import\s+([\w.]+))/gm;
+  for (const f of files) {
+    const text = readFileSync(join(ROOT, f), "utf8");
+    let m;
+    while ((m = re.exec(text))) {
+      const cands = [];
+      if (m[1]) { cands.push(m[1]); for (const n of m[2].split(",").map((x) => x.trim().split(" ")[0]).filter(Boolean)) cands.push(`${m[1]}.${n}`); }
+      if (m[3]) cands.push(m[3]);
+      for (const c of cands) link(f, resolve(c));
     }
-    if (m[3]) cands.push(m[3]);                         // import X.Y
-    for (const c of cands) {
-      const tgt = resolve(c);
-      if (tgt && tgt !== f) { neighbors.get(f).add(tgt); neighbors.get(tgt).add(f); }
+  }
+} else if (ds.edges === "cjs") {
+  const re = /require\(\s*['"](\.[^'"]+)['"]\s*\)/g;       // relative requires only
+  for (const f of files) {
+    const text = readFileSync(join(ROOT, f), "utf8");
+    let m;
+    while ((m = re.exec(text))) {
+      const base = join(dirname(f), m[1]).replace(/\\/g, "/");
+      const cand = [base, `${base}.js`, `${base}/index.js`].find((p) => fileSet.has(p));
+      link(f, cand);
     }
   }
 }
@@ -84,7 +79,7 @@ for (const f of files) {
 const NOW = parseInt(git("log", "-1", "--format=%at").trim(), 10);
 const commits = new Map(files.map((f) => [f, []]));
 {
-  const log = git("log", "--format=C%at", "--name-only", "--", "*.py");
+  const log = git("log", "--format=C%at", "--name-only", "--", ...ds.pathspecs);
   let t = null;
   for (const line of log.split("\n")) {
     if (/^C\d+$/.test(line)) { t = parseInt(line.slice(1), 10); continue; }
@@ -94,57 +89,48 @@ const commits = new Map(files.map((f) => [f, []]));
 const bla = new Map();
 for (const f of files) {
   const ts = commits.get(f);
-  if (!ts.length) { bla.set(f, 0); continue; }          // never-touched = neutral
+  if (!ts.length) { bla.set(f, 0); continue; }
   let sum = 0;
-  for (const t of ts) { const days = Math.max((NOW - t) / 86400, 1); sum += Math.pow(days, -DECAY); }
-  bla.set(f, Math.log(sum));                             // recency (small age) + frequency (more terms)
+  for (const t of ts) sum += Math.pow(Math.max((NOW - t) / 86400, 1), -DECAY);
+  bla.set(f, Math.log(sum));
 }
 
-// ---- build FTS5 index. path tokens folded into body so filename matches count (both rankers). ----
+// ---- FTS5 index (path tokens folded into body so filename matches count, for all rankers) ----
 const db = new Database(":memory:");
 db.exec("CREATE VIRTUAL TABLE docs USING fts5(path UNINDEXED, txt)");
 const ins = db.prepare("INSERT INTO docs(rowid, path, txt) VALUES (?,?,?)");
 const rowToFile = [];
-const insMany = db.transaction(() => {
+db.transaction(() => {
   files.forEach((f, idx) => {
-    const body = readFileSync(join(AURORA, f), "utf8");
-    const pathTokens = splitIdent(f).join(" ");
-    const codeTokens = splitIdent(body).join(" ");      // camelCase/snake split, mirrors aurora tokenizer
-    ins.run(idx + 1, f, `${pathTokens} ${pathTokens} ${body} ${codeTokens}`); // path doubled = light boost
+    const body = readFileSync(join(ROOT, f), "utf8");
+    const pathTok = splitIdent(f).join(" ");
+    ins.run(idx + 1, f, `${pathTok} ${pathTok} ${body} ${splitIdent(body).join(" ")}`);
     rowToFile[idx + 1] = f;
   });
-});
-insMany();
+})();
 
 // ---- rankers ----
 function matchQuery(q) {
   const kws = keywords(q);
   if (!kws.length) return [];
   const match = kws.map((k) => `"${k}"`).join(" OR ");
-  // bm25() lower = better; flip sign so higher = more relevant
-  const rows = db.prepare("SELECT rowid, -bm25(docs) AS rel FROM docs WHERE docs MATCH ? ORDER BY rel DESC").all(match);
-  return rows.map((r) => ({ file: rowToFile[r.rowid], rel: r.rel }));
+  return db.prepare("SELECT rowid, -bm25(docs) AS rel FROM docs WHERE docs MATCH ? ORDER BY rel DESC").all(match)
+    .map((r) => ({ file: rowToFile[r.rowid], rel: r.rel }));
 }
 const minmax = (arr, get) => {
-  const vals = arr.map(get); const lo = Math.min(...vals), hi = Math.max(...vals);
+  const v = arr.map(get), lo = Math.min(...v), hi = Math.max(...v);
   return (x) => (hi > lo ? (get(x) - lo) / (hi - lo) : (arr.length === 1 ? 1 : 0));
 };
-// variants: weight vectors over [bm25, bla, spread]
-const VARIANTS = {
-  baseline: [1.0, 0.0, 0.0],
-  "+bla":   [0.6, 0.4, 0.0],
-  "+spread":[0.6, 0.0, 0.4],
-  litectx:  [0.5, 0.3, 0.2],
-};
+const VARIANTS = { baseline: [1, 0, 0], "+bla": [0.6, 0.4, 0], "+spread": [0.6, 0, 0.4], litectx: [0.5, 0.3, 0.2] };
 function rank(q) {
-  const cands = matchQuery(q);                           // FTS5 gate
+  const cands = matchQuery(q);
   if (!cands.length) return { orders: {}, inFts: new Set() };
-  const nb = minmax(cands, (c) => c.rel);                // normalized BM25 over candidates
-  const bb = minmax(cands, (c) => bla.get(c.file) ?? 0); // normalized git BLA over candidates
-  const relNormFull = new Map(cands.map((c) => [c.file, nb(c)]));
+  const nb = minmax(cands, (c) => c.rel);
+  const bb = minmax(cands, (c) => bla.get(c.file) ?? 0);
+  const relNorm = new Map(cands.map((c) => [c.file, nb(c)]));
   const feats = cands.map((c) => {
-    let spread = 0;                                      // 1-hop: best neighbor relevance
-    for (const n of neighbors.get(c.file)) if (relNormFull.has(n)) spread = Math.max(spread, relNormFull.get(n));
+    let spread = 0;
+    for (const n of neighbors.get(c.file)) if (relNorm.has(n)) spread = Math.max(spread, relNorm.get(n));
     return { file: c.file, bm25: nb(c), bla: bb(c), spread };
   });
   const orders = {};
@@ -157,34 +143,29 @@ function rank(q) {
 
 // ---- metrics ----
 const VNAMES = Object.keys(VARIANTS);
-const rankOf = (list, target) => { const i = list.indexOf(target); return i < 0 ? Infinity : i + 1; };
+const rankOf = (list, t) => { const i = list.indexOf(t); return i < 0 ? Infinity : i + 1; };
 const rr = (r) => (r === Infinity ? 0 : 1 / r);
-
-const results = QUERIES.map((Q) => {
+const results = ds.queries.map((Q) => {
   const { orders, inFts } = rank(Q.q);
   const ranks = {};
   for (const v of VNAMES) ranks[v] = orders[v] ? rankOf(orders[v], Q.target) : Infinity;
   return { ...Q, ranks, matched: inFts.has(Q.target) };
 });
-
-function agg(rows, v) {
-  const n = rows.length;
-  return {
-    mrr: rows.reduce((s, r) => s + rr(r.ranks[v]), 0) / n,
-    p1: rows.filter((r) => r.ranks[v] === 1).length / n,
-    p3: rows.filter((r) => r.ranks[v] <= 3).length / n,
-    p5: rows.filter((r) => r.ranks[v] <= 5).length / n,
-  };
-}
+const agg = (rows, v) => ({
+  mrr: rows.reduce((s, r) => s + rr(r.ranks[v]), 0) / rows.length,
+  p1: rows.filter((r) => r.ranks[v] === 1).length / rows.length,
+  p3: rows.filter((r) => r.ranks[v] <= 3).length / rows.length,
+  p5: rows.filter((r) => r.ranks[v] <= 5).length / rows.length,
+});
 
 // ---- report ----
 const pct = (x) => (x * 100).toFixed(0).padStart(3) + "%";
 const fmt = (r) => (r === Infinity ? " —" : String(r).padStart(2));
-console.log(`\naurora: ${files.length} .py files · NOW=${new Date(NOW * 1000).toISOString().slice(0, 10)} · import-edges=${[...neighbors.values()].reduce((s, x) => s + x.size, 0) / 2}\n`);
+const edges = [...neighbors.values()].reduce((s, x) => s + x.size, 0) / 2;
+console.log(`\n[${ds.name}] ${files.length} files (${ds.pathspecs.join(",")}) · NOW=${new Date(NOW * 1000).toISOString().slice(0, 10)} · ${ds.edges}-edges=${edges}\n`);
 console.log("  diff  " + VNAMES.map((v) => v.padStart(8)).join("") + "   query");
 for (const r of results)
   console.log(`  ${r.diff.padEnd(4)}  ${VNAMES.map((v) => fmt(r.ranks[v]).padStart(8)).join("")}   ${r.matched ? "" : "✗FTS "}${r.q}`);
-
 function table(label, rows) {
   console.log(`\n  ${label} (n=${rows.length})`);
   const base = agg(rows, "baseline");
@@ -197,9 +178,8 @@ function table(label, rows) {
 table("ALL", results);
 table("EASY", results.filter((r) => r.diff === "easy"));
 table("HARD", results.filter((r) => r.diff === "hard"));
-
 const ftsMiss = results.filter((r) => !r.matched).length;
 const moved = results.filter((r) => r.ranks.litectx !== r.ranks.baseline);
 const better = moved.filter((r) => r.ranks.litectx < r.ranks.baseline).length;
 console.log(`\n  FTS5 ceiling: ${results.length - ftsMiss}/${results.length} targets matched (all rankers blind to the other ${ftsMiss}).`);
-console.log(`  litectx re-rank vs baseline: moved ${moved.length}/${results.length} — ${better} better, ${moved.length - better} worse.\n`);
+console.log(`  litectx vs baseline: moved ${moved.length}/${results.length} — ${better} better, ${moved.length - better} worse.\n`);

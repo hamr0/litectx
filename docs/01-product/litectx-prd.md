@@ -306,14 +306,21 @@ activation-weighted, graph-aware recall measurably beat plain FTS5/BM25?*
 - **POC passes** → build v1 properly (below), with tests.
 - **POC fails** (BM25-alone ≈ as good) → stop; re-scope to a thin BM25 index.
 
-> **POC RESULT (2026-06-04 — PASS).** Ran on aurora (497 `.py`, 22 ground-truth queries; harness
-> in `poc/`, full writeup `poc/RESULTS.md`). litectx beats plain BM25 on every aggregate metric
-> (MRR 0.511 → 0.575, P@3 59% → 73%). **Ablation finding that changes the build:** *graph
-> spreading* is the robust differentiator — the only signal that improves the HARD set and never
-> hurts (HARD P@5 45% → 64%). *Git-seeded BLA*, as a flat 0.3 weight, **helps easy/hot-file queries
-> but hurts hard ones** (HARD P@1 36% → 18%) because we implemented the recency half of ACT-R
-> without the churn-penalty/decay half. → **Build v1, but implement decay+churn before weighting
-> BLA, and weight BLA gentler than 0.3** (see §4.1, §14 #1).
+> **POC RESULT (2026-06-04 — PASS for graph-aware recall).** Ran on **two repos** — aurora
+> (Python, 497 files, 22 queries) and gitdone (JS/CJS, 100 files, 20 queries). Harness + full
+> writeup in `poc/` (`RESULTS.md`). The ablation separates the signals cleanly:
+> - **Graph spreading generalizes and is the real win** — positive on *both* repos and every
+>   breakdown, never hurts an aggregate (aurora HARD ΔMRR +0.050; gitdone HARD P@3 50% → 70%).
+> - **Git-seeded BLA at a flat 0.3 weight does NOT generalize** — looked like a win on aurora
+>   (driven by hot-file/easy queries) but is **net-negative on gitdone** (ALL −0.030), and the
+>   combined preset **loses to plain BM25 on gitdone** (−0.067). Cause: recency half of ACT-R
+>   shipped without the churn/decay half, so "recently changed" reads as "relevant" — and how
+>   well that holds is repo-dependent.
+>
+> → **Build v1: ship the graph substrate + spreading. Rework the activation/cold-start term
+> before it gets real weight** — implement decay+churn, demote BLA to a small term/tiebreaker,
+> and re-validate on *both* repos (adopt only weights ≥ baseline on every repo). The dataset-driven
+> `poc/` harness is kept as the multi-repo calibration gate (§4.1, §14 #1).
 
 **v1 build sequence (after POC graduates):**
 1. SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
@@ -369,11 +376,13 @@ package** (§7).
 ## 14. Open questions (DRAFT — settle during build)
 
 1. **Cold-start unification** — ~~does the git-commits-as-pseudo-accesses model (§4.1) hold up
-   in the POC?~~ **POC-ANSWERED (partial):** the unified `ln(Σ t^-d)` model works as a *recency*
-   prior but, **without the churn/decay term, it net-hurts hard queries** (recently-churned ≠
-   relevant). Resolution: keep the unified model, but it is only valid **paired with decay+churn**
-   (§4) and at a **gentler weight than 0.3** — likely a tiebreaker, not a co-equal term. Re-run the
-   `poc/` harness after implementing decay to confirm the hard-query regression flips positive.
+   in the POC?~~ **POC-ANSWERED (two repos):** the unified `ln(Σ t^-d)` recency prior **does not
+   generalize as a co-equal weight** — net-positive on aurora (hot-file queries) but net-negative
+   on gitdone, where the combined preset lost to plain BM25. Resolution: keep the unified model but
+   it is only valid **paired with decay+churn** (§4) and at a **small weight / tiebreaker**, not
+   the 0.3 used in the POC. Adopt a weight only if it scores **≥ baseline on every repo** in the
+   `poc/` multi-repo harness — one repo is provably not enough (aurora alone would have shipped a
+   gitdone regression).
 2. **MMR without embeddings** — cheap lexical/structural diversity proxy, or accept that MMR
    is embeddings-tier only? (Default: tier-only.)
 3. **Edge types beyond `calls`/`imports`/`depends_on`** — add `inherits`/`defines` in v1 or
