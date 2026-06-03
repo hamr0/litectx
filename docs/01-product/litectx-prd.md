@@ -322,11 +322,42 @@ activation-weighted, graph-aware recall measurably beat plain FTS5/BM25?*
 > and re-validate on *both* repos (adopt only weights ≥ baseline on every repo). The dataset-driven
 > `poc/` harness is kept as the multi-repo calibration gate (§4.1, §14 #1).
 
-**v1 build sequence (after POC graduates):**
-1. SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
-2. tree-sitter chunking for **TS, JS, Python**; md section chunker → nodes (§3.1, §6).
+### 11.1 Build methodology — walking skeleton + vertical slices (DECIDED)
+
+How we build matters as much as what. Hard-won constraint: a prior project was built as ~5500
+heavy-TDD **unit** tests across modules that were never wired together — green coverage, nothing
+ran, huge cleanup. That is the failure mode we engineer against. Rules:
+
+- **Walking skeleton first.** Slice 0 is the thinnest end-to-end pipeline that *actually runs*
+  (index → store → `recall` returns hits). The system is connected from the first commit.
+- **Vertical slices, one capability at a time.** Each slice adds one capability to the
+  already-running pipeline and is integrated **as it lands** — never build modules in isolation
+  and wire them up at the end (that re-creates the failure above; "microservices built apart" is
+  the same trap with bigger boundaries — litectx is one library with clean seams, not services).
+- **"Works by itself" = observable end-to-end behavior, not isolated unit tests.** A slice is done
+  when it runs through the whole pipeline, holds-or-beats the benchmark, and has its tests.
+- **The `poc/` multi-repo labeled-query harness is the always-green integration gate.** Every
+  slice must hold-or-beat its MRR/P@k on **both** repos before the next slice starts. The harness —
+  not unit-test count — defines "done." It is also the calibration gate for any weight/signal change.
+- **Tests per slice, after its design stabilizes** (per AGENT_RULES testing trophy): integration-
+  first against `:memory:` SQLite + a tmp repo, <60% mocking, behavior not implementation; every
+  bug fix adds a regression test. Do **not** front-load unit tests against an unstable design.
+- **Aurora is a second opinion, not an oracle.** We borrow the *concept*, not the *output*; aurora
+  may be bloated/wrong on a given approach (that's *why* we reimplement and simplify). A litectx↔
+  aurora divergence is a **question to investigate, not a bug to fix toward aurora.** Cross-check is
+  **manual and as-needed** (e.g. a signal misbehaving) — never a CI dependency (heavy Python env).
+
+### 11.2 v1 build slices (after POC graduates)
+
+- **Slice 0 — walking skeleton (NEXT):** index files → SQLite (FTS5) → `litectx recall "query"`
+  returns ranked hits. **Plain BM25, file-granularity** (smallest thing that runs; chunking is
+  slice 2). Real `src/` + thin CLI `bin/`. Harness green on both repos as the baseline to beat.
+1. Harden SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
+2. tree-sitter **symbol-level** chunking for **TS, JS, Python** + md section chunker → nodes
+   (§3.1, §6). Replaces file-granularity; **benchmark must not regress.**
 3. Code-aware BM25 + FTS5 gate + code-over-md fix (§5).
-4. ACT-R activation engine + presets + cold-start (§4) → **recall view** ships.
+4. ACT-R activation engine + presets + cold-start (§4) → **recall view** ships. Per the POC:
+   base-level → **decay+churn** → spreading; **validate on both repos before BLA gets weight.**
 5. tree-sitter + ripgrep edge extraction + per-language semantics config (§7) → graph edges.
 6. **impact view** (reference count → risk bucket; complexity from AST) over the edges.
 
