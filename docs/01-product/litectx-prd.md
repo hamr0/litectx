@@ -306,6 +306,15 @@ activation-weighted, graph-aware recall measurably beat plain FTS5/BM25?*
 - **POC passes** → build v1 properly (below), with tests.
 - **POC fails** (BM25-alone ≈ as good) → stop; re-scope to a thin BM25 index.
 
+> **POC RESULT (2026-06-04 — PASS).** Ran on aurora (497 `.py`, 22 ground-truth queries; harness
+> in `poc/`, full writeup `poc/RESULTS.md`). litectx beats plain BM25 on every aggregate metric
+> (MRR 0.511 → 0.575, P@3 59% → 73%). **Ablation finding that changes the build:** *graph
+> spreading* is the robust differentiator — the only signal that improves the HARD set and never
+> hurts (HARD P@5 45% → 64%). *Git-seeded BLA*, as a flat 0.3 weight, **helps easy/hot-file queries
+> but hurts hard ones** (HARD P@1 36% → 18%) because we implemented the recency half of ACT-R
+> without the churn-penalty/decay half. → **Build v1, but implement decay+churn before weighting
+> BLA, and weight BLA gentler than 0.3** (see §4.1, §14 #1).
+
 **v1 build sequence (after POC graduates):**
 1. SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
 2. tree-sitter chunking for **TS, JS, Python**; md section chunker → nodes (§3.1, §6).
@@ -359,27 +368,39 @@ package** (§7).
 
 ## 14. Open questions (DRAFT — settle during build)
 
-1. **Cold-start unification** — does the git-commits-as-pseudo-accesses model (§4.1) hold up
-   in the POC, or do we keep a separate git-recency prior term? (Recommend: validate the
-   unified model first.)
+1. **Cold-start unification** — ~~does the git-commits-as-pseudo-accesses model (§4.1) hold up
+   in the POC?~~ **POC-ANSWERED (partial):** the unified `ln(Σ t^-d)` model works as a *recency*
+   prior but, **without the churn/decay term, it net-hurts hard queries** (recently-churned ≠
+   relevant). Resolution: keep the unified model, but it is only valid **paired with decay+churn**
+   (§4) and at a **gentler weight than 0.3** — likely a tiebreaker, not a co-equal term. Re-run the
+   `poc/` harness after implementing decay to confirm the hard-query regression flips positive.
 2. **MMR without embeddings** — cheap lexical/structural diversity proxy, or accept that MMR
    is embeddings-tier only? (Default: tier-only.)
 3. **Edge types beyond `calls`/`imports`/`depends_on`** — add `inherits`/`defines` in v1 or
    defer? (Lean: defer; the three cover impact.)
 4. **Access-history write path** — does litectx own "agent accessed chunk X" writes, or does
    the consumer report accesses? (Affects who drives BLA.)
-5. **`codegraph`/`contextgraph`** — submodules of the litectx repo, or separate packages
-   depending on `litectx`? (§9 children; decide when the substrate stabilizes.)
+5. **Consumption surfaces & graph-view packaging** — **RESOLVED.** The core is the **library**
+   (mechanism). A **thin CLI ships in-repo** (`bin/`) from v1 — it serves humans, cron, and
+   shell-out agents at near-zero cost, and matches house style. **MCP and the `codegraph`/
+   `contextgraph` views are separate downstream consumers**, not core: they wrap the same public
+   API and would otherwise break "lite / one prod dep / no service" (scope discipline — mechanism
+   in the lib, policy in the adopter). MCP **stdio** is a client-spawned subprocess, not a daemon,
+   so it stays compatible with the "no service tier" rule — it just lives in its own package
+   (`litectx-mcp` or a bare-suite member) when a consumer needs it.
 6. **`fact`/`episode` kinds** — what writes them, and do they share the code decay map or
    need their own? (§3.1; design when the first non-code memory need is real.)
 
 ---
 
-## 15. Status: DRAFT
+## 15. Status: POC PASSED — clear to build v1
 
-Discovery is done (this doc captures it). Next action per AGENT_RULES is the **POC in §11** —
-not a full build. Nothing is committed; no `src/` exists. **DECIDED:** name (`litectx`),
-stack, storage, indexing, edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one,
-the code-over-md fix, the cold-start design, and the repo move. The items in §14 are
-deliberately left for the build to settle. **On settle, this doc + `barecontext-prd.md`
-move to the new `litectx` repo** (banner).
+Discovery done; **POC done and passed** (§11, 2026-06-04; harness + writeup in `poc/`). The repo
+move has happened — this doc lives in the `litectx` repo, name reserved as `litectx@0.0.1` on npm,
+Apache-2.0, public. **DECIDED:** name, stack, storage, indexing, edges-are-ripgrep-only, tiers,
+v1 languages, `kind`-from-day-one, the code-over-md fix, the cold-start design, packaging
+(§14 #5: lib + in-repo CLI; MCP/graph-views as separate consumers). **POC-REFINED:** graph
+spreading confirmed as the differentiator; git-seeded BLA must ship paired with decay+churn at a
+gentler weight (§4.1, §14 #1). **Next action:** v1 build sequence in §11 — start with the SQLite
+store + schema, then chunking, then port the recall pipeline, re-running the `poc/` harness as the
+regression check as activation lands.

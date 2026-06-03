@@ -1,0 +1,8 @@
+{
+  "name": "litectx-poc",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "THROWAWAY validation harness for the PRD §11 gate. Not shipped. Never imported by the lib.",
+  "dependencies": { "better-sqlite3": "^11.8.1" }
+}
