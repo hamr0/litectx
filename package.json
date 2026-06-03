@@ -1,0 +1,62 @@
+{
+  "name": "litectx",
+  "version": "0.0.1",
+  "description": "Lite, local-first code+context graph for recall and impact analysis. SQLite + FTS5 + ACT-R activation, ripgrep + tree-sitter edges, embeddings opt-in. Placeholder — under active design (PRD/POC stage).",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src/",
+    "types/",
+    "README.md",
+    "litectx.context.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:types": "tsc",
+    "prepublishOnly": "npm run build:types",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "context",
+    "code-graph",
+    "activation",
+    "act-r",
+    "recall",
+    "impact-analysis",
+    "blast-radius",
+    "sqlite",
+    "fts5",
+    "bm25",
+    "tree-sitter",
+    "ripgrep",
+    "local-first"
+  ],
+  "author": "Amr <avoidaccess@msn.com>",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/hamr0/litectx#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hamr0/litectx.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hamr0/litectx/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "typescript": "^5.9.3"
+  }
+}

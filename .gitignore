@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Generated type declarations (built on publish from JSDoc — never committed)
+/types/
+
+# Build / packaging
+*.tgz
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Local agent settings (personal, not shared)
+.claude/settings.local.json
