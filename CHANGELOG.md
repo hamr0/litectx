@@ -7,6 +7,8 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- **Slice 0 — walking skeleton:** `src/` library (`LiteCtx` index/recall, FTS5 `Store`, extension-routed git-aware indexer, code-aware tokenizer) + thin CLI `bin/litectx.js`. File-granularity, plain BM25. Pure ESM + JSDoc→`.d.ts` (typecheck clean); one prod dep (`better-sqlite3`); 6 `node --test` integration tests.
+- Integration gate `poc/bench-lib.mjs` (`npm run bench`) — runs the real library on both repos so lib and gate can't drift. Slice-0 baseline: aurora MRR 0.523 / gitdone MRR 0.416.
 - POC gate harness (`poc/`, throwaway) — dataset-driven recall benchmark over two repos (aurora Py / gitdone JS), four ablation rankers, MRR/P@k reporting. Results in `poc/RESULTS.md`.
 - `CLAUDE.md` build doctrine pointing at `.claude/memory/{AGENT_RULES,LIBRARY_CONVENTIONS}.md`.
 
@@ -16,7 +18,7 @@ All notable changes to this project are documented here, following
 - **Packaging** (PRD §14 #5): core library + in-repo CLI; MCP and graph-views are separate downstream consumers.
 
 ### Next
-- Slice 0 — walking skeleton: index → SQLite/FTS5 → `recall` CLI at file-granularity BM25.
+- Slice 1 (store/schema + incremental indexing) or slice 2 (tree-sitter symbol-level chunking); each must hold-or-beat the slice-0 benchmark on both repos.
 
 ## [0.0.1] — 2026-06-04
 

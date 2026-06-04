@@ -349,9 +349,13 @@ ran, huge cleanup. That is the failure mode we engineer against. Rules:
 
 ### 11.2 v1 build slices (after POC graduates)
 
-- **Slice 0 — walking skeleton (NEXT):** index files → SQLite (FTS5) → `litectx recall "query"`
-  returns ranked hits. **Plain BM25, file-granularity** (smallest thing that runs; chunking is
-  slice 2). Real `src/` + thin CLI `bin/`. Harness green on both repos as the baseline to beat.
+- **Slice 0 — walking skeleton ✅ SHIPPED** (2026-06-04): index files → SQLite (FTS5) →
+  `litectx recall "query"` returns ranked hits. **Plain BM25, file-granularity.** Real `src/`
+  (LiteCtx/Store/indexer/tokenizer) + thin CLI `bin/litectx.js`; pure ESM + JSDoc→`.d.ts`
+  (typecheck clean); one prod dep (`better-sqlite3`); 6 `node --test` integration tests.
+  Integration gate = `npm run bench` (`poc/bench-lib.mjs`, runs the **real library** so it can't
+  drift from the harness). **Baseline to beat, both repos:** aurora ALL MRR 0.523 / P@3 64%;
+  gitdone ALL MRR 0.416 / P@3 45%.
 1. Harden SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
 2. tree-sitter **symbol-level** chunking for **TS, JS, Python** + md section chunker → nodes
    (§3.1, §6). Replaces file-granularity; **benchmark must not regress.**
@@ -433,14 +437,14 @@ package** (§7).
 
 ---
 
-## 15. Status: POC PASSED — clear to build v1
+## 15. Status: BUILDING v1 — slice 0 shipped
 
-Discovery done; **POC done and passed** (§11, 2026-06-04; harness + writeup in `poc/`). The repo
-move has happened — this doc lives in the `litectx` repo, name reserved as `litectx@0.0.1` on npm,
-Apache-2.0, public. **DECIDED:** name, stack, storage, indexing, edges-are-ripgrep-only, tiers,
-v1 languages, `kind`-from-day-one, the code-over-md fix, the cold-start design, packaging
-(§14 #5: lib + in-repo CLI; MCP/graph-views as separate consumers). **POC-REFINED:** graph
-spreading confirmed as the differentiator; git-seeded BLA must ship paired with decay+churn at a
-gentler weight (§4.1, §14 #1). **Next action:** v1 build sequence in §11 — start with the SQLite
-store + schema, then chunking, then port the recall pipeline, re-running the `poc/` harness as the
-regression check as activation lands.
+Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
+This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
+**slice 0 (walking skeleton) shipped** (`src/` + CLI + tests + integration gate; §11.2). **DECIDED:**
+name, stack, storage, indexing, edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one,
+the code-over-md fix, the cold-start design, packaging (§14 #5), and the build methodology (§11.1).
+**POC-REFINED:** graph spreading confirmed as the differentiator; git-seeded BLA must ship paired
+with decay+churn at a gentler weight (§4.1, §14 #1). **Next action:** slice 1 (store/schema +
+incremental indexing) or slice 2 (symbol-level chunking) per §11.2 — each must hold-or-beat the
+slice-0 benchmark on both repos.

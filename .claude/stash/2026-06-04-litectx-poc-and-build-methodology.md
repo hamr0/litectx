@@ -1,9 +1,18 @@
-# Stash — litectx: name reserved, repo live, POC gate PASSED (two repos), build methodology set
+# Stash — litectx: name reserved, repo live, POC PASSED (2 repos), methodology set, SLICE 0 SHIPPED
 
 - **Date:** 2026-06-04
 - **Repo:** `/home/hamr/PycharmProjects/litectx` (== `/home/hamr/Documents/PycharmProjects/litectx`, same inode). Git initialized this session; **public** GitHub repo `hamr0/litectx`, pushed to `main`.
-- **Continues:** `.claude/stash/2026-06-04-litectx-prd-set.md` (PRD-set session). This session: **reserved the npm name, scaffolded the repo, ran the POC gate on two repos, and locked the build methodology.** Next action = **build slice 0**.
+- **Continues:** `.claude/stash/2026-06-04-litectx-prd-set.md` (PRD-set session). This session: **reserved the npm name, scaffolded the repo, ran the POC gate on two repos, locked the build methodology, and shipped slice 0 (the walking skeleton).** Next action = **slice 1 or 2**.
 - **Mode:** shipping + validation. Real artifacts committed/pushed.
+
+> **SLICE 0 SHIPPED (commit `47b3feb`).** Walking skeleton runs: `index → SQLite/FTS5 → recall`,
+> file-granularity plain BM25. `src/` (LiteCtx, Store, indexer, tokenizer) + thin CLI `bin/litectx.js`
+> + 6 passing `node --test` integration tests + typecheck clean (JSDoc→.d.ts). One prod dep
+> (better-sqlite3). **Integration gate = `npm run bench` → `poc/bench-lib.mjs`** runs the REAL
+> library on both repos (can't drift). **Slice-0 baseline to beat (both repos):**
+> aurora ALL MRR **0.523** P@3 64% · gitdone ALL MRR **0.416** P@3 45%. Reproduces the ablation
+> baseline within noise + same single aurora FTS miss (`decay.py`). NEXT slice must hold-or-beat
+> these on BOTH repos.
 
 ---
 
@@ -46,14 +55,16 @@ Four rankers (weights over [bm25, git-bla, graph-spread]): `baseline`=[1,0,0], `
 
 ---
 
-## v1 BUILD SLICES (mapped from PRD §11)
+## v1 BUILD SLICES (mapped from PRD §11.2)
 
-- **Slice 0 (NEXT — starting now): walking skeleton.** index files → SQLite → `litectx recall "query"` returns ranked hits. **Plain BM25, FILE-granularity** (user's call: smallest thing that runs; chunking is slice 2). Harness green on both repos. Real `src/` + thin CLI.
-1. Harden store + schema (`kind`/`format`) + incremental git indexing.
-2. tree-sitter **symbol-level** chunking (replace file-granularity; benchmark must not regress).
-3. code-aware BM25 + FTS5 gate + code-over-md (§5).
-4. activation — base-level → decay+churn → spreading; validate on both repos before BLA gets weight; aurora cross-check here if a number looks off.
-5. edges (tree-sitter + ripgrep) → spreading in recall, then **impact view** (refs→risk bucket; complexity from AST).
+- **Slice 0 — walking skeleton: ✅ DONE/SHIPPED** (commit `47b3feb`; baseline above).
+- **Slice 1 (NEXT option A):** harden store + schema (`kind`/`format`) + incremental git indexing (status→mtime→content-hash). Foundation for chunking + signals; makes CLI re-index usable.
+- **Slice 2 (NEXT option B — where numbers move):** tree-sitter **symbol-level** chunking for TS/JS/Python + md section chunker. Replaces file-granularity; **benchmark must not regress**, should jump.
+- **Slice 3:** code-aware BM25 + FTS5 gate + code-over-md (§5). (NB: slice-0 Store does path-doubling but NOT camelCase body-splitting — that lands here.)
+- **Slice 4:** activation — base-level → **decay+churn** → spreading; **validate on both repos before BLA gets weight** (POC mandate); aurora cross-check only if a number looks off.
+- **Slice 5:** edges (tree-sitter + ripgrep) → spreading in recall, then **impact view** (refs→risk bucket; complexity from AST).
+
+**Claude's lean (offered, user not yet chosen):** slice 1 next (foundation); slice 2 is where recall numbers first jump. User may pick either, or pause (clean checkpoint).
 
 ---
 
@@ -67,6 +78,17 @@ Four rankers (weights over [bm25, git-bla, graph-spread]): `baseline`=[1,0,0], `
 ---
 
 ## NEXT (in order)
-1. **Codify methodology in PRD §11** (walking skeleton + slices + aurora-as-second-opinion). ← doing now
-2. **CHANGELOG** entry. ← doing now
-3. **Build slice 0** — file-granularity BM25 walking skeleton: `src/` (indexer + SQLite store + `recall`) + thin CLI `bin/`, JSDoc types, harness green on both repos. Per AGENT_RULES: make it run first, integration tests after it stabilizes.
+1. ✅ Codify methodology in PRD §11.1/§11.2 (commit `cb5ba8c`).
+2. ✅ CHANGELOG entry (commit `cb5ba8c`).
+3. ✅ Build slice 0 — walking skeleton (commit `47b3feb`).
+4. **Slice 1 or 2** (user's call) — see slices above. Whichever: keep `npm run bench` ≥ slice-0 baseline on BOTH repos; tests after the slice's design stabilizes; aurora = second opinion only.
+
+## Commits this session
+`83fea95` scaffold+PRDs → `7af69c7` POC aurora → `b885a84` POC gitdone → `cb5ba8c` methodology+changelog+stash → `47b3feb` slice 0. All pushed to `origin/main` (admin bypass of PR rule — intended).
+
+## Key context for resuming
+- **better-sqlite3** native build works on this Fedora box (root `node_modules/` + `poc/node_modules/` both built; gitignored).
+- **Two aurora paths, same inode** as litectx's; aurora local HEAD `750a39d` == origin/main (current, not stale).
+- **Governing docs:** `.claude/memory/{AGENT_RULES,LIBRARY_CONVENTIONS}.md` (CLAUDE.md points at them). pulselog (`/home/hamr/PycharmProjects/pulselog`) is the house-style reference (README shape, Apache LICENSE, `node --test`, JSDoc→.d.ts).
+- **Branch protection** on `main`: 1 PR review, no force-push/delete, admins NOT enforced → owner pushes bypass (for others, not you).
+- **npm:** `litectx@0.0.1` placeholder published; account `hamr0`; publish needs interactive OTP (agent non-TTY publish hangs → user runs it).
