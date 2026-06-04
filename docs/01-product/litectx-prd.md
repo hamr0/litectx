@@ -146,8 +146,21 @@ Design rules (DECIDED):
 
 ## 4. Activation — the differentiator (DECIDED algorithm; params tunable)
 
-ACT-R total activation, reimplemented in TS (grounding: aurora `activation/*`,
-`docs/02-features/memory/ACTR_ACTIVATION.md`):
+> **What we expect from litectx's memory (recalibrated 2026-06-04).** The "memory" is not
+> search — it is an **ACT-R activation layer over the graph** that models which chunks are
+> *cognitively hot*: frequently/recently touched (**BLA**), structurally central (**spreading**
+> over edges), query-relevant (**context boost**), and stable-vs-volatile **by `kind`**
+> (type-decay + churn). v1 has no access log, so memory is **seeded from git history**
+> (cold-start BLA over commit timestamps, §4.1) — the repo's own change history is the proxy for
+> "what's been worked on." **The bar:** dual-hybrid (BM25 + activation) must measurably beat
+> plain BM25 on the multi-repo gate — the POC confirmed **graph spreading generalizes**; BLA
+> earns weight only as the **full** formula (type-decay + churn, not the recency half) and only
+> if it holds on both repos. Embeddings stay an **optional tier** (dual ≈85% vs tri ≈95% — not
+> worth the cold-start + ML dep by default). The activation engine is **kind-agnostic** — the
+> same math will ratchet `fact`/`episode` memory later; code is just v1's content.
+
+ACT-R total activation, reimplemented in JS (grounding: aurora `activation/*`,
+`docs/02-engineering/aurora-borrow-ledger.md`):
 
 ```
 A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
@@ -156,20 +169,27 @@ A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
 - **BLA (base-level)** — `ln(Σ_j t_j^-d)` over access history, `d=0.5` default.
 - **Spreading** — BFS over edges, `F=0.7`/hop, max 3 hops.
 - **Context boost** — query↔chunk keyword overlap, `boost=0.5`.
-- **Decay** — `−d_kind · log10(days_since_access)`, 1-day grace, capped at 365d.
-- **Type-specific decay** (keyed by `kind`/element) — kb/doc `0.05`, class `0.20`,
-  function/method/code `0.40` (docs decay ~8× slower than functions).
+- **Decay** — `−d_kind · log10(days_since_access)`, **1-hour grace**, capped at **90d**,
+  floored at `−2.0` (aurora-verified; see borrow ledger).
+- **Type-specific decay** (keyed by `kind`/element) — kb `0.05`, **doc `0.02`**, class `0.20`,
+  function/method/code `0.40`, toc-entry `0.01` (docs decay ~20× slower than functions).
 - **Churn factor** — `0.1 · log10(commits+1)` added to decay (volatile code decays faster).
 - **MMR diversity rerank** (optional) — needs embeddings; off by default.
 
 Ship AURORA's 5 presets as config presets. All formulas are pure functions → near-verbatim
-TS port, unit-testable.
+JS port, unit-testable. **Every constant above is source-verified in
+`docs/02-engineering/aurora-borrow-ledger.md` (aurora `@ 750a39d`)** — that ledger, not this
+summary, is the calibration source of truth; start at aurora's tested defaults, re-validate any
+change on both repos before it earns weight.
 
 ### 4.1 Cold-start ranking — solved cleanly with git as the prior (DECIDED design)
 
 At first index there is no access history, so a naive BLA would zero out everything and
-recall would collapse to keyword-only. AURORA solved this with a separate git-recency BLA
-(`0.5^age_in_years`). litectx unifies it through **one formula** with **safe defaults**:
+recall would collapse to keyword-only. **AURORA already solved this the way we want** —
+`git.py:calculate_bla(commit_times, decay=0.5)` applies the *same* `ln(Σ t_j^-d)` to a chunk's
+git commit timestamps (fallback `0.5` when untracked); commit recency → recency, commit count →
+frequency. So this is **borrowed, not invented**: litectx carries that unified single-formula
+approach with **safe defaults**:
 
 1. **Never-accessed is neutral, not punished** — empty access history ⇒ BLA `= 0` (not
    `−∞`); decay `= 0` when `last_access` is null or within grace. No chunk is penalized for

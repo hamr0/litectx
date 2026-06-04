@@ -156,3 +156,79 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
 
 **Mandate:** every weight/threshold above is a *prior*, not a constant of nature. Re-validate on
 aurora + gitdone via `npm run bench` before it earns weight; keep only what holds on both.
+
+---
+
+## 11. Language-definition layer + edge pipeline (slice 5/6) — carry vs correct
+
+This is where litectx replaces aurora's LSP. **Borrow what was validated, fix what was a mistake.**
+
+### Carry (aurora got this right — evidence: worked across 5 languages, clean)
+
+- **The `LanguageConfig` registry pattern** (`lsp/.../languages/{base,python,javascript,...}.py`):
+  one dataclass per language, registered in a `LANGUAGES` dict + `EXTENSION_MAP`. Adding a
+  language = author one config. Carry this shape verbatim (as a JS object per language).
+- **The per-language fields that make ripgrep accurate** — these ARE the "strong lang def":
+  - `function_def_types` — Py `{function_definition, class_definition}`; JS
+    `{function_declaration, method_definition, arrow_function, class_declaration}`; TS adds
+    `{interface_declaration, type_alias_declaration}`.
+  - `call_node_type` — Py `call`; JS/TS `call_expression`.
+  - `branch_types` — for complexity (the `if/for/while/with/except/&&/||…` set), per language.
+  - `skip_names` — language builtins/stdlib stoplist so `len`, `map`, `console`, `print`,
+    `push`… aren't counted as references (aurora ships real lists per lang — carry them).
+  - `entry_points` / `entry_patterns` (glob, e.g. `test_*`, `Benchmark*`) / `entry_decorators`
+    (`@app.route`, `@click.command`) — so framework-invoked defs aren't seen as dead/unreferenced.
+  - `callback_methods` (`map filter reduce forEach then catch setTimeout`…) + framework
+    callback names — so `bot.on('msg', handler)` / `queryFn` aren't misread.
+- **Batched `ripgrep -w --json`** for symbol presence — aurora's fast path, **24× faster** than
+  per-symbol grep: one `rg` call with `-f <patterns_file>` for all symbols at once. Carry this.
+- **Tree-sitter via direct node-type + field access** (`node.type == call_node_type`,
+  `child_by_field_name("function")`) — aurora used this successfully and **did NOT need `.scm`
+  query files**. (Open call, below.)
+
+### Correct / drop (aurora mistakes — do NOT borrow)
+
+- **The entire `lsp` package + multilspy.** ~300ms/symbol, needed per-language patches
+  (`multilspy_patches.py` for TS), only Python was "full" — JS/TS/Go "partial, LSP untested".
+  litectx drops it wholesale (PRD §7, final). We borrow the *intent* (who-uses-this), not the
+  mechanism.
+- **`_identify_dependencies()`** (`context-code/python.py:593`) — extracted deps then **discarded
+  them** (`dependencies=[]` always). A dead path that tried local binding resolution tree-sitter
+  can't do alone (`obj.method()` ambiguity). Don't reproduce. **Our answer to that ambiguity is
+  not to resolve it** (next point).
+- **Reaching for precise binding resolution at all.** Aurora went to LSP because tree-sitter
+  can't tell *which* `method` an `obj.method()` calls. **litectx makes over-counting a design
+  choice**: the output is a **risk bucket**, not a reference list (PRD §7, §13). Same-named
+  methods collapsing together is acceptable — it errs toward caution. This is the key correction
+  that makes "no LSP" not a downgrade but a *scoping* decision.
+- **Complexity logic duplicated 3×** in aurora — centralize to one `complexity(node, langdef)`.
+- **Mixed backends in one module** (LSP+rg+tree-sitter tangled) — keep clean seams: ripgrep for
+  the candidate sweep, tree-sitter for confirmation; one concern per module.
+
+### The edge-resolution pipeline (litectx, slice 5)
+
+1. **Defs** — tree-sitter walk every file → for each `function_def_types` node emit a node
+   `{name, kind, file, [startLine,endLine]}`. This is the symbol table (also feeds slice-2 chunking).
+2. **Candidate refs** — batched ripgrep over the repo:
+   `rg -F -w --json -t <langtype> -f <names_file> <root>` —
+   - `-F` literal (symbol names aren't regex — no injection), `-w` word boundary,
+     `-t`/`--type-add` to scope by language, `-f` one symbol per line (batched).
+   - `--json` emits NDJSON `begin`/`match`/`end`/`summary`; each `match` has `path.text`,
+     `line_number`, `absolute_offset`, and `submatches[].{start,end}` (byte cols). Parse these for
+     exact (file, line, col) candidates. (`-P/--pcre2` only if a lang ever needs lookaround — avoid.)
+3. **Confirm** — for each candidate (file,line,col), check the tree-sitter node there is a *use*
+   (ancestor is `call_node_type`, or an identifier in a usage position), **not** a definition, and
+   not inside a comment/string; drop `skip_names` and callback/entry noise. We confirm "is this a
+   plausible call site," we do **not** resolve the binding.
+4. **Edges + impact** — caller = the def whose line-range contains the candidate → edge
+   `(caller)-[calls]->(target)`. `refs` = confirmed candidates, `files` = distinct files →
+   **risk bucket** via §9 thresholds. `complexity` = §9 branch count inside the def.
+
+### Open call (decide in the slice-2 tree-sitter POC)
+
+- **`.scm` queries vs inline node-type matching.** PRD §7/doctrine says "tree-sitter query set";
+  aurora succeeded with inline node-type checks and no `.scm` files. Evidence says the *config*
+  (`function_def_types`/`call_node_type`) carries the accuracy, queries are a thin layer. Lean:
+  `.scm` queries for **chunking** (declarative capture of function/class spans, slice 2) +
+  node-type config for **edges** (slice 5). Confirm in the slice-2 POC alongside the
+  web-tree-sitter (WASM) vs native binding choice.
