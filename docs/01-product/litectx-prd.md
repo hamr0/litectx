@@ -398,6 +398,11 @@ Python plumbing Node deletes for free — connection pooling, budget tracker, co
 logging, metrics, retry handler, abstract multi-backend store; **and the entire `lsp`
 package** (§7).
 
+> **The actual tuned constants** (formulas + every coefficient, with aurora `file:line`
+> provenance, mapped to the slice that consumes them) live in
+> **`docs/02-engineering/aurora-borrow-ledger.md`** — the written borrow contract for slices 3–6.
+> Source-verified; re-verify if aurora moves off `750a39d`.
+
 ---
 
 ## 13. Non-goals (NON-GOAL)
