@@ -224,6 +224,51 @@ This is where litectx replaces aurora's LSP. **Borrow what was validated, fix wh
    `(caller)-[calls]->(target)`. `refs` = confirmed candidates, `files` = distinct files →
    **risk bucket** via §9 thresholds. `complexity` = §9 branch count inside the def.
 
+### Two edge types — both required (don't ship only calls)
+
+The stated goals need **two** edge kinds, not one. The call pipeline above gives *called-by /
+calling*; **file connectivity needs import edges separately.**
+
+- **`calls`** — symbol → symbol, from `call_node_type` (above). Powers called-by/calling + the
+  symbol-level blast radius.
+- **`imports`** — file → file/module, from import/require statements. **This is aurora's
+  `get_imported_by` (`facade.py:265`)** — "files connected to this file." Aurora did it with
+  per-language import regex (`filters.py:IMPORT_PATTERNS`: Py `from X import` / `import X`; JS/TS
+  `import … from` / `require(`; Go/Java/Rust forms) + `rg -l --type <lang> -e <combined>`
+  (file-level). **litectx improvement:** extract from **tree-sitter import nodes** (cleaner than
+  regex), resolve module→file with path heuristics (over-count acceptable — risk bucket).
+  File-level blast radius = transitive reverse-`imports` ∪ callers of the file's exported symbols.
+
+### Dead-code (inverse impact) — a *candidate* signal, never a safe assertion
+
+"0 called-by + 0 imported-by ⇒ unused" is **derivable for free** once both edge types exist
+(it's `impact` inverted). But borrow aurora's *caution*, not a false confidence:
+
+- Aurora's fast ripgrep mode was **~85% accurate, documented for "daily dev / CI," NOT "before
+  deleting"** — it gated the confident mode behind a better resolver. Never present litectx
+  dead-code as "safe to delete" — it is **"likely-unused, review candidate."**
+- litectx's **over-counting bias makes it safer**: over-counting refs → fewer spurious "0 refs"
+  → errs toward **false negatives** (misses some dead code), not the dangerous **false positive**
+  (flagging live code dead). That is the correct failure direction for dead-code.
+- **Mandatory filters or it's noise:** entry_points / entry_decorators / framework callbacks
+  (`@app.route`, test runners, event handlers) **and — for a library — every public export is a
+  root.** Dynamic dispatch / reflection / string-keyed calls are invisible to ripgrep → residual
+  false positives. So: a signal, not a verdict.
+
+### LSP surface → litectx coverage (verified vs aurora `facade.py`)
+
+| aurora LSP fn | gives | litectx | how |
+|---|---|---|---|
+| `get_usage_summary` | files + refs | ✅ | call edges → risk bucket (§9) |
+| `get_callers` | called-by | ✅ | `calls` edges, reverse |
+| `get_callees` | calling | ✅ | tree-sitter walk of def body (no rg) |
+| `find_usages` | use sites | ✅ | rg candidate + ts confirm |
+| `get_imported_by` | connected files | ✅ | `imports` edges (above) |
+| `find_dead_code` | unused | ✅* | inverse impact — *candidate only* |
+| `lint` / diagnostics | linting | ⛔ drop | not a litectx goal (linter's job) |
+| `get_definition` / `get_hover` | editor nav | ⛔ drop | editor feature, not litectx |
+| `ImportFilter` (import vs usage) | precise split | ⛔ NON-GOAL | over-count by design (PRD §7/§13) |
+
 ### Open call (decide in the slice-2 tree-sitter POC)
 
 - **`.scm` queries vs inline node-type matching.** PRD §7/doctrine says "tree-sitter query set";
