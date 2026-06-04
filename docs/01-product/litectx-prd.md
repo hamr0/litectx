@@ -356,7 +356,14 @@ ran, huge cleanup. That is the failure mode we engineer against. Rules:
   Integration gate = `npm run bench` (`poc/bench-lib.mjs`, runs the **real library** so it can't
   drift from the harness). **Baseline to beat, both repos:** aurora ALL MRR 0.523 / P@3 64%;
   gitdone ALL MRR 0.416 / P@3 45%.
-1. Harden SQLite store + schema (incl. `kind`/`format`) + incremental git-aware indexing (§6).
+1. **✅ SHIPPED** (2026-06-04): Harden SQLite store + schema (`kind`/`format` first-class) +
+   incremental git-aware indexing (§6). `index()` re-reads only changed files (fast skip on
+   `(mtime, size)`, `content_hash` as arbiter via a `file_index` table) and drops deleted files;
+   returns `{ files, added, updated, removed, unchanged }`; `force`/`paths` opts. Recall path
+   untouched → bench holds the slice-0 baseline exactly on both repos. 14 `node --test` tests.
+   (Git-status as an explicit pre-filter tier deferred — `(mtime, size)`+hash already meets the
+   "skip ~95% on re-index" goal; the same-mtime/same-size content swap is the documented `--force`
+   corner.)
 2. tree-sitter **symbol-level** chunking for **TS, JS, Python** + md section chunker → nodes
    (§3.1, §6). Replaces file-granularity; **benchmark must not regress.**
 3. Code-aware BM25 + FTS5 gate + code-over-md fix (§5).
@@ -437,14 +444,14 @@ package** (§7).
 
 ---
 
-## 15. Status: BUILDING v1 — slice 0 shipped
+## 15. Status: BUILDING v1 — slices 0–1 shipped
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
-**slice 0 (walking skeleton) shipped** (`src/` + CLI + tests + integration gate; §11.2). **DECIDED:**
-name, stack, storage, indexing, edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one,
-the code-over-md fix, the cold-start design, packaging (§14 #5), and the build methodology (§11.1).
-**POC-REFINED:** graph spreading confirmed as the differentiator; git-seeded BLA must ship paired
-with decay+churn at a gentler weight (§4.1, §14 #1). **Next action:** slice 1 (store/schema +
-incremental indexing) or slice 2 (symbol-level chunking) per §11.2 — each must hold-or-beat the
-slice-0 benchmark on both repos.
+**slices 0–1 shipped** (walking skeleton + incremental git-aware indexing / hardened `kind`/`format`
+schema; `src/` + CLI + tests + integration gate; §11.2). **DECIDED:** name, stack, storage, indexing,
+edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one, the code-over-md fix, the cold-start
+design, packaging (§14 #5), and the build methodology (§11.1). **POC-REFINED:** graph spreading
+confirmed as the differentiator; git-seeded BLA must ship paired with decay+churn at a gentler weight
+(§4.1, §14 #1). **Next action:** slice 2 (tree-sitter symbol-level chunking) per §11.2 — must
+hold-or-beat the slice-0/1 benchmark on both repos; this is where recall numbers should first jump.

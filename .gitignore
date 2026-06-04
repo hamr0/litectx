@@ -20,3 +20,6 @@ npm-debug.log*
 
 # Local agent settings (personal, not shared)
 .claude/settings.local.json
+
+# Browser-tool scratch
+poc/.barebrowse/

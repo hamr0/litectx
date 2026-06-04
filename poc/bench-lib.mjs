@@ -41,7 +41,7 @@ for (const name of DATASETS) {
     console.log(`    ${label.padEnd(10)} MRR ${m.mrr.toFixed(3)}  P@1 ${pct(m.p1)}  P@3 ${pct(m.p3)}  P@5 ${pct(m.p5)}`);
   };
 
-  console.log(`\n[${name}] litectx library · ${files} files indexed (slice-0 file-granularity BM25)`);
+  console.log(`\n[${name}] litectx library · ${files} files indexed (file-granularity BM25)`);
   line("ALL", rows);
   line("EASY", rows.filter((r) => r.diff === "easy"));
   line("HARD", rows.filter((r) => r.diff === "hard"));

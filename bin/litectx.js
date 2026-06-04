@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Thin CLI over the library — the in-repo consumption surface (PRD §14 #5).
-// Slice 0: `index` builds the index, `recall` queries it.
+// `index` builds (incrementally re-indexes) the index; `recall` queries it.
 //
-//   litectx index [root]
+//   litectx index [root] [--force]
 //   litectx recall <query...> [--root <dir>] [--limit <n>]
 
 import { LiteCtx } from "../src/index.js";
@@ -10,11 +10,12 @@ import { LiteCtx } from "../src/index.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, limit: number, words: string[]}} */
-  const opts = { root: process.cwd(), limit: 10, words: [] };
+  /** @type {{root: string, limit: number, force: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), limit: 10, force: false, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "--limit") opts.limit = Number(rest[++i]);
+    else if (rest[i] === "--force") opts.force = true;
     else opts.words.push(rest[i]);
   }
   return { cmd, opts };
@@ -27,9 +28,11 @@ function main() {
     const root = opts.words[0] ?? opts.root;
     const ctx = new LiteCtx({ root });
     const t = Date.now();
-    const { files } = ctx.index();
+    const r = ctx.index({ force: opts.force });
     ctx.close();
-    console.error(`indexed ${files} files from ${root} in ${Date.now() - t}ms`);
+    console.error(
+      `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
+    );
     return;
   }
 
@@ -40,7 +43,7 @@ function main() {
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
     const hits = ctx.recall(query, { limit: opts.limit });
     ctx.close();
-    for (const h of hits) console.log(`${h.score.toFixed(2)}\t${h.kind}\t${h.path}`);
+    for (const h of hits) console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}`);
     return;
   }
 

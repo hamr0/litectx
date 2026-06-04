@@ -1,4 +1,4 @@
-# Stash — litectx: name reserved, repo live, POC PASSED (2 repos), methodology set, SLICE 0 SHIPPED
+# Stash — litectx: name reserved, repo live, POC PASSED (2 repos), methodology set, SLICES 0–1 SHIPPED
 
 - **Date:** 2026-06-04
 - **Repo:** `/home/hamr/PycharmProjects/litectx` (== `/home/hamr/Documents/PycharmProjects/litectx`, same inode). Git initialized this session; **public** GitHub repo `hamr0/litectx`, pushed to `main`.
@@ -58,13 +58,13 @@ Four rankers (weights over [bm25, git-bla, graph-spread]): `baseline`=[1,0,0], `
 ## v1 BUILD SLICES (mapped from PRD §11.2)
 
 - **Slice 0 — walking skeleton: ✅ DONE/SHIPPED** (commit `47b3feb`; baseline above).
-- **Slice 1 (NEXT option A):** harden store + schema (`kind`/`format`) + incremental git indexing (status→mtime→content-hash). Foundation for chunking + signals; makes CLI re-index usable.
-- **Slice 2 (NEXT option B — where numbers move):** tree-sitter **symbol-level** chunking for TS/JS/Python + md section chunker. Replaces file-granularity; **benchmark must not regress**, should jump.
+- **Slice 1 — incremental indexing + hardened schema: ✅ DONE/SHIPPED.** `index()` is incremental + git-aware: fast skip on `(mtime, size)`, `content_hash` arbiter via new `file_index` table, drops deleted files; returns `{files, added, updated, removed, unchanged}`; `force`/`paths` opts. `kind`/`format` first-class columns (format routed by ext: ts/js/py/md), surfaced on recall hits. CLI `index` shows the breakdown + `--force`. **Recall path untouched → bench holds slice-0 baseline EXACTLY on both repos** (aurora 0.523 / gitdone 0.416). 14 `node --test` tests (added: incremental, deletion, **size-guard**, force, kind/format). Typecheck clean. **Caught + fixed a real silent-miss:** mtime-only detection skips a same-tick edit without hashing → added `size` to the fast signal (an edit almost always changes length); residual same-mtime/same-size swap is the documented `--force` corner. **Git-status pre-filter tier deferred** (mtime+size+hash already meets "skip ~95%").
+- **Slice 2 (NEXT — where numbers move):** tree-sitter **symbol-level** chunking for TS/JS/Python + md section chunker. Replaces file-granularity; **benchmark must not regress**, should jump. POC-first: throwaway chunking POC (pick binding — lean **web-tree-sitter/WASM** for adopter install-portability — and confirm symbol-granularity beats file-granularity on both repos) before building properly. tree-sitter = the justified 2nd prod dep (core doctrine).
 - **Slice 3:** code-aware BM25 + FTS5 gate + code-over-md (§5). (NB: slice-0 Store does path-doubling but NOT camelCase body-splitting — that lands here.)
 - **Slice 4:** activation — base-level → **decay+churn** → spreading; **validate on both repos before BLA gets weight** (POC mandate); aurora cross-check only if a number looks off.
 - **Slice 5:** edges (tree-sitter + ripgrep) → spreading in recall, then **impact view** (refs→risk bucket; complexity from AST).
 
-**Claude's lean (offered, user not yet chosen):** slice 1 next (foundation); slice 2 is where recall numbers first jump. User may pick either, or pause (clean checkpoint).
+**User chose slice 1 (foundation first); slice 1 now shipped → slice 2 is next.**
 
 ---
 
@@ -81,7 +81,8 @@ Four rankers (weights over [bm25, git-bla, graph-spread]): `baseline`=[1,0,0], `
 1. ✅ Codify methodology in PRD §11.1/§11.2 (commit `cb5ba8c`).
 2. ✅ CHANGELOG entry (commit `cb5ba8c`).
 3. ✅ Build slice 0 — walking skeleton (commit `47b3feb`).
-4. **Slice 1 or 2** (user's call) — see slices above. Whichever: keep `npm run bench` ≥ slice-0 baseline on BOTH repos; tests after the slice's design stabilizes; aurora = second opinion only.
+4. ✅ Slice 1 — incremental indexing + hardened schema (see slices above; bench held exactly).
+5. **Slice 2 — tree-sitter symbol-level chunking** (next). POC-gate the binding + the symbol-vs-file jump on both repos first, then build with tests; keep `npm run bench` ≥ baseline on BOTH repos; aurora = second opinion only.
 
 ## Commits this session
 `83fea95` scaffold+PRDs → `7af69c7` POC aurora → `b885a84` POC gitdone → `cb5ba8c` methodology+changelog+stash → `47b3feb` slice 0. All pushed to `origin/main` (admin bypass of PR rule — intended).
