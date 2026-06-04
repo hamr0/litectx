@@ -277,3 +277,54 @@ calling*; **file connectivity needs import edges separately.**
   `.scm` queries for **chunking** (declarative capture of function/class spans, slice 2) +
   node-type config for **edges** (slice 5). Confirm in the slice-2 POC alongside the
   web-tree-sitter (WASM) vs native binding choice.
+
+---
+
+## 12. Indexing performance — the speed playbook (aurora's hardest-won lessons)
+
+Aurora hit a real indexing-speed wall; the fixes are documented and worth borrowing exactly.
+
+### ★ Git blame was the killer — file-level cache, slice per function (336× — non-negotiable)
+
+- **The mistake:** `git blame -L <start>,<end>` **per function** → O(functions) git subprocesses
+  (a 50-function file = 50 blame calls). This was aurora's dominant indexing cost.
+- **The fix** (`context-code/.../git.py:100–294`): run `git blame --line-porcelain <file>`
+  **once per file**, cache `{line → (sha, ts)}`, then slice each function's range in O(1).
+  CHANGELOG: **"336× speedup on subsequent function lookups."** Second-level `{sha → ts}` cache
+  too.
+- **litectx (slice 4):** when block-level git signals land (§8), do file-level blame **once**,
+  slice per chunk line-range. Never per-symbol git calls. This is THE indexing-speed lesson.
+
+### SQLite write pragmas (cheap, applied now to `Store`)
+
+- Aurora (`connection_pool.py:81–105`): `WAL` + `synchronous=NORMAL` + `cache_size=-8000` (8 MB)
+  + `mmap_size=256MB` + `temp_store=MEMORY`. litectx had only `WAL` → now matches (the index is
+  rebuildable, so NORMAL's "lose at most the last txn on power loss" is the right trade).
+
+### Parallel parsing (slice 2)
+
+- Aurora parses tree-sitter **in a `ThreadPoolExecutor`, `min(8, cpu)` workers** (tree-sitter is
+  stateless/thread-safe) — `memory_manager.py:670–844`. **litectx:** single-threaded is fine for
+  v1; reach for `worker_threads` only if the slice-2 bench shows parsing dominates. Don't
+  pre-optimize.
+
+### Incremental detection — already shipped (slice 1), aurora-aligned
+
+- Aurora: git status → mtime → SHA-256 (`memory_manager.py:524–586`), `file_index{hash, mtime,
+  chunk_count}`, deleted-file cleanup. litectx slice 1 = mtime+**size**→sha256 + cleanup. The one
+  divergence: litectx **defers the git-status tier-0** — mtime+size already skips the expensive
+  read+hash; git status would only save `stat()` calls (cheap). Revisit only if a huge-repo bench
+  shows the walk itself dominates.
+
+### litectx sidesteps one aurora bottleneck by design
+
+- Aurora cached a **pickled BM25 index** (`bm25_index.pkl`) because rebuild was **9.7s** → <100ms
+  load. **litectx has no such cost:** BM25 is **native FTS5 inside the SQLite file** — it persists
+  with the db, nothing to rebuild or re-pickle. A free win from the storage doctrine.
+
+### Embeddings (opt-in tier only)
+
+- Cold start **15–19s** (model download + torch import), warm 2–3s; aurora **lazy-loads** +
+  **background-preloads** the model and **batches** encode at `batch_size=32`
+  (`embedding_provider.py`). Carry all three **only in the embeddings tier** — never on the
+  default path (this is precisely why embeddings are off by default).

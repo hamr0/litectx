@@ -48,7 +48,14 @@ export class Store {
   constructor(dbPath) {
     /** @type {any} */
     this.db = new Database(dbPath);
+    // Write/throughput pragmas (aurora-borrowed; ledger §12). The index is rebuildable, so
+    // synchronous=NORMAL (durable under WAL, loses at most the last txn on power loss) is the
+    // right trade. No-ops on :memory:, harmless there.
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
+    this.db.pragma("cache_size = -8000"); // ~8 MB page cache (negative = KiB)
+    this.db.pragma("mmap_size = 268435456"); // 256 MB memory-mapped reads
+    this.db.pragma("temp_store = MEMORY");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
