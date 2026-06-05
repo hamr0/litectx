@@ -1,5 +1,23 @@
-# barecontext — Product Requirements Document (PRD, SEED / NOT-NOW)
+# barecontext — Product Requirements Document (PRD, ⚠ SUPERSEDED)
 
+> **⚠ SUPERSEDED (2026-06-05) — do not build from this doc.** This SEED's axis (the *context
+> economy*) is now **litectx's**, and litectx documents it as **two live PRDs**:
+> - **memory engine** → [`litectx-memory-prd.md`](litectx-memory-prd.md) — recall, impact, the
+>   code+context graph, ACT-R, kinds, indexing, storage.
+> - **CE primitives (Write / Select / Compress / Isolate)** → [`litectx-ce-prd.md`](litectx-ce-prd.md),
+>   which carries this doc's **§4 primitives** (now first-class requirements), turns its **§6
+>   "bare test" into the "lite line,"** and points its **§7 Aurora-port notes** at
+>   [`../02-engineering/aurora-borrow-ledger.md`](../02-engineering/aurora-borrow-ledger.md).
+>
+> Two framings below are now **wrong** and kept only for history: (1) barecontext is **not** a
+> future bare-suite *sibling* — it is litectx, a **standalone** library that baresuite
+> *consumes* (not the reverse); (2) it is no longer SEED / NOT-NOW — litectx is in active build.
+> Read the two PRDs above instead.
+>
+> ---
+>
+> _Original SEED banner (historical):_
+>
 > Companion to [`bareguard-prd.md`](bareguard-prd.md) (the stable governance spec) and
 > [`harness-prd.md`](harness-prd.md) (the floor+harness design). **This is a seed
 > doc, not a build order.** It exists to hold one idea clearly so it does not bloat

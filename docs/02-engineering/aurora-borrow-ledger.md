@@ -368,3 +368,79 @@ Aurora hit a real indexing-speed wall; the fixes are documented and worth borrow
   **background-preloads** the model and **batches** encode at `batch_size=32`
   (`embedding_provider.py`). Carry all three **only in the embeddings tier** — never on the
   default path (this is precisely why embeddings are off by default).
+
+---
+
+## 13. SOAR / CE primitives — carry vs correct (the context-engineering layer)
+
+The §1–12 entries are aurora's **memory signals**. This section covers the **CE primitives** mined
+from aurora's SOAR pipeline (`packages/soar/`, `packages/reasoning/`) and cross-checked against the
+Arize "Alex" talk [Arize]. Maps to `litectx-ce-prd.md` R-* IDs. **Verified against source** — the
+big lesson here is that two things the SOAR *docs* describe were **never actually built**, so they
+are designs, not validated borrows.
+
+> **Path note:** read under `/home/hamr/Documents/PycharmProjects/aurora`, which is the **same
+> inode** as the header's `/home/hamr/PycharmProjects/aurora` (3681847) at the **same commit
+> `750a39d`** — so these file:lines match the ledger's stated provenance. ✅ verified.
+
+### 13.1 Rank-tiered chunk render → **R-C7** (Compress) — ✅ built, CARRY the *shape*, reimplement
+- **Source:** `packages/soar/src/aurora_soar/phases/decompose.py:243-310`, inside
+  `_build_context_summary()` (**inlined, not a discrete function**).
+- **Mechanism (the real one — richer than "render to docstring"):** chunks are rendered **by rank
+  in tiers**, not uniformly. `CHUNK_LIMITS = {"MEDIUM": (5,8), "COMPLEX": (7,12), "CRITICAL":
+  (10,15)}` → `(TOP_N_WITH_CODE, MAX_CHUNKS)` (`decompose.py:246`). The first `TOP_N` chunks get
+  **full verbatim code**; chunks `TOP_N..MAX` get a **docstring/description fallback** (`[:200-300]`
+  chars); everything past `MAX` is **dropped**.
+- **Carry:** the **rank-tiered budget** — *verbatim for the top, signature+docstring for the middle,
+  drop past a cap*. This is the calibration (code-only confused the agent; tiered fixed it) and it's
+  the natural implementation of **R-C2 token-budgeted assembly** + **R-C7 render**.
+- **Correct/adapt:** it's **inlined** in the orchestrator → **reimplement clean**, don't extract.
+  litectx already extracts `signature`/`docstring` (memory PRD §2), so the render unit is free; the
+  tiering belongs in `assemble()`. The `(top_N, max)` numbers are aurora priors — re-tune to a
+  **token budget**, not a fixed count.
+- **Companion prior (non-aurora) — Headroom `SmartCrusher`.** A *second* structural prior for the
+  same R-C7 tiering, from the Headroom library (`github.com/chopratejas/headroom`, Apache-2.0; full
+  study in [copy-pattern-studies §4](copy-pattern-studies.md)): retain **30% from start (schema) +
+  15% from end (recency) + 55% by importance score**, and **keep anomalies (errors/warnings)
+  unconditionally**. Different payload (JSON arrays vs code chunks) but the same shape as aurora's
+  `CHUNK_LIMITS`, plus a *never-drop override* aurora's tiering lacks. Carry as a **competing bench
+  hypothesis** next to the `(top_N, max)` split — not aurora calibration, so it stays out of the §-12
+  quick-reference table; both are **untested priors** the `poc/` gate decides between (or fuses:
+  rank-tiered code + unconditional-keep for errors).
+
+### 13.2 Retrieval-quality signal (NONE/WEAK/GOOD) → **R-S8** (Select) — ⚠️ DESIGN ONLY, never built
+- **Source:** `docs/02-features/soar/SOAR_ARCHITECTURE.md:276-329` **only** — the enum
+  (NONE/WEAK/GOOD), the `groundedness` computation, and the thresholds **do not exist** in the
+  `aurora_soar` source. Confirmed absent from the codebase.
+- **Documented design:** `high_quality = chunks with activation ≥ 0.3`; **GOOD** = `groundedness ≥
+  0.7 AND high_quality ≥ 3`; **WEAK** = either fails; **NONE** = `total_chunks == 0`.
+- **Verdict:** **not a validated borrow — a litectx-original** inspired by aurora's *unbuilt* design
+  + the Arize "we want a principled context-quality metric" gap [Arize]. litectx is uniquely placed
+  to build it (it owns the activation scores). The `0.3 / 0.7 / 3` numbers are **untested priors**;
+  treat them as bench hypotheses, not calibration. (NB: litectx has no separate "groundedness"
+  signal yet — for v1 the label can key off the **activation distribution alone**.)
+
+### 13.3 Success boost on record → **R-W7** (Write feedback) — ✅ built & confirmed, CARRY
+- **Source:** `packages/soar/src/aurora_soar/phases/record.py:282-283`:
+  `pattern_marked = confidence >= 0.8` · `activation_update = 0.2 if pattern_marked else 0.05`
+  (policy docstring `:198-201`; `< 0.5` skips caching).
+- **Constants (confirmed):** **+0.2** at confidence ≥0.8 · **+0.05** at ≥0.5 · skip below 0.5.
+- **"Success" source:** `synthesis_result.confidence` (`record.py:218`) — an **LLM-produced**
+  number from the synthesize phase. → the *verdict* is harness/bareagent (ceded); litectx only
+  applies the boost via `recordUseful(ids, weight)`.
+- **Carry:** the constants as priors; re-validate on the bench. This boost is **on top of**
+  automatic base-level use (§2), keyed to *helped*, not merely *retrieved*.
+
+### 13.4 Sibling borrows (NOT litectx — parked in CE-PRD §10.4)
+- **Cost-budget gate → bareguard.** ⚠️ **DESIGN ONLY** — `aurora_core/budget/tracker.py` tracks
+  spend but has **no per-tier caps and no soft/hard gate**; the `$0.001/$0.05/$0.50/$2.00` tiers +
+  80%/100% checks live only in the docs. **Build fresh**, not a borrow.
+- **Complexity assessment → bareagent.** ✅ built: `packages/soar/src/aurora_soar/phases/assess.py:82-343`
+  — verb stoplists (`SIMPLE_VERBS`/`COMPLEX_VERBS`…) + question-pattern regex, **no LLM**. Real,
+  carryable.
+- **Decomposition caps → bareagent.** ✅ built: `SUBGOAL_LIMITS = {"MEDIUM":2,"COMPLEX":4,"CRITICAL":6}`
+  (`packages/reasoning/src/aurora_reasoning/prompts/decompose.py:167`). **Attribution fix:** the
+  2/4/6 is the **subgoal cap**, *not* the few-shot count — few-shot examples are a separate knob, cut
+  to `0/1/1/2` (`examples.py:111-116`) to save context. The lesson (numeric caps curb LLM
+  over-engineering) carries; the agent-matching closed-labels (excellent/adequate/bad) are also
+  bareagent.
