@@ -4,5 +4,12 @@
   "private": true,
   "type": "module",
   "description": "THROWAWAY validation harness for the PRD §11 gate. Not shipped. Never imported by the lib.",
-  "dependencies": { "better-sqlite3": "^11.8.1" }
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "tree-sitter": "^0.25.0",
+    "tree-sitter-javascript": "^0.25.0",
+    "tree-sitter-python": "^0.25.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "web-tree-sitter": "^0.22.6"
+  }
 }

@@ -11,6 +11,7 @@ import { join, dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { Store } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
+import { chunkFile } from "./chunker.js";
 import { ftsMatch } from "./tokenize.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
@@ -52,9 +53,9 @@ export class LiteCtx {
    * a scoped pass never deletes files outside its scope.
    *
    * @param {{ paths?: string[], force?: boolean }} [opts]
-   * @returns {IndexResult}
+   * @returns {Promise<IndexResult>}
    */
-  index(opts = {}) {
+  async index(opts = {}) {
     const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs);
     if (opts.force) this.store.reset();
     const prev = opts.force ? new Map() : this.store.loadIndex();
@@ -62,6 +63,10 @@ export class LiteCtx {
     const { upserts, touch, unchanged } = diffFiles(this.root, files, prev);
     const current = new Set(files);
     const deletes = opts.paths ? [] : [...prev.keys()].filter((p) => !current.has(p));
+
+    // chunk each changed file into symbol/section nodes (slice 2). Additive substrate — the
+    // recall path below is untouched, so the file-granularity benchmark holds exactly.
+    for (const u of upserts) u.nodes = await chunkFile(u.path, u.body);
 
     this.store.applyChanges({ upserts, touch, deletes }, Date.now());
 

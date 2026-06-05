@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: design / POC stage.** `litectx@0.0.1` reserves the name. The API below is the **target shape** from the [PRD](docs/01-product/litectx-prd.md), not yet shipped. Everything is gated on one question first — *does activation + graph-aware recall measurably beat plain FTS5/BM25?* (PRD §11). Pass → v1 builds in that sequence. Watch this space.
+> **Status: design / POC stage.** `litectx@0.0.1` reserves the name. The API below is the **target shape** from the [PRD](docs/01-product/litectx-memory-prd.md), not yet shipped. Everything is gated on one question first — *does activation + graph-aware recall measurably beat plain FTS5/BM25?* (PRD §11). Pass → v1 builds in that sequence. Watch this space.
 
 ## What this is
 
@@ -100,7 +100,7 @@ One SQLite file holds the whole substrate — nodes, edges, signals, and the FTS
 | | |
 |---|---|
 | **Integration Guide** (`litectx.context.md`) | The complete adopter contract — every option, the full public API, the graph schema, extension contracts, the refusals. *Hand it to your AI assistant.* **(coming with v1)** |
-| **[PRD](docs/01-product/litectx-prd.md)** | Locked decisions + *why*, the substrate/views model, the POC gate, build order, the refusals. *(repo-only)* |
+| **[PRD](docs/01-product/litectx-memory-prd.md)** | Locked decisions + *why*, the substrate/views model, the POC gate, build order, the refusals. *(repo-only)* |
 | **[CHANGELOG](CHANGELOG.md)** | keep-a-changelog; an entry every release. |
 
 ## License

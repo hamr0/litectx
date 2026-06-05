@@ -21,7 +21,7 @@ for (const name of DATASETS) {
   if (!root) { console.log(`\n[${name}] repo not found — skipped`); continue; }
 
   const ctx = new LiteCtx({ root, include: ds.include, pathspecs: ds.pathspecs, dbPath: ":memory:" });
-  const { files } = ctx.index();
+  const { files } = await ctx.index();
 
   const rows = ds.queries.map((Q) => {
     const hits = ctx.recall(Q.q, { limit: DEPTH });

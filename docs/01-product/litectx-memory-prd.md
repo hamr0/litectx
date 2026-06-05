@@ -3,7 +3,7 @@
 > A standalone, **lite, local-first code-aware memory engine** for AI coding agents:
 > it indexes a repository (code + docs) into a queryable **code+context graph** and serves
 > two read-views over it — **recall** (ranked search) and **impact** (blast-radius / risk).
-> Published as an importable **npm library** (Node + TypeScript). It is the realization of
+> Published as an importable **npm library** (Node; pure ESM JS + JSDoc). It is the realization of
 > the "context economy" axis sketched in [`barecontext-prd.md`](barecontext-prd.md),
 > rebuilt from the lessons of the AURORA engine (`~/PycharmProjects/aurora`).
 >
@@ -18,7 +18,25 @@
 >
 > **Governing rules:** `.claude/memory/AGENT_RULES.md` — POC-first, dependency hierarchy
 > (vanilla → stdlib → external), lightweight-over-complex, open-source-only, every line
-> earns its place, Testing Trophy.
+> earns its place, Testing Trophy. **Language: pure ESM JS + JSDoc, no build step**
+> (`LIBRARY_CONVENTIONS.md` §1); TypeScript is dev-only — `tsc` checks JSDoc and *generates*
+> the shipped `.d.ts`. Any "TypeScript source" phrasing is stale and overridden.
+>
+> **Single source of truth (DECIDED).** This PRD is the one authority for the **memory engine**
+> (the aurora-borrowed code+context memory: index · recall · impact · graph). Every decision,
+> scope line, and build-order call lives here or is *referenced* from here. The companions are
+> subordinate, never competing authorities:
+>
+> | Doc | Role |
+> |---|---|
+> | **`litectx-memory-prd.md`** (this) | the authority — decisions, scope, build order, module map (§2.1) |
+> | `docs/02-engineering/aurora-borrow-ledger.md` | calibration **appendix** — exact constants + aurora `file:line`; referenced, not duplicated |
+> | `docs/01-product/litectx-ce-prd.md` | the **other half** (CE primitives) — a *separate, still-forming* track, **not** part of this memory-engine build |
+> | `barecontext-prd.md` | **superseded** — folded into this line of work |
+> | `.claude/stash/*`, `CLAUDE.md` | session history / doctrine — never source of truth |
+>
+> When this PRD and a companion disagree about the memory engine, **this PRD wins**; fix the
+> companion. (CE scope is governed separately until it graduates into a build.)
 >
 > Status legend: **DRAFT** (this doc), **DECIDED** (settled, do not relitigate),
 > **POC-GATED** (build only after the POC in §11 passes), **DEFERRED** (post-v1),
@@ -43,10 +61,10 @@
   into a general short/long-term ACT-R memory without migration.
 - **Name:** `litectx` (npm-free) — "lite context."
 - **v1 languages:** TypeScript, JavaScript, Python (routed by file extension).
-- **Stack:** Node + TS, `better-sqlite3` + FTS5, `web-tree-sitter`, `ripgrep`. **Zero
+- **Stack:** Node, pure **ESM JS + JSDoc** (no build step), `better-sqlite3` + FTS5, `web-tree-sitter`, `ripgrep`. **Zero
   external binaries required.** Embeddings are the one opt-in tier.
 - **Edges/impact:** tree-sitter + `ripgrep -w` only — **no LSP server, ever** (§7).
-- **Method:** *borrow, don't port* — reimplement AURORA's validated algorithms in clean TS.
+- **Method:** *borrow, don't port* — reimplement AURORA's validated algorithms in clean ESM JS.
 
 ---
 
@@ -88,13 +106,46 @@ Over that one graph, v1 ships **two views**:
 the future `codegraph`/`contextgraph` (§9) are *additional views over the same data*, not
 re-extractions. Build "a search function" instead and you pay for the graph twice.
 
+### 2.1 Module architecture (the memory engine) — one substrate, scorers, views
+
+The engine decomposes into small ESM modules with a strict dependency DAG (no cycles). Each maps
+to a build slice (§11.2) and to the calibration sections of the borrow ledger. *Slices ≠ modules:*
+a slice adds a capability over time; the modules below are the code units it lands in.
+
+| Module | Role | State | Slice / ledger |
+|---|---|---|---|
+| `store` | SQLite/FTS5, pragmas, all SQL, tables, `getNode`/`related` | ✅ | §9 · ledger §12 |
+| `indexer` | pass orchestration: collect + incremental diff + dispatch | ✅ | §6 · slices 0–1 |
+| `langdef` | per-language registry (`defTypes` per ext; `call_node_type`/`skip_names`/`.scm` to come with edges) | ✅ (grammar+defTypes) | slice 2 · ledger §11 |
+| `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
+| `gitsig` | file-level blame cache, slice per range → commit count+recency | new | slice 4 · ledger §8/§12 |
+| `edges` | symbol table → `calls` + `imports` edges | new | slice 5 · ledger §11 |
+| `tokenize` | code-aware BM25 text (split + path + deps) + query match | partial | slice 3 · ledger §1 |
+| `activation` | ACT-R **pure fns**: BLA · decay(type+churn) · spreading · boost · total · norm | new | slice 4 · ledger §2–6 |
+| `recall` | FTS gate → kind-aware hybrid fusion → topK | inline | **extract slice 4** · ledger §7 |
+| `impact` | refs/files → risk bucket + complexity | new | slice 6 · ledger §9 |
+| `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
+| `LiteCtx` | facade: config + wiring | ✅ | §3 |
+
+**Seam rules (do not violate):**
+1. **`store` persists FTS content, never builds it** — code-aware body text is `tokenize`'s job
+   (today `store.applyChanges` doubles path tokens; that logic moves out in slice 3).
+2. **One `langdef` registry** — `chunker`, `edges`, and complexity all read it; never fork it
+   per-slice (`.scm` for chunking + node-type config for edges hang off the same module).
+3. **`activation` stays pure** — functions of already-extracted signals, so the bench can ablate
+   each term (the POC's "BLA doesn't generalize" was a half-formula artifact, not a finding).
+4. **`recall` is its own module, not the facade** — fusion weights / normalization / the
+   tri→dual→activation fallback chain don't belong in `LiteCtx`.
+
+Don't pre-create empty modules — `gitsig`/`edges`/`impact` land with their slices.
+
 ---
 
 ## 3. Public API (DRAFT shape)
 
 One importable surface; one config object; safe defaults; everything advanced is opt-in.
 
-```ts
+```js
 import { LiteCtx } from "litectx";
 
 const lc = new LiteCtx({ root: "/path/to/repo" /*, ...LiteCtxConfig */ });
@@ -171,8 +222,10 @@ A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
 - **Context boost** — query↔chunk keyword overlap, `boost=0.5`.
 - **Decay** — `−d_kind · log10(days_since_access)`, **1-hour grace**, capped at **90d**,
   floored at `−2.0` (aurora-verified; see borrow ledger).
-- **Type-specific decay** (keyed by `kind`/element) — kb `0.05`, **doc `0.02`**, class `0.20`,
-  function/method/code `0.40`, toc-entry `0.01` (docs decay ~20× slower than functions).
+- **Type-specific decay** (keyed by **`(kind, format)`**) — markdown (`kind=doc, format=md`)
+  `0.05`, class `0.20`, function/method/`code` `0.40`, toc-entry `0.01`; pdf/docx `0.02`
+  (reserved). Markdown decays ~8× slower than functions. ⚠️ **aurora tuned _markdown_ at `0.05`**
+  — its `0.02` rate was for paginated pdf/docx; do **not** apply `0.02` to md (ledger §3/§10).
 - **Churn factor** — `0.1 · log10(commits+1)` added to decay (volatile code decays faster).
 - **MMR diversity rerank** (optional) — needs embeddings; off by default.
 
@@ -238,8 +291,9 @@ Grounding: `MEM_INDEXING.md`.
 - **Route by file extension, everywhere** (DECIDED): extension → `kind` → parser → edge
   config. **Never** sniff language by content/shebang.
 - **Index code + markdown**, incremental re-index.
-- **3-tier change detection** (fast→slow): git status → mtime → content-hash; skips ~95% of
-  files on re-index. Track in `file_index(path, content_hash, mtime, indexed_at)`.
+- **Change detection** (fast→slow): `(mtime, size)` → content-hash (sha256); skips ~95% of
+  files on re-index. Track in `file_index(path, content_hash, mtime, size, indexed_at)`. (A
+  git-status pre-filter tier is deferred — `(mtime, size)` already meets the skip goal; §11.2.)
 - **Block-level git signals** (DIFFERENTIATOR): `git blame --line-porcelain` → commit
   count + recency **per chunk line-range**, not per file — feeds churn, cold-start BLA
   (§4.1), and the output schema.
@@ -262,6 +316,13 @@ The decision is final: **there is no language-server tier.** Grounding: `LSP.md`
   `skip_names`, framework-callback names so `bot.on('msg', handler)` isn't seen as dead).
   This is the knowledge that makes ripgrep edges accurate; the goal is the **best-possible
   blast radius via lang def.**
+- **Two edge types, both required (ledger §11):** `calls` (symbol→symbol) powers called-by /
+  calling + the symbol blast radius; `imports` (file→file, from tree-sitter import nodes) powers
+  file connectivity (aurora's `get_imported_by`). Shipping only `calls` misses file-level impact.
+- **Dead-code is a free *candidate* signal, never a verdict:** once both edge types exist,
+  `0 callers ∧ 0 importers` is inverse impact — surfaced as a **review candidate, not "safe to
+  delete"** (aurora fast mode ~85%; over-count bias errs toward false negatives, the safe
+  direction; exports / entry-points / framework callbacks are roots). Ledger §11.
 - **Adequacy for the goal:** `impact` outputs a **risk bucket** (0–2 low / 3–10 med / 11+
   high). Ripgrep *over*-counts (comments/strings) → errs toward caution, which is fine for
   bucketing. (Precise import-vs-usage separation — an LSP-only capability — is a NON-GOAL,
@@ -296,7 +357,8 @@ Embeddings are the **only** tier. There is no LSP tier (§7).
 - **Vectors (embeddings tier only):** `sqlite-vec` extension or a `float32` BLOB column —
   inside the one SQLite file; no second datastore.
 - Tables (from AURORA, slimmed): `chunks` (incl. `kind`, `format`), `relationships` (edges,
-  indexed both ends), `activations`, `file_index`.
+  indexed both ends), `activations` (reserved — v1 has no access log; git seeds BLA, §4.1),
+  `file_index`.
 
 ---
 
@@ -367,6 +429,20 @@ ran, huge cleanup. That is the failure mode we engineer against. Rules:
   aurora divergence is a **question to investigate, not a bug to fix toward aurora.** Cross-check is
   **manual and as-needed** (e.g. a signal misbehaving) — never a CI dependency (heavy Python env).
 
+**Definition of done — one slice = one module (§2.1), three gates, then the next.** A slice adds
+exactly one module from the module DAG and is not "done" (and the next slice may not start) until
+**all three pass**:
+
+1. **Behavior** — `npm run bench` **holds-or-beats** the baseline MRR/P@k on **both** repos
+   (aurora + gitdone). Any new weight/signal is adopted only if it is ≥ baseline on *every* repo.
+2. **Types** — `tsc --noEmit` (`checkJs` + `strictNullChecks`) is clean; the generated `.d.ts`
+   stays in sync (no `!`, `as any`, or `@ts-ignore`).
+3. **Tests** — integration-first against `:memory:` SQLite + a tmp repo (<60% mocking, behavior
+   not implementation); every bug fix ships a regression test.
+
+This is the guard against the 5500-dead-unit-tests failure mode: a module proves itself
+end-to-end before the next one exists, so nothing is built apart and wired up later.
+
 ### 11.2 v1 build slices (after POC graduates)
 
 - **Slice 0 — walking skeleton ✅ SHIPPED** (2026-06-04): index files → SQLite (FTS5) →
@@ -384,12 +460,29 @@ ran, huge cleanup. That is the failure mode we engineer against. Rules:
    (Git-status as an explicit pre-filter tier deferred — `(mtime, size)`+hash already meets the
    "skip ~95% on re-index" goal; the same-mtime/same-size content swap is the documented `--force`
    corner.)
-2. tree-sitter **symbol-level** chunking for **TS, JS, Python** + md section chunker → nodes
-   (§3.1, §6). Replaces file-granularity; **benchmark must not regress.**
+2. **✅ SHIPPED** (2026-06-05): tree-sitter **symbol-level** chunking for **TS, JS, Python** +
+   md section chunker → a `nodes` table (§3.1, §6). **DUAL-GRAIN, not a replacement** —
+   corrected from the POC: pure chunk-BM25 *regressed* the file-target gate on both repos
+   (aurora MRR 0.523→0.434; max/sum/top3 pooling all lost), because for *file*-finding whole-file
+   BM25 is a strong baseline that sub-file chunks fragment. So the file-level FTS doc stays the
+   recall gate (bench holds **exactly** — aurora 0.523/64%, gitdone 0.416/45%) and the line-ranged
+   symbol chunks land *alongside* as the structural substrate that block git-blame (slice 4) and
+   edges (slice 5) ride on. The recall jump the chunks enable arrives in slices 3–4, not here
+   (POC: `poc/RESULTS.md` "Slice-2"). Binding: **web-tree-sitter (WASM)** pinned to `0.22.6`,
+   grammars **vendored** under `src/grammars/` (py/js/ts, Unlicense) — native tree-sitter was ~3×
+   *slower* for this walk-heavy workload with identical output (POC: `binding-bench`). **+1 prod
+   dep** (`web-tree-sitter`, 292 KB runtime; grammars vendored, not depended) — justified: symbol
+   chunking/edges are doctrine-mandated (ripgrep + tree-sitter only) and not doable in stdlib;
+   `tree-sitter-wasms` (50 MB, all langs) was rejected for the 3 vendored grammars (~3.4 MB).
+   `index()` is now **async** (the PRD §3 `await lc.index()` shape). 6 new tests.
 3. Code-aware BM25 + FTS5 gate + code-over-md fix (§5).
 4. ACT-R activation engine + presets + cold-start (§4) → **recall view** ships. Per the POC:
-   base-level → **decay+churn** → spreading; **validate on both repos before BLA gets weight.**
+   base-level → **decay+churn** → context-boost; **validate on both repos before BLA gets weight.**
+   Spreading is scaffolded here but **earns weight in slice 5**, once real edges exist (the POC
+   already proved it generalizes — it's the priority the moment edges land).
 5. tree-sitter + ripgrep edge extraction + per-language semantics config (§7) → graph edges.
+   **Both `calls` (symbol blast radius) and `imports` (file connectivity) — not calls alone (§7,
+   ledger §11);** the dead-code candidate falls out as inverse impact.
 6. **impact view** (reference count → risk bucket; complexity from AST) over the edges.
 
 **Impact-view timing:** sequenced *after* recall because it depends on accurate edges
@@ -400,7 +493,7 @@ makes that a clean cut, not a rework.
 
 ## 12. What to carry over from AURORA (borrow, don't port)
 
-**Reimplement in clean TS** (pure logic, near-verbatim): ACT-R formulas (§4), code-aware
+**Reimplement in clean ESM JS** (pure logic, near-verbatim): ACT-R formulas (§4), code-aware
 BM25 tokenizer + `k1/b` (§5), two-stage retrieval + code-over-md fix (§5), 3-tier
 incremental indexing (§6), block-level git-blame extraction (§6), per-language
 edge-semantics config (§7), the `kind`-keyed type taxonomy (§3.1).
@@ -428,7 +521,8 @@ package** (§7).
 ## 13. Non-goals (NON-GOAL)
 
 - **Any LSP / language-server integration** — ripgrep + lang-def only (§7). Implies
-  import-vs-usage separation and LSP-grade dead-code are out of scope.
+  import-vs-usage separation and *binding-precise* dead-code are out of scope. (litectx still
+  ships a *candidate* dead-code signal via inverse impact — §7 — just not an LSP-grade verdict.)
 - **Token budgeting / context-window trimming / compaction** — runner/harness concern.
 - **Content guardrails** — secret/PII/injection scanning, policy enforcement — bareguard.
 - **LLM orchestration / task decomposition / agent spawning** — AURORA's `soar`/`reasoning`.

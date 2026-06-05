@@ -31,7 +31,8 @@
     "bench:ablation": "node poc/run.mjs aurora && node poc/run.mjs gitdone"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1"
+    "better-sqlite3": "^11.8.1",
+    "web-tree-sitter": "0.22.6"
   },
   "engines": {
     "node": ">=18"

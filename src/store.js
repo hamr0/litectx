@@ -15,7 +15,7 @@ import { splitIdent } from "./tokenize.js";
  */
 
 /**
- * @typedef {DocRow & { hash: string, mtime: number, size: number }} Upsert
+ * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[] }} Upsert
  */
 
 /**
@@ -41,6 +41,11 @@ const SCHEMA = [
   // size guards the case where an edit lands within one filesystem mtime tick of the last
   // index (mtime unchanged but length moved); `index({ force: true })` covers the rest.
   "CREATE TABLE IF NOT EXISTS file_index(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at INTEGER NOT NULL)",
+  // symbol-level chunks (slice 2): the structural substrate. Recall still gates on `docs`
+  // (file-granularity) — these line-ranged nodes feed block git-blame (slice 4) and edges
+  // (slice 5). `symbol` is nullable (anonymous arrows, preambles); rows are owned by `path`.
+  "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, format TEXT NOT NULL, symbol TEXT, node_type TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, body TEXT NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS nodes_path ON nodes(path)",
 ];
 
 export class Store {
@@ -63,6 +68,7 @@ export class Store {
   reset() {
     this.db.exec("DROP TABLE IF EXISTS docs");
     this.db.exec("DROP TABLE IF EXISTS file_index");
+    this.db.exec("DROP TABLE IF EXISTS nodes");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -95,17 +101,27 @@ export class Store {
         "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at"
     );
     const touchIdx = this.db.prepare("UPDATE file_index SET mtime = @mtime WHERE path = @path");
+    const delNodes = this.db.prepare("DELETE FROM nodes WHERE path = ?");
+    const insNode = this.db.prepare(
+      "INSERT INTO nodes(path, kind, format, symbol, node_type, start_line, end_line, body) " +
+        "VALUES (@path, @kind, @format, @symbol, @node_type, @start_line, @end_line, @body)"
+    );
 
     const tx = this.db.transaction(() => {
       for (const p of deletes) {
         delDoc.run(p);
         delIdx.run(p);
+        delNodes.run(p);
       }
       for (const u of upserts) {
         delDoc.run(u.path); // replace any prior row for this path
+        delNodes.run(u.path);
         const pathTok = splitIdent(u.path).join(" ");
         insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: `${pathTok} ${pathTok}\n${u.body}` });
         upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
+        for (const c of u.nodes ?? []) {
+          insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text });
+        }
       }
       for (const t of touch) touchIdx.run({ path: t.path, mtime: t.mtime });
     });
@@ -115,6 +131,22 @@ export class Store {
   /** @returns {number} number of indexed documents */
   count() {
     return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM docs").get()).n;
+  }
+
+  /** @returns {number} number of symbol/section chunks across all files */
+  nodeCount() {
+    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM nodes").get()).n;
+  }
+
+  /**
+   * Chunks for one file, in id order (insertion order).
+   * @param {string} path
+   * @returns {{ symbol: string|null, node_type: string, start_line: number, end_line: number }[]}
+   */
+  nodesForPath(path) {
+    return /** @type {any} */ (
+      this.db.prepare("SELECT symbol, node_type, start_line, end_line FROM nodes WHERE path = ? ORDER BY id").all(path)
+    );
   }
 
   /**

@@ -39,10 +39,10 @@ function fixtureRepo() {
   return root;
 }
 
-test("first index reports everything as added", () => {
+test("first index reports everything as added", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  const r = ctx.index();
+  const r = await ctx.index();
   assert.deepEqual(
     { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged },
     { files: 3, added: 3, updated: 0, removed: 0, unchanged: 0 }
@@ -51,11 +51,11 @@ test("first index reports everything as added", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("re-index with no changes touches nothing", () => {
+test("re-index with no changes touches nothing", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
-  const r = ctx.index();
+  await ctx.index();
+  const r = await ctx.index();
   assert.equal(r.added, 0);
   assert.equal(r.updated, 0);
   assert.equal(r.removed, 0);
@@ -64,12 +64,12 @@ test("re-index with no changes touches nothing", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a changed file is the only one re-indexed, and recall reflects the new content", () => {
+test("a changed file is the only one re-indexed, and recall reflects the new content", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   write(root, "src/auth.js", "rotate credentials and refresh the session here\n");
-  const r = ctx.index();
+  const r = await ctx.index();
   assert.equal(r.updated, 1);
   assert.equal(r.added, 0);
   assert.equal(r.unchanged, 2);
@@ -81,41 +81,41 @@ test("a changed file is the only one re-indexed, and recall reflects the new con
   rmSync(root, { recursive: true, force: true });
 });
 
-test("identical content with a newer mtime is not re-indexed (content-hash backstop)", () => {
+test("identical content with a newer mtime is not re-indexed (content-hash backstop)", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   bump(join(root, "src/auth.js")); // advance mtime only; bytes unchanged
-  const r = ctx.index();
+  const r = await ctx.index();
   assert.equal(r.updated, 0);
   assert.equal(r.unchanged, 3);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a same-mtime edit that changes length is still caught (size guard)", () => {
+test("a same-mtime edit that changes length is still caught (size guard)", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   const authPath = join(root, "src/auth.js");
   const { atime, mtime } = statSync(authPath); // the exact times the first index will record
-  ctx.index();
+  await ctx.index();
   // edit the content to a different length, then force the mtime back to its original value:
   // mtime now matches the stored value, so only the size guard can catch the change.
   writeFileSync(authPath, "tiny\n");
   utimesSync(authPath, atime, mtime);
-  const r = ctx.index();
+  const r = await ctx.index();
   assert.equal(r.updated, 1);
   assert.equal(r.unchanged, 2);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a removed file is dropped from the index and from recall", () => {
+test("a removed file is dropped from the index and from recall", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   rmSync(join(root, "src/mailer.py"));
-  const r = ctx.index();
+  const r = await ctx.index();
   assert.equal(r.removed, 1);
   assert.equal(r.files, 2);
   assert.ok(ctx.recall("send email", { limit: 5 }).every((h) => h.path !== "src/mailer.py"));
@@ -123,11 +123,11 @@ test("a removed file is dropped from the index and from recall", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("force rebuilds from scratch", () => {
+test("force rebuilds from scratch", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
-  const r = ctx.index({ force: true });
+  await ctx.index();
+  const r = await ctx.index({ force: true });
   assert.equal(r.added, 3);
   assert.equal(r.unchanged, 0);
   assert.equal(r.files, 3);
@@ -135,10 +135,10 @@ test("force rebuilds from scratch", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("hits carry first-class kind and format from the extension", () => {
+test("hits carry first-class kind and format from the extension", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   const code = ctx.recall("auth token validate", { limit: 5 }).find((h) => h.path === "src/auth.js");
   assert.ok(code);
   assert.equal(code.kind, "code");

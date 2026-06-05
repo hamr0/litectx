@@ -21,14 +21,14 @@ function parse(argv) {
   return { cmd, opts };
 }
 
-function main() {
+async function main() {
   const { cmd, opts } = parse(process.argv.slice(2));
 
   if (cmd === "index") {
     const root = opts.words[0] ?? opts.root;
     const ctx = new LiteCtx({ root });
     const t = Date.now();
-    const r = ctx.index({ force: opts.force });
+    const r = await ctx.index({ force: opts.force });
     ctx.close();
     console.error(
       `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
@@ -50,11 +50,11 @@ function main() {
   fail(`unknown command: ${cmd ?? "(none)"}`);
 }
 
+main().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+
 /** @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
   console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--limit <n>]");
   process.exit(1);
 }
-
-main();

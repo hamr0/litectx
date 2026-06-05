@@ -65,8 +65,10 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   reading as "relevant" — the exact gitdone failure mode in the POC.
 - **Other constants:** `decay_factor = 0.5`, `max_days = 90`, `min_penalty = −2.0`,
   `grace_period = 1h` (`decay.py:82–102`).
-- **litectx target:** **slice 4**, keyed off the `kind` column shipped in **slice 1**. Validate
-  type-decay + churn on both repos *before* activation gets weight (POC mandate).
+- **litectx target:** **slice 4**, keyed off **(`kind`, `format`)** (slice-1 columns). ⚠️ aurora's
+  `kb` = *markdown* → litectx `format=md` **0.05**; aurora's `doc` = *pdf/docx* → litectx
+  `format=pdf/docx` **0.02** (deferred). Do **not** collapse md onto `0.02`. Validate type-decay +
+  churn on both repos *before* activation gets weight (POC mandate).
 
 ## 4. Spreading activation — `spreading.py`
 

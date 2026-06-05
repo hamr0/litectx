@@ -19,20 +19,20 @@ function fixtureRepo() {
   return root;
 }
 
-test("indexes files and reports a count", () => {
+test("indexes files and reports a count", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  const { files } = ctx.index();
+  const { files } = await ctx.index();
   assert.equal(files, 3);
   assert.equal(ctx.size(), 3);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 
-test("recall ranks the relevant file first", () => {
+test("recall ranks the relevant file first", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   const hits = ctx.recall("how do we validate the auth token", { limit: 5 });
   assert.ok(hits.length > 0, "expected at least one hit");
   assert.equal(hits[0].path, "src/auth.js");
@@ -40,10 +40,10 @@ test("recall ranks the relevant file first", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("recall matches on intent via the doc body, not just filename", () => {
+test("recall matches on intent via the doc body, not just filename", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   const hits = ctx.recall("sending email notifications", { limit: 5 });
   const paths = hits.map((h) => h.path);
   assert.ok(paths.includes("src/mailer.js") || paths.includes("README.md"), `got ${paths.join(",")}`);
@@ -51,19 +51,19 @@ test("recall matches on intent via the doc body, not just filename", () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a query with no usable terms returns no hits", () => {
+test("a query with no usable terms returns no hits", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
-  ctx.index();
+  await ctx.index();
   assert.deepEqual(ctx.recall("a of to"), []);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 
-test("include filter excludes other extensions", () => {
+test("include filter excludes other extensions", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, include: [".md"], dbPath: ":memory:" });
-  assert.equal(ctx.index().files, 1);
+  assert.equal((await ctx.index()).files, 1);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

@@ -125,3 +125,50 @@ aurora FTS miss (`decay.py`) — confirming lib ≡ harness. Slice 3 (code-aware
 - 1 aurora FTS miss (a tokenization gap the code-aware tokenizer + deps-in-BM25 content of §5 is
   meant to close). Decay/churn and embeddings tiers are **not** implemented here — out of scope
   for the gate.
+
+---
+
+## Slice-2 POC — tree-sitter symbol chunking (2026-06-04)
+
+Harness: `poc/chunk-poc.mjs` (throwaway). Binding under test: **web-tree-sitter (WASM)**
++ prebuilt `tree-sitter-wasms` grammars. Chunker = per-language def-node set (function/
+method/class) + a file "preamble" chunk; bench collapses chunks→best-per-file (targets
+are files) and compares to file-granularity BM25.
+
+**Binding friction (real):** `tree-sitter-wasms@0.1.13` grammars (ABI ~0.20–0.22) do NOT
+load under `web-tree-sitter@0.25+` (dylink model) — `getDylinkMetadata` throw. Had to pin
+runtime to **0.22.6**. Runtime+grammar versions must move in lockstep; the prebuilt-WASM
+story lags native.
+
+**Recall finding (across both repos):**
+- **Chunk-replacement REGRESSES** the file-target bench. For *file*-finding, whole-file
+  BM25 is a strong baseline; sub-file chunks fragment term stats. Confirmed for max-pool
+  (aurora MRR 0.523→0.434), sum-pool (collapses), top3-pool (gitdone 0.416→0.358).
+- **Fused (file BM25 gate + α·best-chunk BM25, min-max normed) ≈ break-even on MRR but
+  lifts P@3 on both repos** (α=0.3): aurora MRR 0.523→0.522, P@3 64%→68%, EASY P@3 82%→91%;
+  gitdone MRR 0.416→0.434, P@3 45%→55%. α=0.6 helps gitdone, dents aurora MRR (0.500).
+
+**Verdict → slice 2 is DUAL-GRAIN, not replacement.** Keep the file-level FTS doc as the
+recall gate (holds baseline exactly); add a `nodes` table of symbol chunks (path, kind,
+format, symbol, line-range, body) as the structural substrate. Chunk-BM25 is NOT where the
+recall jump comes from — the lift the PRD expects rides ON chunks in slices 4–5 (activation
+over line-ranges, edges over symbols). Chunking alone must not swap the BM25 grain.
+
+### Binding validation — native vs WASM (`poc/binding-bench.mjs`)
+
+Assumption going in: native `tree-sitter` would be faster/more robust. **Validated → false
+for our workload.** Chunk extraction is tree-walk-heavy; the native binding marshals a JS
+object per node across the C++ boundary, WASM stays in linear memory.
+
+| axis | native (tree-sitter + grammars) | WASM (web-tree-sitter + tree-sitter-wasms) |
+|---|---|---|
+| parse+walk speed | baseline | **~3× faster** (stable over 2 runs, both repos) |
+| chunk correctness | 6190 / 1814 | **identical** (6190 / 1814) |
+| install | ~40s node-gyp compile | **<1s** prebuilt |
+| deps | 4 native (runtime + 3 grammars), node-gyp | 2 pure (runtime + 1 grammar bundle), no compile |
+| version friction | TS grammar peers `^0.21`, py/js `^0.25` → needs `--legacy-peer-deps` | runtime pinned to **0.22.6** for prebuilt grammars |
+| portability (local-first doctrine) | needs build toolchain | runs anywhere web-tree-sitter runs |
+
+**Decision: WASM** (`web-tree-sitter@0.22.6` + `tree-sitter-wasms`). Faster, identical
+output, leaner/portable, no native compile. Sole cost: pin the runtime to the grammars'
+ABI (0.22.6) — a stable pin, re-evaluated only if we vendor newer-ABI `.wasm` grammars.

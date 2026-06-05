@@ -12,6 +12,7 @@
     "lib": ["es2023"],
     "types": ["node"],
     "skipLibCheck": true,
+    "esModuleInterop": true,
     "strict": false,
     "strictNullChecks": true
   },
