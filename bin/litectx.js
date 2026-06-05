@@ -43,7 +43,7 @@ async function main() {
     const ctx = new LiteCtx({ root: opts.root });
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
     /** @param {import("../src/store.js").Hit} h */
-    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}`);
+    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtGit(h.git)}`);
     if (opts.kind) {
       // one kind → flat ranked list
       ctx.recall(query, { kind: opts.kind, n: opts.n }).forEach(line);
@@ -64,6 +64,24 @@ async function main() {
 }
 
 main().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+
+/**
+ * Render file-level git grounding as a compact trailing column (grounding, never scored — PRD §slice4).
+ * No commit history (non-git tree / tracked-but-uncommitted) → `git: null` → no column.
+ * @param {import("../src/gitsig.js").GitSig | null | undefined} g
+ */
+function fmtGit(g) {
+  if (!g) return "";
+  return `\tgit:${g.commits}c${g.lastCommit ? `/${relAge(g.lastCommit)}` : ""}`;
+}
+
+/** @param {number} sec unix seconds of last commit @returns {string} coarse age (m/h/d) */
+function relAge(sec) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - sec));
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
 
 /** @param {string} msg */
 function fail(msg) {
