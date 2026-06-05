@@ -57,6 +57,21 @@ test("gitsig is grounding only — it never reorders the ranked hits", async () 
   rmSync(root, { recursive: true, force: true });
 });
 
+test("gitsig refreshes on re-index when a new commit lands", async () => {
+  const root = gitRepo(); // a.js already has 2 commits
+  const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+  await ctx.index();
+  const count = () => ctx.recall("function", { kind: "code", n: 10 }).find((h) => h.path === "a.js")?.git?.commits;
+  assert.equal(count(), 2, "starts at 2 commits");
+  writeFileSync(join(root, "a.js"), "export function alpha(){ return 3; }\n");
+  execFileSync("git", ["-C", root, "add", "-A"], { stdio: "pipe" });
+  execFileSync("git", ["-C", root, "commit", "-qm", "third"], { stdio: "pipe" });
+  await ctx.index(); // content changed → file re-indexed → gitsig recomputed
+  assert.equal(count(), 3, "incremental re-index picks up the new commit");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("a tracked-but-uncommitted file has no history → git: null", async () => {
   const root = gitRepo();
   // stage (so `git ls-files` indexes it) but never commit → no history row, honest null.
