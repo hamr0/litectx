@@ -13,6 +13,7 @@ import { Store } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
+import { collectGitSig } from "./gitsig.js";
 import { ftsMatch } from "./tokenize.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
@@ -94,6 +95,13 @@ export class LiteCtx {
     // whole repo — not just the other files that changed this pass.
     const ctx = buildResolveCtx(files);
     for (const u of upserts) u.edges = resolveImports(u.format, u.path, u.imports ?? [], ctx);
+
+    // git activity metadata for the changed files (slice 4) — one `git log` pass, scoped like the
+    // index. Grounding shown on hits, never scored (§4.1). Skipped when nothing changed.
+    if (upserts.length) {
+      const sig = collectGitSig(this.root, opts.paths ?? this.pathspecs);
+      for (const u of upserts) u.git = sig.get(u.path);
+    }
 
     this.store.applyChanges({ upserts, touch, deletes }, Date.now());
 

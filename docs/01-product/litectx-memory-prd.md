@@ -118,7 +118,7 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `indexer` | pass orchestration: collect + incremental diff + dispatch | ✅ | §6 · slices 0–1 |
 | `langdef` | per-language registry (`defTypes` per ext; `call_node_type`/`skip_names`/`.scm` to come with edges) | ✅ (grammar+defTypes) | slice 2 · ledger §11 |
 | `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
-| `gitsig` | file-level `git log` → commit count + recency, attached to hits as **activity metadata** (not scored) | new | slice 4 · ledger §8 |
+| `gitsig` | file-level `git log` (one pass) → commit count + last-commit time, attached to hits as **activity metadata** (not scored) | ✅ | slice 4 · ledger §8 |
 | `edges` | import specifiers → **`imports`** edges (intra-repo) → **1-hop additive spreading** in recall; `calls` edge type reserved for impact (slice 5) | ✅ (imports) | slice 4 · ledger §11/§4 |
 | `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
 | `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
@@ -588,7 +588,7 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
 4. **Edges + spreading (the next ranking win) + git activity metadata** — RESHAPED 2026-06-05
    after the Slice-4 Step-0 POC (`RESULTS.md`; old slice 4 = "ACT-R activation in recall" is
    **dissolved** — base-level activation does not earn v1 ranking weight, see §4/§14 #1).
-   **Imports + spreading ✅ SHIPPED (2026-06-05); `gitsig` remaining.**
+   **✅ SHIPPED (2026-06-05) — imports + spreading + `gitsig`. Slice 4 complete.**
    - **Edges (`imports`) — ✅ SHIPPED.** Import specifiers extracted in the **same tree-sitter parse**
      as the slice-2 chunks (Python `import`/`from` abs+rel, ES `import`, CJS `require()`), resolved
      to **intra-repo** target files only → directed `edges(type, src, dst)` table. The `calls` edge
@@ -603,9 +603,11 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      is now BM25 + additive import-spreading.** *Limit: this signal is at its robust optimum — higher
      weight overfits aurora and sinks multis below baseline; further recall gain is the deferred tiers,
      not graph tuning (see §4).*
-   - **Git activity metadata (`gitsig`) — REMAINING.** File-level `git log` → commit count +
-     last-modified attached to each hit as displayed grounding. **Not a scored term.** Cheap (no
-     per-block blame); independent of edges, lands next.
+   - **Git activity metadata (`gitsig`) — ✅ SHIPPED.** One `git log` pass → per-file commit count +
+     last-commit time on each hit (`git: { commits, lastCommit } | null`), stored in `git_sig`.
+     **Not a scored term** — bench byte-identical. `git: null` honestly marks *no commit history*
+     (non-git tree, or tracked-but-uncommitted). No per-block blame (file granularity; blame +
+     base-level activation are the access-log tier).
 5. **impact view** (reference count → risk bucket; complexity from AST) over the slice-4 edges.
 
 **Deferred to post-v1 tiers (schema-reserved, not v1 slices):**

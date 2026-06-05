@@ -46,7 +46,7 @@ laid underneath it.
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
 | **Import edges** + 1-hop **spreading** recall (BM25 + additive boost, w=0.3) | ✅ shipped (slice 4) |
 | `calls` edges (symbol blast radius) | 🚧 roadmap (slice 5 — impact only; don't help recall) |
-| **Git activity** metadata per hit (commits + recency; grounding, not scored) | 🚧 roadmap (slice 4 — `gitsig`, remaining) |
+| **Git activity** metadata per hit (`git: { commits, lastCommit }`; grounding, not scored) | ✅ shipped (slice 4) |
 | **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slice 5) |
 | Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
 | Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
@@ -68,7 +68,7 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
 const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
-// hits: [{ path, kind, format, score }, ...]  (score: higher = more relevant)
+// hits: [{ path, kind, format, score, git }, ...]  (score: higher = more relevant; git: activity, not scored)
 ctx.close();
 ```
 
@@ -139,10 +139,14 @@ is a no-op for kinds without edges, e.g. `doc`). The return shape follows the `k
 { path: string,    // repo-relative file path
   kind: string,    // "code" | "doc"
   format: string,  // "ts" | "js" | "py" | "md" | ...
-  score: number }  // higher = more relevant (negated BM25)
+  score: number,   // higher = more relevant (BM25 + additive import-spreading)
+  git: { commits: number, lastCommit: number|null } | null }  // activity metadata; null = no history
 ```
+> `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
+> from one `git log` pass at index time. It never affects ranking; `null` means no commit history
+> (a non-git tree, or a tracked-but-uncommitted file).
 > 🚧 The richer roadmap shape (`{ id, lines, signals: { bm25, activation, ... } }`)
-> is not shipped yet. Today a hit is the four fields above.
+> is not shipped yet. Today a hit is the five fields above.
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).

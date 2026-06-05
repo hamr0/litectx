@@ -15,8 +15,9 @@ import { indexBody } from "./tokenize.js";
  */
 
 /**
- * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[] }} Upsert
- * `imports` are raw specifiers from the chunker; `edges` are those resolved to intra-repo dst paths (edges.js).
+ * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig }} Upsert
+ * `imports` are raw specifiers from the chunker; `edges` are those resolved to intra-repo dst paths
+ * (edges.js); `git` is file-level activity metadata (gitsig.js).
  */
 
 /**
@@ -32,6 +33,7 @@ import { indexBody } from "./tokenize.js";
  * @property {string} kind
  * @property {string} format
  * @property {number} score   higher = more relevant
+ * @property {import("./gitsig.js").GitSig | null} [git]  file-level git activity (grounding, not scored)
  */
 
 const SCHEMA = [
@@ -55,6 +57,9 @@ const SCHEMA = [
   "CREATE TABLE IF NOT EXISTS edges(id INTEGER PRIMARY KEY, type TEXT NOT NULL, src_path TEXT NOT NULL, dst_path TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS edges_src ON edges(type, src_path)",
   "CREATE INDEX IF NOT EXISTS edges_dst ON edges(type, dst_path)",
+  // file-level git activity (slice 4): commit count + last-commit time, attached to hits as
+  // displayed grounding — NOT scored (§4.1). 1:1 with `path`, refreshed when a file is re-indexed.
+  "CREATE TABLE IF NOT EXISTS git_sig(path TEXT PRIMARY KEY, commits INTEGER NOT NULL, last_commit INTEGER)",
 ];
 
 export class Store {
@@ -79,6 +84,7 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS file_index");
     this.db.exec("DROP TABLE IF EXISTS nodes");
     this.db.exec("DROP TABLE IF EXISTS edges");
+    this.db.exec("DROP TABLE IF EXISTS git_sig");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -121,6 +127,11 @@ export class Store {
     const delEdgesOf = this.db.prepare("DELETE FROM edges WHERE src_path = ? OR dst_path = ?");
     const delEdgesSrc = this.db.prepare("DELETE FROM edges WHERE type = 'import' AND src_path = ?");
     const insEdge = this.db.prepare("INSERT INTO edges(type, src_path, dst_path) VALUES ('import', @src, @dst)");
+    const delGit = this.db.prepare("DELETE FROM git_sig WHERE path = ?");
+    const upGit = this.db.prepare(
+      "INSERT INTO git_sig(path, commits, last_commit) VALUES (@path, @commits, @last) " +
+        "ON CONFLICT(path) DO UPDATE SET commits = excluded.commits, last_commit = excluded.last_commit"
+    );
 
     const tx = this.db.transaction(() => {
       for (const p of deletes) {
@@ -128,6 +139,7 @@ export class Store {
         delIdx.run(p);
         delNodes.run(p);
         delEdgesOf.run(p, p);
+        delGit.run(p);
       }
       for (const u of upserts) {
         delDoc.run(u.path); // replace any prior row for this path
@@ -143,6 +155,10 @@ export class Store {
           insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text });
         }
         for (const dst of u.edges ?? []) insEdge.run({ src: u.path, dst });
+        // git activity grounding (gitsig.js). Store a row only when the file has commit history;
+        // no history (non-git tree, or a tracked-but-uncommitted file) → no row → recall `git: null`.
+        if (u.git) upGit.run({ path: u.path, commits: u.git.commits, last: u.git.lastCommit });
+        else delGit.run(u.path);
       }
       for (const t of touch) touchIdx.run({ path: t.path, mtime: t.mtime });
     });
@@ -198,7 +214,7 @@ export class Store {
         .prepare("SELECT path, kind, format, -bm25(docs) AS score FROM docs WHERE docs MATCH ? AND kind = ? ORDER BY score DESC LIMIT ?")
         .all(match, kind, pool)
     );
-    if (spreadWeight <= 0 || rows.length < 2) return rows.slice(0, limit);
+    if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(rows.slice(0, limit));
 
     // min–max normalise BM25 across the pool so it composes with the [0,1] spread term.
     const scores = rows.map((r) => r.score);
@@ -234,7 +250,25 @@ export class Store {
       return { ...r, score: (norm.get(r.path) ?? 0) + w * spread }; // additive boost, never a tax
     });
     blended.sort((a, b) => b.score - a.score);
-    return blended.slice(0, limit);
+    return this.attachGit(blended.slice(0, limit));
+  }
+
+  /**
+   * Attach file-level git activity metadata (gitsig) to a result set, in place. One lookup for the
+   * whole set; a path with no stored row gets `git: null` (uncommitted / no git). Grounding only —
+   * never reorders the hits.
+   * @param {Hit[]} hits
+   * @returns {Hit[]}
+   */
+  attachGit(hits) {
+    if (!hits.length) return hits;
+    const ph = hits.map(() => "?").join(",");
+    const rows = /** @type {{ path: string, commits: number, last_commit: number|null }[]} */ (
+      this.db.prepare(`SELECT path, commits, last_commit FROM git_sig WHERE path IN (${ph})`).all(...hits.map((h) => h.path))
+    );
+    const m = new Map(rows.map((r) => [r.path, { commits: r.commits, lastCommit: r.last_commit }]));
+    for (const h of hits) h.git = m.get(h.path) ?? null;
+    return hits;
   }
 
   /** @returns {number} number of import edges (slice 4 — for tests/introspection) */
