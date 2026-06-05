@@ -14,6 +14,7 @@ import { collectFiles, diffFiles } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
 import { collectGitSig } from "./gitsig.js";
+import { computeImpact } from "./impact.js";
 import { ftsMatch } from "./tokenize.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
@@ -152,6 +153,20 @@ export class LiteCtx {
     const grouped = {};
     for (const k of kinds) grouped[k] = match ? this.store.search(match, k, n, SPREAD_WEIGHT) : [];
     return grouped;
+  }
+
+  /**
+   * The **impact** view (§7): for a symbol, its blast radius and change-risk bucket. Computed on
+   * demand — callees via a tree-sitter walk of the symbol's body, callers via an `rg -w` sweep
+   * confirmed with tree-sitter; no LSP. Built around the §7.2 asymmetry (over-count safe,
+   * under-count dangerous): connectivity may be overstated, but "isolated / low-risk" only ever
+   * ships **hedged**. Returns `null` when the symbol isn't defined in the index.
+   *
+   * @param {string} symbol  the symbol name to assess
+   * @returns {Promise<import("./impact.js").Impact | null>}
+   */
+  async impact(symbol) {
+    return computeImpact(this.store, this.root, this.include, symbol);
   }
 
   /** @returns {number} indexed document count */

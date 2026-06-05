@@ -187,6 +187,30 @@ export class Store {
   }
 
   /**
+   * Every node defining symbol `name` (over-count: a name defined in N files returns N rows). The
+   * def's `body` powers callee/complexity analysis (impact, slice 5); `format` routes the parser.
+   * @param {string} name
+   * @returns {{ path: string, format: string, start_line: number, end_line: number, body: string }[]}
+   */
+  symbolDefs(name) {
+    return /** @type {any} */ (
+      this.db.prepare("SELECT path, format, start_line, end_line, body FROM nodes WHERE symbol = ? ORDER BY path, start_line").all(name)
+    );
+  }
+
+  /**
+   * The set of all symbol names defined anywhere in the index — used to resolve a call's callee to
+   * an intra-repo definition (a callee not in this set is external: stdlib/3rd-party, dropped).
+   * @returns {Set<string>}
+   */
+  allSymbolNames() {
+    const rows = /** @type {{ symbol: string }[]} */ (
+      this.db.prepare("SELECT DISTINCT symbol FROM nodes WHERE symbol IS NOT NULL").all()
+    );
+    return new Set(rows.map((r) => r.symbol));
+  }
+
+  /**
    * Ranked search over the FTS index, scoped to a single kind. Kinds never share a ranking
    * (§5) — the caller runs one `search` per kind and keeps the lists separate, so high-volume
    * prose can never out-rank code. The `kind = ?` filter rides the UNINDEXED `kind` column.

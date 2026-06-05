@@ -4,6 +4,7 @@
 //
 //   litectx index [root] [--force]
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]
+//   litectx impact <symbol> [--root <dir>]
 
 import { LiteCtx, KINDS } from "../src/index.js";
 
@@ -60,6 +61,26 @@ async function main() {
     return;
   }
 
+  if (cmd === "impact") {
+    const symbol = opts.words[0];
+    if (!symbol) fail("impact needs a symbol name");
+    const ctx = new LiteCtx({ root: opts.root });
+    if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
+    const r = await ctx.impact(symbol);
+    ctx.close();
+    if (!r) {
+      console.error(`litectx: '${symbol}' is not defined in the index`);
+      process.exit(1);
+    }
+    console.log(`${r.symbol}\trisk:${r.risk}\trefs:${r.refCount} (confirmed ${r.confirmed} / mentions ${r.mentions})\tcomplexity:${r.complexity}`);
+    for (const d of r.defs) console.log(`  def\t${d.path}:${d.startLine + 1}`);
+    if (r.callees.length) console.log(`  calls\t${r.callees.join(", ")}`);
+    for (const c of r.callers.slice(0, opts.n ?? 15)) console.log(`  called-by\t${c.path}:${c.line + 1}${c.symbol ? `\t(${c.symbol})` : ""}`);
+    if (r.callers.length > (opts.n ?? 15)) console.log(`  …\t${r.callers.length - (opts.n ?? 15)} more callers`);
+    for (const h of r.hedges) console.log(`  ⚠ ${h}`);
+    return;
+  }
+
   fail(`unknown command: ${cmd ?? "(none)"}`);
 }
 
@@ -86,6 +107,6 @@ function relAge(sec) {
 /** @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
-  console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]");
+  console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>] | litectx impact <symbol> [--root <dir>]");
   process.exit(1);
 }

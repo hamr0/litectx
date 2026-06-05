@@ -116,14 +116,14 @@ a slice adds a capability over time; the modules below are the code units it lan
 |---|---|---|---|
 | `store` | SQLite/FTS5, pragmas, all SQL, tables, `getNode`/`related` | ✅ | §9 · ledger §12 |
 | `indexer` | pass orchestration: collect + incremental diff + dispatch | ✅ | §6 · slices 0–1 |
-| `langdef` | per-language registry (`defTypes` per ext; `call_node_type`/`skip_names`/`.scm` to come with edges) | ✅ (grammar+defTypes) | slice 2 · ledger §11 |
+| `langdef` | per-language registry (`defTypes`/`importTypes`/`callTypes`/`branchTypes` per ext) | ✅ | slice 2/4/5 · ledger §11 |
 | `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
 | `gitsig` | file-level `git log` (one pass) → commit count + last-commit time, attached to hits as **activity metadata** (not scored) | ✅ | slice 4 · ledger §8 |
-| `edges` | import specifiers → **`imports`** edges (intra-repo) → **1-hop additive spreading** in recall; `calls` edge type reserved for impact (slice 5) | ✅ (imports) | slice 4 · ledger §11/§4 |
+| `edges` | import specifiers → **`imports`** edges (intra-repo) → **1-hop additive spreading** in recall; `calls` relationships computed on-demand by `impact` (not persisted, §7.1 — `type='call'` row stays reserved) | ✅ (imports) | slice 4 · ledger §11/§4 |
 | `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
 | `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
 | `recall` | **kind-scoped** FTS gate → per-kind BM25 **+ additive import-spreading** (+semantic w/ embeddings tier) | ✅ (kind-scoped + spreading) | slice 3–4 · ledger §7 |
-| `impact` | refs/files → risk bucket + complexity | new | slice 5 · ledger §9 |
+| `impact` | `impact(symbol)`: callees (ts walk) + callers (`rg -w`→ts confirm) → risk bucket `max(confirmed,mentions)` + complexity, on-demand; §7.2 hedges | ✅ (5a; alias/barrel mitigations → 5b) | slice 5 · ledger §9 |
 | `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
 
@@ -371,6 +371,16 @@ Grounding: `MEM_INDEXING.md`.
 
 ## 7. Edges & the impact view — ripgrep only, no LSP (DECIDED)
 
+> **Status (slice 5a, shipped):** `impact(symbol)` is built and tested — callees via a tree-sitter
+> walk of the symbol body, callers via `rg -w` confirmed with tree-sitter, risk = `max(confirmed,
+> mentions)` bucketed at the aurora thresholds (≤2/3–10/11+), plus complexity and the §7.2 hedges.
+> **Computed on demand, not persisted** (§7.1's mechanisms are query-time; the `type='call'` edge
+> row stays reserved for a future persist-if-slow optimization). The §7.2 **alias / barrel**
+> anti-false-isolation mitigations are deferred to **slice 5b**, gated on adding a TS bench fixture
+> (POC-first) — the export-root, reflection (unconfirmed-mention) and underscore/public hedges and
+> the universal *unresolved ≠ absent* net ship now. Validated on aurora: hubs bucket `high` with
+> correct fan-in (`SQLiteStore` 235 refs/109 callers, `BaseLevelActivation` 47/36), ~0.1–0.9s/symbol.
+
 The decision is final: **there is no language-server tier.** The one and only edge resolver =
 **tree-sitter queries + `ripgrep -w`** (word-boundary). Zero external binaries; ~2ms/symbol;
 deterministic. (AURORA measured LSP ~300ms/symbol and itself fell back to `rg -w`; in Node there is
@@ -615,7 +625,14 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      **Not a scored term** — bench byte-identical. `git: null` honestly marks *no commit history*
      (non-git tree, or tracked-but-uncommitted). No per-block blame (file granularity; blame +
      base-level activation are the access-log tier).
-5. **impact view** (reference count → risk bucket; complexity from AST) over the slice-4 edges.
+5. **impact view** (reference count → risk bucket; complexity from AST).
+   - **Slice 5a — ✅ SHIPPED (2026-06-05).** `impact(symbol)` on demand: callees (ts walk of the
+     body) + callers (`rg -w` → ts-confirm, with enclosing symbol) → `risk = bucket(max(confirmed,
+     mentions))` at aurora thresholds ≤2/3–10/11+, plus complexity and the §7.2 hedges. Calls
+     computed on-demand, not persisted (§7.1). `langdef` gains `callTypes`/`branchTypes`. 9 tests +
+     a mutation check (under-count kills the §7.2 tests). Recall bench byte-identical.
+   - **Slice 5b — ⏸ NEXT (gated on #1).** The §7.2 **alias / barrel** false-isolation mitigations,
+     plus the **impact bench gate** that proves them. Sequencing in §11.3.
 
 **Deferred to post-v1 tiers (schema-reserved, not v1 slices):**
 - **Embeddings / semantic tier** (§8) — opt-in; adds semantic as the third ranking signal
@@ -628,6 +645,42 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
 **Impact-view timing:** sequenced *after* recall because it depends on accurate edges
 (slice 4). If edges slip, recall ships as v1 and impact lands v1.1 — the graph substrate
 makes that a clean cut, not a rework.
+
+### 11.3 End-to-end validation — one labeled bench per view (DECIDED)
+
+The "Behavior" gate (§11.1) is the system's **end-to-end test**: index a *real, stable repo* (a
+frozen external checkout, never a toy fixture) through the real `LiteCtx`, run labeled inputs
+through the real public API, and score the user-facing output against hand-authored ground truth.
+`poc/bench-lib.mjs` is the working template — for **recall** it indexes aurora/gitdone, runs each
+labeled `{ q, target }` query through `recall()`, and reports **MRR / P@k** (where the truth file
+ranked). The hold-or-beat rule makes it a regression gate.
+
+As litectx grows past recall (impact now; write/select/compress/isolate, activation, embeddings
+later — the views are all over **one** graph), **each view gets its own labeled bench gate with a
+view-appropriate metric.** Same machine, different labels:
+
+| View | Corpus (stable repos) | Labels | Metric | Status |
+|---|---|---|---|---|
+| **recall** | aurora (Py), gitdone (JS) | `{ q → target file }` | **MRR / P@k**, hold-or-beat | ✅ shipped |
+| **impact** | **aurora (Py) + mcprune (JS)** | `{ symbol → known callers; isolated? }` | **caller-recall (miss-rate)** — must be ~100%; over-count tolerated (§7.2) | 🚧 **next** — validates 5a (no TS dependency) |
+| **impact (TS false-isolation)** | TS fixture (#1) | symbol reached *only* via alias/barrel → `isolated:false` | asserts impact does **not** report isolated | 🚧 5b (needs #1) |
+| write/compress/select/… | tbd | tbd | tbd | post-v1 |
+
+**The impact metric is not MRR — it is dictated by the §7.2 asymmetry.** Recall's risk is a *miss
+buries an answer* (ranking quality → MRR). Impact's risk is a *miss is a false "isolated → safe"
+that breaks hidden consumers*, so the gate's headline number is **caller-recall = found ÷ known**,
+which must approach 100%; precision (over-count) is deliberately *not* gated hard. A naïve accuracy
+metric would pass an impact view that silently drops callers — the one failure §7.2 exists to stop.
+
+Corpus choice: **aurora + mcprune** are externally-owned and effectively **archived** (frozen), so
+their call graph is a stable oracle that won't drift under the gate. Two languages (Py + JS) catch
+language-specific resolution bugs. TS isolation hazards (alias/barrel) need the dedicated TS fixture
+(#1) — neither aurora nor mcprune is TS — which is exactly why that gate is sequenced into 5b.
+
+Beyond per-view gates, **a composing scenario test** (index once → recall → `impact` on a recalled
+symbol → … ) is the proof that the views share one coherent graph rather than re-extracting — the
+"validate the whole memory end-to-end" test as the surface completes. At least one bench gate should
+graduate from human-read to an **asserted threshold** so quality regressions fail CI, not just print.
 
 ---
 

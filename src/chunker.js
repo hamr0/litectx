@@ -9,9 +9,9 @@
 // tree-sitter was ~3x SLOWER for this walk-heavy workload, identical output (POC: binding-bench).
 
 import { fileURLToPath } from "node:url";
+import { LANGDEFS, langForExt } from "./langdef.js";
 import { dirname, join, extname } from "node:path";
 import Parser from "web-tree-sitter";
-import { langForExt } from "./langdef.js";
 
 const GRAMMAR_DIR = join(dirname(fileURLToPath(import.meta.url)), "grammars");
 
@@ -230,4 +230,104 @@ export async function chunkAndImports(path, body) {
  */
 export async function chunkFile(path, body) {
   return (await chunkAndImports(path, body)).chunks;
+}
+
+// ---- impact view (slice 5) primitives — all tree-sitter, no rg here (§7.1) ----
+
+// The called NAME from a call node's `function` field: a bare identifier, or the rightmost
+// member/attribute of `a.b.c()` → "c". Member/attribute calls resolve by method NAME only (no
+// receiver typing — that is the LSP we deliberately don't have), which over-counts safely (§7.2).
+function calleeName(fnNode) {
+  if (!fnNode) return null;
+  switch (fnNode.type) {
+    case "identifier":
+    case "property_identifier":
+      return fnNode.text;
+    case "attribute": { // python  obj.method
+      const a = fnNode.childForFieldName("attribute");
+      return a ? a.text : null;
+    }
+    case "member_expression": { // js/ts  obj.method
+      const p = fnNode.childForFieldName("property");
+      return p ? p.text : null;
+    }
+    default:
+      return null;
+  }
+}
+
+// nearest enclosing def-node name for a call site (its caller symbol), or null at module top level.
+function enclosingDef(node, defTypes) {
+  for (let p = node.parent; p; p = p.parent) {
+    if (defTypes.has(p.type)) {
+      const n = p.childForFieldName("name");
+      return n ? n.text : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Analyse one symbol's body: the names it CALLS (callees, by name) and its cyclomatic-ish
+ * complexity (1 + decision-point count). Tree-sitter only; parse failure → empty/zero (never
+ * throws — impact is a hedged view, not a hard dependency). Callees are raw names; the caller
+ * resolves them against the indexed symbol set.
+ * @param {string} format  "py" | "js" | "ts"
+ * @param {string} body    the symbol's source text
+ * @returns {Promise<{ calls: string[], complexity: number }>}
+ */
+export async function analyzeBody(format, body) {
+  const lang = LANGDEFS[format];
+  if (!lang) return { calls: [], complexity: 0 };
+  let tree;
+  try {
+    tree = (await parserFor(lang)).parse(body);
+  } catch {
+    return { calls: [], complexity: 0 };
+  }
+  const callT = new Set(lang.callTypes);
+  const branchT = new Set(lang.branchTypes);
+  /** @type {string[]} */
+  const calls = [];
+  let complexity = 1; // the single base path through the symbol
+  (function walk(n) {
+    if (callT.has(n.type)) {
+      const nm = calleeName(n.childForFieldName("function"));
+      if (nm) calls.push(nm);
+    }
+    if (branchT.has(n.type)) complexity++;
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
+  })(tree.rootNode);
+  return { calls, complexity };
+}
+
+/**
+ * Confirmed call sites of `name` in a file body: every place `name` is actually CALLED (not merely
+ * mentioned in a comment/string), with the enclosing caller symbol. This is the tree-sitter
+ * "confirm" step that turns an `rg -w` candidate into a real caller (§7.1 called-by).
+ * @param {string} format  "py" | "js" | "ts"
+ * @param {string} body    file contents
+ * @param {string} name    callee name to confirm
+ * @returns {Promise<{ line: number, enclosing: string|null }[]>}  line is 0-based
+ */
+export async function callSitesOf(format, body, name) {
+  const lang = LANGDEFS[format];
+  if (!lang) return [];
+  let tree;
+  try {
+    tree = (await parserFor(lang)).parse(body);
+  } catch {
+    return [];
+  }
+  const callT = new Set(lang.callTypes);
+  const defT = new Set(lang.defTypes);
+  /** @type {{ line: number, enclosing: string|null }[]} */
+  const out = [];
+  (function walk(n) {
+    if (callT.has(n.type) && calleeName(n.childForFieldName("function")) === name) {
+      out.push({ line: n.startPosition.row, enclosing: enclosingDef(n, defT) });
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
+  })(tree.rootNode);
+  return out;
 }

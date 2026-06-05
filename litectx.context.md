@@ -45,9 +45,11 @@ laid underneath it.
 | Symbol-level `nodes` substrate (tree-sitter: TS/JS/Python + md sections) | ✅ shipped (slice 2) |
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
 | **Import edges** + 1-hop **spreading** recall (BM25 + additive boost, w=0.3) | ✅ shipped (slice 4) |
-| `calls` edges (symbol blast radius) | 🚧 roadmap (slice 5 — impact only; don't help recall) |
 | **Git activity** metadata per hit (`git: { commits, lastCommit }`; grounding, not scored) | ✅ shipped (slice 4) |
-| **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slice 5) |
+| **impact** view (`impact(symbol)`: called-by/calling → risk bucket + complexity, on-demand) | ✅ shipped (slice 5a) |
+| `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
+| Anti-false-isolation for TS aliases / barrels (§7.2) | 🚧 roadmap (slice 5b — gated on a TS bench fixture) |
+| `getNode` / `related` graph accessors | 🚧 roadmap |
 | Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
 | Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
 
@@ -149,6 +151,40 @@ is a no-op for kinds without edges, e.g. `doc`). The return shape follows the `k
 > (a non-git tree, or a tracked-but-uncommitted file).
 > 🚧 The richer roadmap shape (`{ id, lines, signals: { bm25, activation, ... } }`)
 > is not shipped yet. Today a hit is the five fields above.
+
+### `await ctx.impact(symbol)` → `Promise<Impact | null>`
+The **impact** view (§7): *if I change this symbol, what's the blast radius and how risky?*
+**Computed on demand, not persisted** — callees by a tree-sitter walk of the symbol's body,
+callers by an `rg -w` sweep confirmed with tree-sitter. No LSP, ever. Returns `null` when the
+symbol isn't defined in the index (impact answers for *your* symbols). Async (it shells `rg`).
+
+```ts
+Impact = {
+  symbol: string,
+  defs: { path: string, startLine: number, endLine: number }[],  // every definition (over-count: all)
+  refCount: number,     // max(confirmed, mentions) — the over-count-safe blast radius
+  confirmed: number,    // tree-sitter-confirmed external call sites
+  mentions: number,     // external `rg -w` word occurrences (the safety floor)
+  risk: "low" | "medium" | "high",   // bucket on refCount: ≤2 / 3–10 / 11+
+  complexity: number,   // cyclomatic-ish decision-point count (max over defs)
+  callers: { path: string, line: number, symbol: string | null }[],  // confirmed call sites
+  callees: string[],    // intra-repo names this symbol calls (externals dropped)
+  hedges: string[],     // §7.2 safety caveats — see below
+}
+```
+
+**The safety model (§7.2) is the whole point.** Over-count is safe (over-cautious); under-count is
+dangerous (a false "isolated → safe" breaks hidden consumers). So:
+- `refCount` is `max(confirmed, mentions)` — the **looser** signal wins, never the smaller one.
+  Resolution is by **name only** (no receiver typing — that's the LSP we don't have), so a common
+  method name reads as higher-risk. That is intended: cautious, not precise (calibration borrowed
+  from aurora's `lsp_tool`, thresholds ≤2/3–10/11+).
+- **"isolated / low-risk" is never silent.** When `refCount` is 0 or all mentions are unconfirmed,
+  `hedges` explains why — an unconfirmed mention is *counted, not dropped* ("unresolved ≠ absent"),
+  and an exported/public name is flagged for invisible external consumers. A clean isolation verdict
+  is never returned; it's always a hedged *review candidate*.
+- TS path-alias / barrel re-export false-isolation is **not yet mitigated** (slice 5b, gated on a TS
+  bench fixture) — until then, treat isolation claims in alias/barrel-heavy TS as advisory.
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).

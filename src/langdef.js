@@ -13,6 +13,8 @@
  * @property {string[]} defTypes     tree-sitter node types that become symbol chunks
  * @property {string[]} importTypes  tree-sitter node types that carry an import specifier (slice 4)
  * @property {boolean} [requireCalls] also treat `require("…")` call-expressions as imports (CJS)
+ * @property {string[]} callTypes    tree-sitter node types that are a call site (impact, slice 5)
+ * @property {string[]} branchTypes  node types counted as decision points for cyclomatic-ish complexity (slice 5)
  */
 
 /** @type {Record<string, LangDef>} */
@@ -22,6 +24,8 @@ export const LANGDEFS = {
     grammar: "tree-sitter-python.wasm",
     defTypes: ["function_definition", "class_definition"],
     importTypes: ["import_statement", "import_from_statement"],
+    callTypes: ["call"],
+    branchTypes: ["if_statement", "elif_clause", "for_statement", "while_statement", "except_clause", "conditional_expression", "boolean_operator", "case_clause", "assert_statement"],
   },
   js: {
     format: "js",
@@ -29,6 +33,8 @@ export const LANGDEFS = {
     defTypes: ["function_declaration", "method_definition", "class_declaration", "arrow_function", "function_expression"],
     importTypes: ["import_statement"],
     requireCalls: true,
+    callTypes: ["call_expression"],
+    branchTypes: ["if_statement", "for_statement", "for_in_statement", "while_statement", "do_statement", "switch_case", "catch_clause", "ternary_expression"],
   },
   ts: {
     format: "ts",
@@ -36,6 +42,8 @@ export const LANGDEFS = {
     defTypes: ["function_declaration", "method_definition", "class_declaration", "arrow_function", "function_expression", "interface_declaration", "type_alias_declaration"],
     importTypes: ["import_statement"],
     requireCalls: true,
+    callTypes: ["call_expression"],
+    branchTypes: ["if_statement", "for_statement", "for_in_statement", "while_statement", "do_statement", "switch_case", "catch_clause", "ternary_expression"],
   },
 };
 
