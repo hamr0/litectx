@@ -229,6 +229,13 @@ Design rules (DECIDED):
 >   A repo-dependent prior is the one thing recall must not ship. **So base-level activation is
 >   deferred to the access-log future** — litectx's long-running-memory differentiator — and
 >   validated *then*, on real usage. The `activations` table is schema-reserved for it.
+>   - **An access is a *retrieval that was used*, NOT a mere appearance in results.** The access-log
+>     boost (a "this surfaced before, lift it" term) records when a hit is actually retrieved/acted
+>     on — that is the genuine relevance signal base-level activation rewards. Boosting *appearance*
+>     alone would be a degenerate feedback loop (rich-get-richer: it amplifies the current ranking,
+>     not relevance) and is explicitly **not** the design. This is also why git ≠ access: git is
+>     *edit* frequency (commits), the access log is *use* frequency — aurora's card shows them as two
+>     separate counts ("accessed 7x, 7 commits").
 > - **Git is not a scored signal; it is passive activity metadata** (commit count + last-modified,
 >   shown alongside hits as grounding). This re-derives aurora's own design: aurora never scored git
 >   directly — git *seeded* activation and was *displayed raw*; its scored activation rode a real

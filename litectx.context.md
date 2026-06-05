@@ -58,7 +58,9 @@ laid underneath it.
 > the deferred semantic/access-log tiers, not more graph tuning. `calls` edges are NOT used for
 > recall (they don't help; Step-0 POC) — they're reserved for the impact view. Base-level (git-seeded)
 > activation was tested and **does not earn ranking weight without a real access log**
-> (POC: repo-dependent) — so git activity ships as *grounding metadata*, not a score.
+> (POC: repo-dependent) — so git activity ships as *grounding metadata*, not a score. (The future
+> access-log tier boosts what you actually *retrieve and use* — an "access" — which is distinct
+> from git *edits* and from merely *appearing* in results; the latter would be degenerate feedback.)
 
 ## Minimal usage
 
