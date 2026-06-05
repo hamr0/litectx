@@ -352,35 +352,77 @@ Grounding: `MEM_INDEXING.md`.
 
 ## 7. Edges & the impact view — ripgrep only, no LSP (DECIDED)
 
-The decision is final: **there is no language-server tier.** Grounding: `LSP.md`,
-`MEM_INDEXING.md §Adding a Language`.
+The decision is final: **there is no language-server tier.** The one and only edge resolver =
+**tree-sitter queries + `ripgrep -w`** (word-boundary). Zero external binaries; ~2ms/symbol;
+deterministic. (AURORA measured LSP ~300ms/symbol and itself fell back to `rg -w`; in Node there is
+no multilspy and hand-driving servers over `vscode-jsonrpc` is fragile — rejected.) Grounding:
+`LSP.md`, ledger §11. Accuracy comes from the **language definition** (`function_def_types`,
+`call_node_type`, `skip_names`, entry/callback lists), not a server — that is the knowledge that
+makes ripgrep edges accurate. Per-language config is the bulk of "adding a language" (~1–2 days/lang).
 
-- **The one and only edge resolver = tree-sitter queries + `ripgrep -w`** (word-boundary).
-  Zero external binaries; ~2ms/symbol; deterministic. (AURORA measured LSP ~300ms/symbol
-  and itself fell back to `rg -w`; in Node there is no multilspy and hand-driving servers
-  over `vscode-jsonrpc` is fragile — explicitly rejected.)
-- **Accuracy comes from the language definition, not a server.** Per language we author the
-  tree-sitter query set + edge-semantics config (`function_def_types`, `call_node_type`,
-  `skip_names`, framework-callback names so `bot.on('msg', handler)` isn't seen as dead).
-  This is the knowledge that makes ripgrep edges accurate; the goal is the **best-possible
-  blast radius via lang def.**
-- **Two edge types, both required (ledger §11):** `calls` (symbol→symbol) powers called-by /
-  calling + the symbol blast radius; `imports` (file→file, from tree-sitter import nodes) powers
-  file connectivity (aurora's `get_imported_by`). Shipping only `calls` misses file-level impact.
-- **Dead-code is a free *candidate* signal, never a verdict:** once both edge types exist,
-  `0 callers ∧ 0 importers` is inverse impact — surfaced as a **review candidate, not "safe to
-  delete"** (aurora fast mode ~85%; over-count bias errs toward false negatives, the safe
-  direction; exports / entry-points / framework callbacks are roots). Ledger §11.
-- **Adequacy for the goal:** `impact` outputs a **risk bucket** (0–2 low / 3–10 med / 11+
-  high). Ripgrep *over*-counts (comments/strings) → errs toward caution, which is fine for
-  bucketing. (Precise import-vs-usage separation — an LSP-only capability — is a NON-GOAL,
-  §13.)
+### 7.1 The carve-out — what litectx answers vs. what only an LSP can (DECIDED)
 
-**Two distinct signals — do not conflate:**
-- **complexity** = cyclomatic-ish AST branch count *inside* a chunk (local property).
-- **risk/impact** = *reference count* from the call graph (blast radius).
+litectx replaces the *questions you'd ask* an LSP, not the LSP. It is near-perfect at **detecting**
+syntax (tree-sitter) and deliberately **imprecise at resolving bindings** (over-count by design).
 
-Per-language edge config is the bulk of "adding a language" — budget ~1–2 days/language.
+| Capability | In/Out | How | **Detect** | **Resolve** | Failure bias |
+|---|---|---|---|---|---|
+| **calling** (callees) | ✅ in | tree-sitter walk of def body (no rg) | ~99% | ~95% by-name | over (local; nothing to resolve) |
+| **called-by** (callers) | ✅ in | `rg -F -w --json` sweep → ts confirm call site | ~90% | ~80% | **over-count** (superset) |
+| **imports / connected files** | ✅ in | ts import nodes → module→file heuristics | ~98% | ~75–90% | under/mis-attrib (see 7.2) |
+| **refs → risk bucket** | ✅ in | confirmed candidates → counts → risk thresholds (ledger §9) | — | inherits | over → higher risk |
+| **complexity** | ✅ in | ts branch-node count in the chunk | ~99% | n/a | none |
+| **dead-code** | ✅* candidate | inverse impact (0 callers ∧ 0 importers) | — | inherits | false-neg (safe) — *never a verdict* |
+| `get_definition` / `hover` | ⛔ out | editor nav, not litectx | | | |
+| `lint` / diagnostics | ⛔ out | linters exist | | | |
+| precise import-vs-usage binding | ⛔ **non-goal** | over-count by design (§13) | | | |
+
+*The one measured anchor is aurora's ripgrep dead-code mode at ~85% ("daily dev / CI, NOT before
+deleting"). The rest are mechanism estimates anchored to it; litectx's own numbers get measured on
+the bench when slices 4–5 land. **Detection is near-perfect everywhere; the gap is resolution, and
+it is biased to over-count.***
+
+### 7.2 The safety contract — over-count is safe, under-count is dangerous (DECIDED, GOVERNING)
+
+The two error directions are **not** equally bad, and the whole impact view is built around the
+asymmetry:
+
+- **Over-count** (looks *more* connected / *higher* risk) → AI is over-cautious → wasteful, never
+  harmful. **75%-accurate counts are fine.**
+- **Under-count** (looks *more isolated* / *lower* risk) → AI concludes "siloed, safe to change" →
+  **breaks hidden consumers. This is the damaging error.**
+
+**Invariant: litectx may overstate connectivity freely, but must never understate it silently.**
+"It's connected / risky" is a normal claim; **"it's isolated / unused / low-risk" is a load-bearing
+safety claim** and only ships hedged, after the anti-false-isolation mitigations below.
+
+Every dangerous failure mode is an under-count. Sorted by *danger × incidence × testability* (the
+gate repos — aurora Py / gitdone JS — exercise only reflection: 23/497 `getattr`, 7/103 dynamic
+`require`; **zero** aliases/barrels/TS):
+
+| Under-count mode | Mitigation | v1 status |
+|---|---|---|
+| Framework callbacks / entry points | carry aurora's `entry_*`/`callback` lists as **roots** | ✅ build (exercised; lists borrowed) |
+| Public exports look unused | every export is a **usage root** | ✅ build (trivial, falls out of export nodes) |
+| Reflection / string-keyed (`getattr`, `require(var)`) | flag dynamic-feature files + **string-literal mention check** (rg already running) before any dead/isolated claim | ✅ build (the mode actually in our data; cheap 80/20) |
+| Barrel / `export…from` re-exports | capture re-export **edges**; transitive-through-barrel (bounded) | 🟡 edges now; transitivity deferred (0 incidence/untestable) |
+| Path aliases (`tsconfig paths`) | parse tsconfig/jsconfig `paths`+`baseUrl` | ⏸ **spec, don't build blind** — 0 TS in the bench; gate on adding a TS fixture (POC-first) |
+
+**The universal safety net (cheap, covers the residual):** the only dangerous act is *silently
+dropping a reference*. So any reference we can't resolve — unfollowable alias, dynamic call,
+unresolvable import — is recorded as **`unresolved`, never `absent`**. That single rule keeps every
+"isolated / low-risk" verdict honest even for modes we haven't fully solved: such a symbol reads as
+"couldn't fully resolve," not "siloed." Truly unresolvable reflection then gets the explicit caveat
+*"dynamic usage not statically visible — review candidate,"* never a clean isolation verdict.
+
+### 7.3 Edge types & the two non-conflatable signals
+
+- **Two edge types, both required (ledger §11):** `calls` (symbol→symbol) powers called-by/calling
+  + symbol blast radius; `imports` (file→file, tree-sitter import nodes) powers file connectivity
+  (aurora's `get_imported_by`). **Recall spreading rides `imports` only** (Step-0 POC: calls were
+  repo-dependent for recall); **`calls` feed impact**, not recall.
+- **complexity** = cyclomatic-ish AST branch count *inside* a chunk (local property);
+  **risk/impact** = *reference count* from the call graph (blast radius). Separate fields, by design.
 
 ---
 
