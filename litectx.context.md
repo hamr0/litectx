@@ -187,11 +187,17 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 ## What's NOT in litectx, and why
 
 - **No LSP / language server — ever.** Edge resolution (roadmap) is `ripgrep -w` +
-  tree-sitter queries only. Accuracy comes from per-language config, and
-  over-counting is accepted. An LSP tier would break local-first/lite and is a
-  closed decision.
+  tree-sitter queries only; accuracy comes from per-language config. litectx is
+  near-perfect at *detecting* call/import syntax and deliberately *imprecise at
+  resolving bindings* — it **over-counts by design** (PRD §7). The safety contract
+  that makes this not a downgrade: **over-counting connectivity is safe (errs
+  cautious); under-counting is dangerous** (a false "isolated" breaks hidden
+  consumers). So when the impact view lands, a high/connected result is a normal
+  claim, but **"isolated / unused / low-risk" is only ever a hedged review
+  candidate, never a guarantee** — and dead-code is "likely-unused, review," never
+  "safe to delete." Precise import-vs-usage binding is a non-goal. Closed decision.
 - **No embeddings by default.** The semantic tier is the single opt-in (roadmap,
-  off by default): dual-hybrid (BM25 + activation) ≈ 85% vs tri-hybrid ≈ 95%, and
+  off by default): dual-hybrid (BM25 + spreading) ≈ 85% vs tri-hybrid ≈ 95%, and
   embeddings add cold-start latency + an ML dependency not worth defaulting on.
 - **No service / daemon / network / telemetry.** It runs in your process against a
   file on disk.
