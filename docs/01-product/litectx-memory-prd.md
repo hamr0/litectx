@@ -119,10 +119,10 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `langdef` | per-language registry (`defTypes` per ext; `call_node_type`/`skip_names`/`.scm` to come with edges) | ✅ (grammar+defTypes) | slice 2 · ledger §11 |
 | `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
 | `gitsig` | file-level `git log` → commit count + recency, attached to hits as **activity metadata** (not scored) | new | slice 4 · ledger §8 |
-| `edges` | symbol table → `calls` + `imports` edges → **1-hop spreading** in recall | new | slice 4 · ledger §11/§4 |
+| `edges` | import specifiers → **`imports`** edges (intra-repo) → **1-hop additive spreading** in recall; `calls` edge type reserved for impact (slice 5) | ✅ (imports) | slice 4 · ledger §11/§4 |
 | `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
 | `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
-| `recall` | **kind-scoped** FTS gate → per-kind rank (→ +spreading slice 4; +semantic w/ embeddings tier) | ✅ (kind-scoped; +spreading slice 4) | slice 3–4 · ledger §7 |
+| `recall` | **kind-scoped** FTS gate → per-kind BM25 **+ additive import-spreading** (+semantic w/ embeddings tier) | ✅ (kind-scoped + spreading) | slice 3–4 · ledger §7 |
 | `impact` | refs/files → risk bucket + complexity | new | slice 5 · ledger §9 |
 | `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
@@ -206,9 +206,21 @@ Design rules (DECIDED):
 > along call/import edges) and **base-level** (frequency/recency of access, with type-decay + churn
 > by `kind`). **The Slice-4 Step-0 POC split them cleanly:**
 >
-> - **Spreading is the v1 ranking win** — validated on *both* repos (+0.028 aurora / +0.021
->   gitdone, positive on every breakdown). It needs edges, so it is the **next ranking slice**.
+> - **Spreading is the v1 ranking win — BUILT (slice 4).** `recall = BM25 + 1-hop import-spreading`,
+>   over **import** edges only (calls don't help recall). Shipped as an **additive boost**
+>   `own + w·spread` at **w=0.3** — not the convex `(1−w)·own + w·spread` form, which *taxed*
+>   well-ranked files with weak neighbours (two diagnosed regression modes: *collateral dilution* and
+>   *weak-neighbour demotion*). **Validated on four repos** (aurora +0.027 / gitdone +0.010 /
+>   aurora-mixed +0.008 / multis +0.014): additive@0.3 is the only setting positive on all four.
 >   In v1, "ACT-R in recall" effectively *means spreading*.
+> - **Limit — 1-hop import-spreading is at its robust optimum; graph-only recall has hit diminishing
+>   returns.** The four-repo weight sweep is the ceiling evidence: above additive@0.3 every knob is a
+>   *seesaw* (additive@0.7 = +0.044 aurora but **−0.024 multis**, below baseline — the two non-tuning
+>   repos peak low and punish high weight), and one regression mode is **irreducible** — a genuinely
+>   poorly-connected true answer is demoted by *any* graph prior under *every* fusion/weight (the
+>   intrinsic cost of trusting the graph, not a tunable). Further recall gains therefore do **not**
+>   come from graph tuning (more hops dilute; call edges don't help recall) — they come from the
+>   **deferred tiers** (embeddings/semantic; access-log base-level), which are separate tiers.
 > - **Base-level activation does NOT earn v1 ranking weight.** It needs a real **access log**, and
 >   v1 has none. Seeding it from git history (commits as pseudo-accesses, §4.1) — even with the
 >   full **type-decay + churn** formula — is **repo-dependent**: net-positive on aurora,
@@ -575,23 +587,25 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
    neutral on bench; deps ride slice-4 edges.)
 4. **Edges + spreading (the next ranking win) + git activity metadata** — RESHAPED 2026-06-05
    after the Slice-4 Step-0 POC (`RESULTS.md`; old slice 4 = "ACT-R activation in recall" is
-   **dissolved** — base-level activation does not earn v1 ranking weight, see §4/§14 #1):
-   - **Edges** — tree-sitter + ripgrep edge extraction + per-language semantics config (§7) →
-     **both `calls` (symbol blast radius) and `imports` (file connectivity)** (§7, ledger §11); the
-     dead-code candidate falls out as inverse impact. The two edge types have **different jobs**
-     (Step-0 POC, `RESULTS.md`): **imports drive recall spreading; calls feed the impact view**
-     (slice 5), not recall.
-   - **Spreading** — 1-hop activation over **import** edges, fused into recall **within a kind** (the
-     slice-3 invariant holds; never re-rank across kinds). This is the POC-validated ranking lift
-     (imports: +0.028 aurora / +0.021 gitdone, holds on both; weight ≈0.4). **Call edges are NOT
-     folded into recall** — under a (noisy) proxy they were repo-dependent (great aurora, −gitdone),
-     the same failure that rejected base-level activation; re-test calls-in-recall only with the
-     precise extractor before ever scoring them. Re-run the multi-repo gate incl. `aurora-mixed`;
-     adopt the weight only if **≥ baseline on every repo**. **Default ranking becomes BM25 +
-     spreading (imports).**
-   - **Git activity metadata** — file-level `git log` → commit count + last-modified attached to
-     each hit as displayed grounding (`gitsig`). **Not a scored term.** Cheap (no per-block blame);
-     independent of edges, so it can land first or alongside.
+   **dissolved** — base-level activation does not earn v1 ranking weight, see §4/§14 #1).
+   **Imports + spreading ✅ SHIPPED (2026-06-05); `gitsig` remaining.**
+   - **Edges (`imports`) — ✅ SHIPPED.** Import specifiers extracted in the **same tree-sitter parse**
+     as the slice-2 chunks (Python `import`/`from` abs+rel, ES `import`, CJS `require()`), resolved
+     to **intra-repo** target files only → directed `edges(type, src, dst)` table. The `calls` edge
+     type (symbol blast radius, ripgrep `-w` + tree-sitter call-queries) is **reserved for the impact
+     view (slice 5)** — calls don't help recall (Step-0 POC), so they're not built here.
+   - **Spreading — ✅ SHIPPED.** 1-hop over **import** edges, fused into recall **within a kind** (the
+     slice-3 invariant holds). Shipped as an **additive boost** `own + w·spread` at **w=0.3** — the
+     convex `(1−w)·own + w·spread` form (POC default ≈0.4) was corrected at build time: it *taxed*
+     well-ranked files with weak neighbours (two diagnosed regression modes). **Re-validated on four
+     repos** (added `multis`, a 3rd CJS repo): additive@0.3 is the only setting **≥ baseline on every
+     repo** (aurora +0.027 / gitdone +0.010 / aurora-mixed +0.008 / multis +0.014). **Default ranking
+     is now BM25 + additive import-spreading.** *Limit: this signal is at its robust optimum — higher
+     weight overfits aurora and sinks multis below baseline; further recall gain is the deferred tiers,
+     not graph tuning (see §4).*
+   - **Git activity metadata (`gitsig`) — REMAINING.** File-level `git log` → commit count +
+     last-modified attached to each hit as displayed grounding. **Not a scored term.** Cheap (no
+     per-block blame); independent of edges, lands next.
 5. **impact view** (reference count → risk bucket; complexity from AST) over the slice-4 edges.
 
 **Deferred to post-v1 tiers (schema-reserved, not v1 slices):**

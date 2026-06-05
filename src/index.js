@@ -11,10 +11,19 @@ import { join, dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { Store } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
-import { chunkFile } from "./chunker.js";
+import { chunkAndImports } from "./chunker.js";
+import { buildResolveCtx, resolveImports } from "./edges.js";
 import { ftsMatch } from "./tokenize.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
+
+// v1 default ranking = BM25 + 1-hop import-spreading (additive boost; see store.search). Weight
+// settled on a 4-repo bench (aurora py, gitdone+multis js, aurora-mixed): additive@0.3 is the only
+// setting positive on ALL FOUR (worst-case +0.008) with the fewest regressions. It is NOT the
+// max-MRR setting on aurora alone — additive@0.7 scores higher there (+0.044) but drives the
+// held-out multis repo BELOW baseline (−0.024). The two non-tuning repos (gitdone, multis) both
+// peak low and punish high weight, so 0.3 is the robust pick; higher weights overfit aurora.
+const SPREAD_WEIGHT = 0.3;
 
 /**
  * The canonical memory-kind vocabulary — the kinds a bare `recall(query)` groups over. v1 ships
@@ -72,9 +81,19 @@ export class LiteCtx {
     const current = new Set(files);
     const deletes = opts.paths ? [] : [...prev.keys()].filter((p) => !current.has(p));
 
-    // chunk each changed file into symbol/section nodes (slice 2). Additive substrate — the
-    // recall path below is untouched, so the file-granularity benchmark holds exactly.
-    for (const u of upserts) u.nodes = await chunkFile(u.path, u.body);
+    // chunk each changed file into symbol/section nodes + collect its import specifiers, in one
+    // parse (slice 2 + 4). Chunks are additive substrate; imports become edges below.
+    for (const u of upserts) {
+      const r = await chunkAndImports(u.path, u.body);
+      u.nodes = r.chunks;
+      u.imports = r.imports;
+    }
+
+    // resolve each changed file's imports to intra-repo edges (slice 4). The resolver indexes
+    // the FULL current file list (paths only), so a changed file's imports resolve against the
+    // whole repo — not just the other files that changed this pass.
+    const ctx = buildResolveCtx(files);
+    for (const u of upserts) u.edges = resolveImports(u.format, u.path, u.imports ?? [], ctx);
 
     this.store.applyChanges({ upserts, touch, deletes }, Date.now());
 
@@ -115,7 +134,7 @@ export class LiteCtx {
     const match = ftsMatch(query);
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
-      return match ? this.store.search(match, opts.kind, opts.n ?? 10) : [];
+      return match ? this.store.search(match, opts.kind, opts.n ?? 10, SPREAD_WEIGHT) : [];
     }
     // grouped: an explicit subset of kinds, or all known kinds when omitted. One FTS query per
     // kind, each ranked against only its own kind — no kind ever competes with another for rank.
@@ -123,7 +142,7 @@ export class LiteCtx {
     const n = opts.n ?? 5;
     /** @type {Record<string, import("./store.js").Hit[]>} */
     const grouped = {};
-    for (const k of kinds) grouped[k] = match ? this.store.search(match, k, n) : [];
+    for (const k of kinds) grouped[k] = match ? this.store.search(match, k, n, SPREAD_WEIGHT) : [];
     return grouped;
   }
 

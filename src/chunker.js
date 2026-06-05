@@ -90,7 +90,86 @@ async function chunkCode(lang, body) {
   for (const d of defs) for (let i = d.startPosition.row; i <= d.endPosition.row; i++) covered[i] = true;
   const pre = lines.filter((_, i) => !covered[i]).join("\n").trim();
   if (pre) chunks.push({ symbol: null, nodeType: "preamble", startLine: 0, endLine: lines.length - 1, text: pre });
-  return chunks;
+  return { chunks, imports: collectImports(tree.rootNode, lang) };
+}
+
+// strip surrounding quotes from a tree-sitter `string` node, preferring its string_fragment child.
+function stringText(node) {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c.type === "string_fragment") return c.text;
+  }
+  return node.text.replace(/^['"`]|['"`]$/g, "");
+}
+
+// first ES-import `string` child (JS/TS) — present iff this is an ES `import … from "…"`.
+function esImportSource(node) {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c.type === "string") return stringText(c);
+  }
+  return null;
+}
+
+// one Python import-node → its raw module specifier(s), reconstructed exactly as written
+// (absolute "a.b.c", or relative ".x" / "..pkg.name"). `from m import a, b` also emits "m.a"/"m.b"
+// so a submodule import resolves to its file. Over-collects safely (§7).
+function pyImportSpecs(node, out) {
+  if (node.type === "import_statement") {
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const c = node.namedChild(i);
+      if (c.type === "dotted_name") out.push(c.text);
+      else if (c.type === "aliased_import") {
+        const d = c.namedChild(0); // the dotted_name being aliased
+        if (d && d.type === "dotted_name") out.push(d.text);
+      }
+    }
+    return;
+  }
+  // import_from_statement: first named child is the module (dotted_name | relative_import).
+  const kids = [];
+  for (let i = 0; i < node.namedChildCount; i++) kids.push(node.namedChild(i));
+  if (!kids.length) return;
+  const base = kids[0].text; // "aurora_core.activation" | "." | "..pkg"
+  out.push(base);
+  const rel = base.endsWith("."); // bare relative ("from . import x")
+  for (const c of kids.slice(1)) {
+    let name = null;
+    if (c.type === "dotted_name") name = c.text;
+    else if (c.type === "aliased_import") {
+      const d = c.namedChild(0);
+      name = d && d.type === "dotted_name" ? d.text : null;
+    }
+    if (name) out.push(rel ? base + name : base + "." + name);
+  }
+}
+
+// collect raw import specifiers (resolved to files by edges.js). Driven by langdef.importTypes
+// for declarative imports, plus require("…") call-expressions for CJS. Recurses fully so
+// requires nested in functions are caught; over-collecting is safe (§7).
+function collectImports(root, lang) {
+  /** @type {string[]} */
+  const out = [];
+  const types = new Set(lang.importTypes ?? []);
+  const py = lang.format === "py";
+  (function walk(n) {
+    if (types.has(n.type)) {
+      if (py) pyImportSpecs(n, out);
+      else {
+        const s = esImportSource(n); // js/ts ES import
+        if (s) out.push(s);
+      }
+    } else if (lang.requireCalls && n.type === "call_expression") {
+      const fn = n.childForFieldName("function");
+      if (fn && fn.text === "require") {
+        const args = n.childForFieldName("arguments");
+        const a = args && args.namedChildCount ? args.namedChild(0) : null;
+        if (a && a.type === "string") out.push(stringText(a));
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
+  })(root);
+  return out;
 }
 
 // markdown → one chunk per heading section (heading line through the line before the next
@@ -122,22 +201,33 @@ function chunkMarkdown(body) {
 }
 
 /**
- * Split a file into symbol/section chunks, routed by extension. Falls back to a single
- * file-level chunk for unsupported types or on parse failure — chunks are additive substrate,
- * recall never depends on them, so this can never throw or block indexing.
+ * Split a file into symbol/section chunks AND collect its import specifiers, in a single parse,
+ * routed by extension. Falls back to a single file-level chunk (no imports) for unsupported
+ * types or on parse failure — both are additive substrate, recall never depends on them, so
+ * this can never throw or block indexing.
+ * @param {string} path  repo-relative path
+ * @param {string} body  file contents
+ * @returns {Promise<{ chunks: Chunk[], imports: string[] }>}
+ */
+export async function chunkAndImports(path, body) {
+  const ext = extname(path).toLowerCase();
+  if (ext === ".md") return { chunks: chunkMarkdown(body), imports: [] };
+  const lang = langForExt(ext);
+  if (!lang) return { chunks: [fileChunk(body)], imports: [] };
+  try {
+    const { chunks, imports } = await chunkCode(lang, body);
+    return { chunks: chunks.length ? chunks : [fileChunk(body)], imports };
+  } catch {
+    return { chunks: [fileChunk(body)], imports: [] }; // parse error → file-level fallback
+  }
+}
+
+/**
+ * Symbol/section chunks for a file (imports discarded). Thin wrapper over {@link chunkAndImports}.
  * @param {string} path  repo-relative path
  * @param {string} body  file contents
  * @returns {Promise<Chunk[]>}
  */
 export async function chunkFile(path, body) {
-  const ext = extname(path).toLowerCase();
-  if (ext === ".md") return chunkMarkdown(body);
-  const lang = langForExt(ext);
-  if (!lang) return [fileChunk(body)];
-  try {
-    const chunks = await chunkCode(lang, body);
-    return chunks.length ? chunks : [fileChunk(body)];
-  } catch {
-    return [fileChunk(body)]; // parse error → file-level fallback
-  }
+  return (await chunkAndImports(path, body)).chunks;
 }

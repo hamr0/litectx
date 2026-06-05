@@ -8,9 +8,11 @@
 
 /**
  * @typedef {Object} LangDef
- * @property {string} format     format tag (matches indexer FORMAT)
- * @property {string} grammar    vendored wasm filename under ./grammars
- * @property {string[]} defTypes tree-sitter node types that become symbol chunks
+ * @property {string} format         format tag (matches indexer FORMAT)
+ * @property {string} grammar        vendored wasm filename under ./grammars
+ * @property {string[]} defTypes     tree-sitter node types that become symbol chunks
+ * @property {string[]} importTypes  tree-sitter node types that carry an import specifier (slice 4)
+ * @property {boolean} [requireCalls] also treat `require("…")` call-expressions as imports (CJS)
  */
 
 /** @type {Record<string, LangDef>} */
@@ -19,16 +21,21 @@ export const LANGDEFS = {
     format: "py",
     grammar: "tree-sitter-python.wasm",
     defTypes: ["function_definition", "class_definition"],
+    importTypes: ["import_statement", "import_from_statement"],
   },
   js: {
     format: "js",
     grammar: "tree-sitter-javascript.wasm",
     defTypes: ["function_declaration", "method_definition", "class_declaration", "arrow_function", "function_expression"],
+    importTypes: ["import_statement"],
+    requireCalls: true,
   },
   ts: {
     format: "ts",
     grammar: "tree-sitter-typescript.wasm",
     defTypes: ["function_declaration", "method_definition", "class_declaration", "arrow_function", "function_expression", "interface_declaration", "type_alias_declaration"],
+    importTypes: ["import_statement"],
+    requireCalls: true,
   },
 };
 

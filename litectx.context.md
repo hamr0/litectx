@@ -44,15 +44,19 @@ laid underneath it.
 | Ranked **recall** over FTS5 (BM25), file-granularity | ✅ shipped |
 | Symbol-level `nodes` substrate (tree-sitter: TS/JS/Python + md sections) | ✅ shipped (slice 2) |
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
-| Graph **edges** (`calls` / `imports`) + **spreading**-weighted recall | 🚧 roadmap (slice 4) |
-| **Git activity** metadata per hit (commits + recency; grounding, not scored) | 🚧 roadmap (slice 4) |
+| **Import edges** + 1-hop **spreading** recall (BM25 + additive boost, w=0.3) | ✅ shipped (slice 4) |
+| `calls` edges (symbol blast radius) | 🚧 roadmap (slice 5 — impact only; don't help recall) |
+| **Git activity** metadata per hit (commits + recency; grounding, not scored) | 🚧 roadmap (slice 4 — `gitsig`, remaining) |
 | **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slice 5) |
 | Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
 | Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
 
-> Until spreading lands, `recall` ranks by **plain BM25 at file granularity**, kind-scoped.
-> The symbol `nodes` are stored but do not yet change recall ranking — they are
-> the substrate the edge/spreading/impact slices build on. Base-level (git-seeded)
+> `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
+> importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for
+> graph-only recall — validated ≥ baseline on four repos (aurora/gitdone/aurora-mixed/multis);
+> pushing the weight higher overfits one repo and sinks another, so further recall gains come from
+> the deferred semantic/access-log tiers, not more graph tuning. `calls` edges are NOT used for
+> recall (they don't help; Step-0 POC) — they're reserved for the impact view. Base-level (git-seeded)
 > activation was tested and **does not earn ranking weight without a real access log**
 > (POC: repo-dependent) — so git activity ships as *grounding metadata*, not a score.
 
@@ -112,9 +116,11 @@ Builds or **incrementally refreshes** the index over `root`.
 ### `ctx.recall(query, opts?)` → `Hit[]` | `Record<kind, Hit[]>`
 Ranked recall over the index, **scoped by memory `kind`**. Synchronous.
 
-**Kinds never share a ranking.** Each kind is FTS-gated and BM25-ranked only against its
-own kind, in a separate query — so prose volume can never bury code (no weights, no md
-penalty). The return shape follows the `kind` argument:
+**Kinds never share a ranking.** Each kind is FTS-gated and ranked only against its own
+kind, in a separate query — so prose volume can never bury code (no weights, no md
+penalty). Within a kind, ranking is **BM25 + 1-hop additive import-spreading** (a hit
+adjacent to a strong hit in the import graph is lifted; spreading never crosses kinds and
+is a no-op for kinds without edges, e.g. `doc`). The return shape follows the `kind` argument:
 
 | call | mode | returns | default `n` |
 |---|---|---|---|
@@ -186,14 +192,17 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 
 ## What's NOT in litectx, and why
 
-- **No LSP / language server — ever.** Edge resolution (roadmap) is `ripgrep -w` +
-  tree-sitter queries only; accuracy comes from per-language config. litectx is
-  near-perfect at *detecting* call/import syntax and deliberately *imprecise at
-  resolving bindings* — it **over-counts by design** (PRD §7). The safety contract
-  that makes this not a downgrade: **over-counting connectivity is safe (errs
-  cautious); under-counting is dangerous** (a false "isolated" breaks hidden
-  consumers). So when the impact view lands, a high/connected result is a normal
-  claim, but **"isolated / unused / low-risk" is only ever a hedged review
+- **No LSP / language server — ever.** Edge resolution is `ripgrep -w` + tree-sitter
+  queries only; accuracy comes from per-language config. litectx is near-perfect at
+  *detecting* call/import syntax and deliberately *imprecise at resolving bindings* —
+  it **over-counts by design** (PRD §7). **Where the imprecision is risk-free vs. where
+  the safety contract bites:** in **recall** (shipped — import-spreading), an edge only
+  nudges a rank, so over- *or* under-counting is harmless; recall makes no isolation
+  claim and carries none of the risk. The contract applies to the **impact** view
+  (roadmap), where "isolated → safe to change" *is* load-bearing: **over-counting
+  connectivity is safe (errs cautious); under-counting is dangerous** (a false
+  "isolated" breaks hidden consumers). So when impact lands, a high/connected result is
+  a normal claim, but **"isolated / unused / low-risk" is only ever a hedged review
   candidate, never a guarantee** — and dead-code is "likely-unused, review," never
   "safe to delete." Precise import-vs-usage binding is a non-goal. Closed decision.
 - **No embeddings by default.** The semantic tier is the single opt-in (roadmap,
