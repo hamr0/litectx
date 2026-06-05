@@ -46,10 +46,11 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   carry the per-kind hybrid re-rank weights** — verified on `aurora-mixed` (py+md) that with BM25 as
   the only signal, AURORA's `_CODE_WEIGHTS`/`_KB_WEIGHTS` collapse to a bare `doc × w` md-penalty
   (the "no penalty hack" doctrine forbids it); the weights only become principled once ≥2 signals
-  exist (slice 4 activation). Instead the code-over-md symptom is dissolved structurally: **kinds
+  exist (slice 4 adds **spreading** as the second; base-level activation is deferred — §2/§4).
+  Instead the code-over-md symptom is dissolved structurally: **kinds
   never share a ranking** (`recall` is kind-scoped, one FTS query per kind). Result: `kind:"code"`
   holds 0.525→0.545 with 196 md docs in the index, vs 0.480 / 12-of-22-prose-buried under a shared
-  ranking. `k1/b` tuning + deps-in-body deferred (neutral on bench; deps ride slice-5 edges).
+  ranking. `k1/b` tuning + deps-in-body deferred (neutral on bench; deps ride slice-4 edges).
 
 ## 2. Base-level activation (BLA) — `base_level.py`
 
@@ -57,8 +58,10 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   (`base_level.py:147–167`). Bucketed history: `count_j > 1` = multiple accesses at bucket midpoint.
 - **Constants:** `decay_rate d = 0.5`; `default_activation = −5.0` (no history); `min_activation = −10.0`
   (floor). (`base_level.py:78–86`).
-- **litectx target:** **slice 4**. No access log in v1 → seed from git (§8 below). Keep the bucketed
-  `count·t^−d` shape so a real access log slots in later.
+- **litectx target:** **DEFERRED → access-log tier** (was slice 4). Slice-4 Step-0 POC: seeding BLA
+  from git alone is repo-dependent (+aurora / −gitdone at every weight) — base-level needs a *real*
+  access log to have signal, which v1 lacks (`poc/RESULTS.md` "Slice-4 Step-0"; PRD §4/§14 #1). Keep
+  the bucketed `count·t^−d` shape so a real access log slots in later; do **not** ship it git-seeded.
 
 ## 3. Decay — type-keyed + churn — `decay.py`  ★ the part the POC dropped
 
@@ -73,10 +76,14 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   reading as "relevant" — the exact gitdone failure mode in the POC.
 - **Other constants:** `decay_factor = 0.5`, `max_days = 90`, `min_penalty = −2.0`,
   `grace_period = 1h` (`decay.py:82–102`).
-- **litectx target:** **slice 4**, keyed off **(`kind`, `format`)** (slice-1 columns). ⚠️ aurora's
-  `kb` = *markdown* → litectx `format=md` **0.05**; aurora's `doc` = *pdf/docx* → litectx
-  `format=pdf/docx` **0.02** (deferred). Do **not** collapse md onto `0.02`. Validate type-decay +
-  churn on both repos *before* activation gets weight (POC mandate).
+- **litectx target:** **DEFERRED → access-log tier** (was slice 4), keyed off **(`kind`, `format`)**
+  (slice-1 columns). ⚠️ aurora's `kb` = *markdown* → litectx `format=md` **0.05**; aurora's `doc` =
+  *pdf/docx* → litectx `format=pdf/docx` **0.02** (deferred). Do **not** collapse md onto `0.02`.
+  **Step-0 finding (the POC mandate, executed):** decay+churn did **not** rescue git-seeded
+  base-level — at co-equal weight it made gitdone *worse* (−0.094 vs −0.030 recency-only). Churn
+  raises the decay rate but only bites *stale* high-churn files; gitdone's failure mode is
+  *recently*-churned ones, which it does not catch. These params are real but belong to the
+  access-log tier (decay against *real* accesses), not v1 git-seeded ranking (`RESULTS.md`).
 
 ## 4. Spreading activation — `spreading.py`
 
@@ -84,21 +91,31 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   bidirectional, additive across paths, source excluded (`spreading.py:276–279`).
 - **Constants:** `spread_factor = 0.7` (1-hop 0.7, 2-hop 0.49, 3-hop 0.343); `max_hops = 3`;
   `max_edges = 1000`; `min_weight = 0.1` (`spreading.py:72–89`).
-- **litectx target:** **slice 5** (edges) → spreading in recall. POC already confirmed 1-hop
-  spreading **generalizes** — this is the validated win; build it.
+- **litectx target:** **slice 4** (edges) → spreading in recall — **promoted to the next ranking
+  slice.** The original POC confirmed 1-hop spreading **generalizes** (+0.028 aurora / +0.021
+  gitdone, positive on every breakdown); with base-level activation deferred (§2/§3), spreading is
+  *the* v1 ranking lift. Fuse **within a kind** (slice-3 invariant); adopt the weight only if ≥
+  baseline on every repo. This is the ACT-R term that ships in v1. **Edge-type split (Step-0 POC,
+  `RESULTS.md`):** recall spreading rides **import** edges only — **call** edges were repo-dependent
+  for recall (great aurora, −gitdone) under a noisy proxy and belong to the **impact** view (§9), not
+  recall, unless a precise extraction later proves them ≥ baseline on both.
 
 ## 5. Context boost — `context_boost.py`
 
 - **Formula:** `boost = (|query_kw ∩ chunk_kw| / |query_kw|) · boost_factor`
   (`context_boost.py:333–356`). Field weights: name 2.0 > docstring 1.5 > signature/body 1.0.
 - **Constant:** `boost_factor = 0.5` (`context_boost.py:39`).
-- **litectx target:** **slice 4** (cheap, no embeddings needed).
+- **litectx target:** **mostly folded into BM25 already** — slice-3 `indexBody` indexes symbol names
+  into the FTS body, which is what context-boost's name-overlap term rewards. A separate scored
+  boost is redundant for v1; revisit only as part of the access-log tier's full activation total.
 
 ## 6. Total activation — `engine.py`
 
 - **Formula:** `total = BLA + spreading + context_boost − |decay|` (`engine.py:200–205`).
-- **litectx target:** **slice 4**. Each component **min-max normalized to [0,1] independently**
-  before the hybrid weights (§7) apply.
+- **litectx target:** **DEFERRED → access-log tier.** The full `BLA + spreading + boost − decay`
+  total only makes sense once base-level terms have an access log; in v1, recall fuses BM25 +
+  spreading directly (§7). Each component still **min-max normalized to [0,1] independently** when
+  the total lands. (Spreading alone ships in slice 4 as its own normalized term.)
 
 ## 7. Hybrid weights (BM25 · activation · semantic) — `hybrid_retriever.py`
 
@@ -106,9 +123,12 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   (`hybrid_retriever.py:40–41`). `hybrid = bm25_w·bm25 + act_w·act + sem_w·sem`.
 - **Staging:** FTS5 top-`100` gate → re-rank (`stage1_top_k = 100`); fallback chain
   tri-hybrid → dual-hybrid (no embeddings) → activation-only.
-- **litectx target:** recall view, **slice 4** (dual-hybrid) + embeddings tier (tri-hybrid).
-  **Divergence:** embeddings off by default → renormalize code weights over (BM25, activation)
-  when semantic is absent. Re-validate the weights on both repos before adopting.
+- **litectx target:** recall view. **Divergence (POC-corrected):** v1 "dual-hybrid" = **BM25 +
+  spreading** (slice 4), *not* BM25 + base-level activation — base-level is deferred (§2/§3). The
+  embeddings tier adds semantic → tri-hybrid. Renormalize over whichever terms are present; the
+  aurora `(0.5, 0.3, 0.2)` split is a *starting prior* for (BM25, spreading/activation, semantic),
+  re-validated on both repos before adopting. Aurora's activation slot is litectx's spreading slot
+  in v1.
 
 ## 8. Git cold-start — `git.py`
 
@@ -118,8 +138,12 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
 - **Extraction:** `git blame --line-porcelain <file>` once per file (O(files)), sliced per
   function range (O(range)); returns unique commit timestamps, newest first; caches
   `{line:(sha,ts)}` and `{sha:ts}`. Commit **count** also feeds churn (§3).
-- **litectx target:** **slice 4** seeds BLA; **slice 1** already enumerates via git. Block-level
-  blame (per chunk line-range) lands once chunking (slice 2) gives line ranges.
+- **litectx target (POC-corrected):** **slice 4 = git *activity metadata*** — file-level `git log`
+  → commit count + last-modified, attached to hits as displayed grounding (not scored; mirrors
+  aurora's result card, which shows `Git: 7 commits, modified 8d ago` raw). **No per-block blame
+  needed for v1** (the 336× blame concern, §12, doesn't apply to file-level metadata). The
+  BLA-*seeding* use is deferred with base-level activation (§2) → access-log tier; block-level blame
+  lands then.
 
 ## 9. Impact / blast-radius — `memory.py`
 
@@ -132,7 +156,7 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
 - **Risk thresholds** (`memory.py:167–170`): **HIGH** if `files≥10 ∨ refs≥50 ∨ complexity≥60`;
   **MED** if `files≥3 ∨ refs≥10 ∨ complexity≥30`; else **LOW**; `−` if no data. Any one threshold
   triggers — not weighted.
-- **litectx target:** **slice 6** (impact view), over slice-5 edges + slice-2 AST.
+- **litectx target:** **slice 5** (impact view), over slice-4 edges + slice-2 AST.
 
 ## 10. Chunk kinds — `chunk_types.py`
 
@@ -169,7 +193,7 @@ aurora + gitdone via `npm run bench` before it earns weight; keep only what hold
 
 ---
 
-## 11. Language-definition layer + edge pipeline (slice 5/6) — carry vs correct
+## 11. Language-definition layer + edge pipeline (slice 4/5) — carry vs correct
 
 This is where litectx replaces aurora's LSP. **Borrow what was validated, fix what was a mistake.**
 
@@ -215,7 +239,7 @@ This is where litectx replaces aurora's LSP. **Borrow what was validated, fix wh
 - **Mixed backends in one module** (LSP+rg+tree-sitter tangled) — keep clean seams: ripgrep for
   the candidate sweep, tree-sitter for confirmation; one concern per module.
 
-### The edge-resolution pipeline (litectx, slice 5)
+### The edge-resolution pipeline (litectx, slice 4)
 
 1. **Defs** — tree-sitter walk every file → for each `function_def_types` node emit a node
    `{name, kind, file, [startLine,endLine]}`. This is the symbol table (also feeds slice-2 chunking).
@@ -285,7 +309,7 @@ calling*; **file connectivity needs import edges separately.**
   aurora succeeded with inline node-type checks and no `.scm` files. Evidence says the *config*
   (`function_def_types`/`call_node_type`) carries the accuracy, queries are a thin layer. Lean:
   `.scm` queries for **chunking** (declarative capture of function/class spans, slice 2) +
-  node-type config for **edges** (slice 5). Confirm in the slice-2 POC alongside the
+  node-type config for **edges** (slice 4). Confirm in the slice-2 POC alongside the
   web-tree-sitter (WASM) vs native binding choice.
 
 ---
@@ -296,14 +320,20 @@ Aurora hit a real indexing-speed wall; the fixes are documented and worth borrow
 
 ### ★ Git blame was the killer — file-level cache, slice per function (336× — non-negotiable)
 
+> **v1 sidesteps this entirely.** Per-block blame is only needed to seed *chunk-level* base-level
+> activation, which is **deferred to the access-log tier** (§2/§8). v1 git *activity metadata* is
+> **file-level `git log`** (count + last-modified) — O(files), no per-range blame. This playbook
+> applies when block-level activation is built later.
+
 - **The mistake:** `git blame -L <start>,<end>` **per function** → O(functions) git subprocesses
   (a 50-function file = 50 blame calls). This was aurora's dominant indexing cost.
 - **The fix** (`context-code/.../git.py:100–294`): run `git blame --line-porcelain <file>`
   **once per file**, cache `{line → (sha, ts)}`, then slice each function's range in O(1).
   CHANGELOG: **"336× speedup on subsequent function lookups."** Second-level `{sha → ts}` cache
   too.
-- **litectx (slice 4):** when block-level git signals land (§8), do file-level blame **once**,
-  slice per chunk line-range. Never per-symbol git calls. This is THE indexing-speed lesson.
+- **litectx (access-log tier, deferred):** when block-level git signals land (§8), do file-level
+  blame **once**, slice per chunk line-range. Never per-symbol git calls. This is THE indexing-speed
+  lesson. (v1 slice-4 git *metadata* is file-level `git log` only — no blame, so this doesn't bite.)
 
 ### SQLite write pragmas (cheap, applied now to `Store`)
 

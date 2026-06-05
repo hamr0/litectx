@@ -17,12 +17,16 @@ All notable changes to this project are documented here, following
 - `CLAUDE.md` build doctrine pointing at `.claude/memory/{AGENT_RULES,LIBRARY_CONVENTIONS}.md`.
 
 ### Decided
-- **POC gate PASSED for graph-aware recall** (PRD §11): graph spreading generalizes across both repos and is the real win; git-seeded base-level activation at a flat weight does **not** generalize (lost to plain BM25 on the second repo) and must be reworked with decay+churn before it earns weight.
+- **Slice-4 Step-0 POC reshaped the remaining slices** (PRD §4/§11.2/§14 #1, `poc/RESULTS.md`). Two throwaway harnesses (`poc/activation-poc.mjs`, `poc/spreading-poc.mjs`), run before building, settled what earns ranking weight:
+  - **Base-level (git-seeded) activation does NOT earn v1 ranking weight — not even with decay+churn.** The "missing half" (type-decay + churn) failed to rescue it; it made gitdone *worse* (churn penalizes *stale* high-churn files, but the failure mode is *recently*-churned ones). Root cause: base-level needs a real **access log**, which v1 lacks — git gives *edit* frequency, not *access* frequency. **Deferred to the access-log tier** (litectx's long-running-memory differentiator; `activations` table schema-reserved). It re-derives aurora's own structure (git seeds activation + is displayed raw; the scored term rides a real access log).
+  - **Git → passive activity metadata** (commit count + last-modified, file-level `git log`, no per-block blame) shown alongside hits as grounding, **not a scored term**.
+  - **Spreading is the v1 ranking win** (+0.028 aurora / +0.021 gitdone, holds on both) — **promoted to the next ranking slice**, and it rides **import** edges. **Call edges do not help recall** (repo-dependent: great aurora, −gitdone) under a noisy proxy — they keep their job in the **impact** view, not recall (re-test calls-in-recall only with the precise extractor).
+  - **v1 default ranking = BM25 + spreading(imports).** Semantic = embeddings tier (opt-in; semantic and embeddings are the same thing). Context-boost folds into BM25 (symbol names already indexed in slice 3).
 - **Build methodology** (PRD §11.1): walking skeleton + vertical slices, integrated as they land; the multi-repo harness is the always-green integration gate; aurora is a second opinion, not an oracle.
 - **Packaging** (PRD §14 #5): core library + in-repo CLI; MCP and graph-views are separate downstream consumers.
 
 ### Next
-- Slice 4 (ACT-R activation-weighted recall, §4) — git-seeded base-level activation + 1-hop graph spreading layered **within a kind** (never across — the slice-3 invariant holds). Decay+churn reworked per the POC so recency isn't naively rewarded; re-run the multi-repo gate, adopt only weights ≥ baseline on every repo. This is where recall should first move beyond BM25 (POC: +spread positive on both repos). The `aurora-mixed` gate must keep holding.
+- **Slice 4 — edges + spreading + git-activity-metadata** (PRD §11.2). Build the `edges` module (tree-sitter call-queries + `ripgrep -w` resolution over the slice-2 symbols → `calls` + `imports`), wire **import**-edge 1-hop spreading into `recall` **within a kind** (the slice-3 invariant holds), and `gitsig` (file-level git activity metadata on hits). Gate on all three datasets incl. `aurora-mixed` via `npm run bench`; adopt the spreading weight only if ≥ baseline on every repo. Calls feed **slice 5 — impact view** (refs → risk bucket + complexity), not recall.
 
 ## [0.0.1] — 2026-06-04
 

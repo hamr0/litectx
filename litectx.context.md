@@ -44,14 +44,17 @@ laid underneath it.
 | Ranked **recall** over FTS5 (BM25), file-granularity | ✅ shipped |
 | Symbol-level `nodes` substrate (tree-sitter: TS/JS/Python + md sections) | ✅ shipped (slice 2) |
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
-| ACT-R **activation**-weighted recall + presets + git cold-start | 🚧 roadmap (slice 4) |
-| Graph **edges** (`calls` / `imports`) | 🚧 roadmap (slice 5) |
-| **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slices 5–6) |
+| Graph **edges** (`calls` / `imports`) + **spreading**-weighted recall | 🚧 roadmap (slice 4) |
+| **Git activity** metadata per hit (commits + recency; grounding, not scored) | 🚧 roadmap (slice 4) |
+| **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slice 5) |
 | Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
+| Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
 
-> Until activation lands, `recall` ranks by **plain BM25 at file granularity**.
+> Until spreading lands, `recall` ranks by **plain BM25 at file granularity**, kind-scoped.
 > The symbol `nodes` are stored but do not yet change recall ranking — they are
-> the substrate the activation/edge/impact slices build on.
+> the substrate the edge/spreading/impact slices build on. Base-level (git-seeded)
+> activation was tested and **does not earn ranking weight without a real access log**
+> (POC: repo-dependent) — so git activity ships as *grounding metadata*, not a score.
 
 ## Minimal usage
 
@@ -203,8 +206,10 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 
 - **`index()` is async; `recall()` is sync.** `await` the index; do not `await`
   recall/size/close.
-- **Recall is BM25-only today.** It is not yet activation-weighted — don't expect
-  recency/centrality effects until the activation slice ships.
+- **Recall is BM25-only today** (kind-scoped). **Centrality** effects arrive with the
+  spreading slice (graph edges); **recency** effects (base-level activation) are the
+  access-log tier and won't appear from git history alone — the POC showed git-seeded
+  recency is repo-dependent, so git ships as grounding metadata, not ranking weight.
 - **Same-mtime + same-size content swap.** Change detection fast-skips on
   `(mtime, size)`; an edit that lands within one filesystem mtime tick *and* keeps
   the exact byte length can be missed. Use `index({ force: true })` to be certain.

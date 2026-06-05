@@ -118,12 +118,12 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `indexer` | pass orchestration: collect + incremental diff + dispatch | ✅ | §6 · slices 0–1 |
 | `langdef` | per-language registry (`defTypes` per ext; `call_node_type`/`skip_names`/`.scm` to come with edges) | ✅ (grammar+defTypes) | slice 2 · ledger §11 |
 | `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
-| `gitsig` | file-level blame cache, slice per range → commit count+recency | new | slice 4 · ledger §8/§12 |
-| `edges` | symbol table → `calls` + `imports` edges | new | slice 5 · ledger §11 |
+| `gitsig` | file-level `git log` → commit count + recency, attached to hits as **activity metadata** (not scored) | new | slice 4 · ledger §8 |
+| `edges` | symbol table → `calls` + `imports` edges → **1-hop spreading** in recall | new | slice 4 · ledger §11/§4 |
 | `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
-| `activation` | ACT-R **pure fns**: BLA · decay(type+churn) · spreading · boost · total · norm | new | slice 4 · ledger §2–6 |
-| `recall` | **kind-scoped** FTS gate → per-kind rank (→ +activation slice 4) | ✅ (kind-scoped; hybrid in slice 4) | slice 3 · ledger §7 |
-| `impact` | refs/files → risk bucket + complexity | new | slice 6 · ledger §9 |
+| `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
+| `recall` | **kind-scoped** FTS gate → per-kind rank (→ +spreading slice 4; +semantic w/ embeddings tier) | ✅ (kind-scoped; +spreading slice 4) | slice 3–4 · ledger §7 |
+| `impact` | refs/files → risk bucket + complexity | new | slice 5 · ledger §9 |
 | `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
 
@@ -133,11 +133,13 @@ a slice adds a capability over time; the modules below are the code units it lan
 2. **One `langdef` registry** — `chunker`, `edges`, and complexity all read it; never fork it
    per-slice (`.scm` for chunking + node-type config for edges hang off the same module).
 3. **`activation` stays pure** — functions of already-extracted signals, so the bench can ablate
-   each term (the POC's "BLA doesn't generalize" was a half-formula artifact, not a finding).
+   each term. (Ablation earned its keep: Step-0 showed base-level *still* fails the multi-repo gate
+   *with* decay+churn — not a half-formula artifact but a real "needs an access log" finding.)
 4. **`recall` is its own module, not the facade** — fusion weights / normalization / the
-   tri→dual→activation fallback chain don't belong in `LiteCtx`.
+   tri→dual fallback chain don't belong in `LiteCtx`.
 
-Don't pre-create empty modules — `gitsig`/`edges`/`impact` land with their slices.
+Don't pre-create empty modules — `gitsig`/`edges`/`impact` land with their slices; `activation`
+lands with the access-log tier, not v1.
 
 ---
 
@@ -199,18 +201,31 @@ Design rules (DECIDED):
 
 ## 4. Activation — the differentiator (DECIDED algorithm; params tunable)
 
-> **What we expect from litectx's memory (recalibrated 2026-06-04).** The "memory" is not
-> search — it is an **ACT-R activation layer over the graph** that models which chunks are
-> *cognitively hot*: frequently/recently touched (**BLA**), structurally central (**spreading**
-> over edges), query-relevant (**context boost**), and stable-vs-volatile **by `kind`**
-> (type-decay + churn). v1 has no access log, so memory is **seeded from git history**
-> (cold-start BLA over commit timestamps, §4.1) — the repo's own change history is the proxy for
-> "what's been worked on." **The bar:** dual-hybrid (BM25 + activation) must measurably beat
-> plain BM25 on the multi-repo gate — the POC confirmed **graph spreading generalizes**; BLA
-> earns weight only as the **full** formula (type-decay + churn, not the recency half) and only
-> if it holds on both repos. Embeddings stay an **optional tier** (dual ≈85% vs tri ≈95% — not
-> worth the cold-start + ML dep by default). The activation engine is **kind-agnostic** — the
-> same math will ratchet `fact`/`episode` memory later; code is just v1's content.
+> **What we expect from litectx's memory (recalibrated 2026-06-05, POC-corrected).** The "memory"
+> is an **ACT-R activation layer over the graph** with two terms: **spreading** (activation flows
+> along call/import edges) and **base-level** (frequency/recency of access, with type-decay + churn
+> by `kind`). **The Slice-4 Step-0 POC split them cleanly:**
+>
+> - **Spreading is the v1 ranking win** — validated on *both* repos (+0.028 aurora / +0.021
+>   gitdone, positive on every breakdown). It needs edges, so it is the **next ranking slice**.
+>   In v1, "ACT-R in recall" effectively *means spreading*.
+> - **Base-level activation does NOT earn v1 ranking weight.** It needs a real **access log**, and
+>   v1 has none. Seeding it from git history (commits as pseudo-accesses, §4.1) — even with the
+>   full **type-decay + churn** formula — is **repo-dependent**: net-positive on aurora,
+>   net-negative on gitdone at *every* weight (POC: `RESULTS.md` "Slice-4 Step-0"). decay+churn did
+>   not rescue it (it bites *stale* high-churn files; gitdone's failure is *recently*-churned ones).
+>   A repo-dependent prior is the one thing recall must not ship. **So base-level activation is
+>   deferred to the access-log future** — litectx's long-running-memory differentiator — and
+>   validated *then*, on real usage. The `activations` table is schema-reserved for it.
+> - **Git is not a scored signal; it is passive activity metadata** (commit count + last-modified,
+>   shown alongside hits as grounding). This re-derives aurora's own design: aurora never scored git
+>   directly — git *seeded* activation and was *displayed raw*; its scored activation rode a real
+>   access log ("accessed 7x").
+>
+> **v1 default ranking = BM25 + spreading** (two zero-ML signals). **Embeddings stay an optional
+> tier** (semantic; dual ≈85% vs tri ≈95% — not worth the cold-start + ML dep by default). The
+> activation engine remains **kind-agnostic** — the same math ratchets `fact`/`episode` memory once
+> the access log exists; code is just v1's content.
 
 ACT-R total activation, reimplemented in JS (grounding: aurora `activation/*`,
 `docs/02-engineering/aurora-borrow-ledger.md`):
@@ -235,9 +250,22 @@ Ship AURORA's 5 presets as config presets. All formulas are pure functions → n
 JS port, unit-testable. **Every constant above is source-verified in
 `docs/02-engineering/aurora-borrow-ledger.md` (aurora `@ 750a39d`)** — that ledger, not this
 summary, is the calibration source of truth; start at aurora's tested defaults, re-validate any
-change on both repos before it earns weight.
+change on both repos before it earns weight. **Scope note (POC-corrected):** of these, only
+**spreading** ships as a v1 *ranking* term (slice 4, over edges). The base-level terms (BLA,
+type-decay, churn, context-boost) are the **access-log tier** — built and validated when real
+accesses exist, not at cold-start (see §4.1 and §14 #1/#4).
 
-### 4.1 Cold-start ranking — solved cleanly with git as the prior (DECIDED design)
+### 4.1 Cold-start ranking — git is activity metadata, not a ranking prior (POC-corrected 2026-06-05)
+
+> **Original design (retired for v1 ranking).** The plan below seeded base-level activation from
+> git commit timestamps so cold-start recall wouldn't collapse to keyword-only. The **Slice-4
+> Step-0 POC falsified it as a ranking signal**: git-seeded base-level — *even with* the full
+> type-decay + churn formula — is **repo-dependent** (net-positive aurora, net-negative gitdone at
+> every weight; `RESULTS.md` "Slice-4 Step-0"). So in v1: **git is passive activity metadata**
+> (commit count + last-modified, displayed alongside hits, not scored), cold-start ranking is
+> **BM25 + spreading**, and the unified BLA model below is **kept for the access-log future** —
+> where it is validated on real usage, the only place it has signal. The reasoning below stands as
+> the *future* design; it is no longer the v1 cold-start path.
 
 At first index there is no access history, so a naive BLA would zero out everything and
 recall would collapse to keyword-only. **AURORA already solved this the way we want** —
@@ -265,10 +293,12 @@ approach with **safe defaults**:
 Two-stage (grounding: `hybrid_retriever.py`, `MEM_INDEXING.md §Hybrid`):
 
 1. **FTS5 keyword gate** — SQLite FTS5 BM25 → top ~N candidates **per kind**.
-2. **Kind-scoped ranking** → BM25 now; activation (slice 4) and semantic (embeddings tier)
-   layer in **within a kind**, never across:
-   - **code**: BM25 → +activation 30% / semantic 20% as they land.
-   - **doc/kb**: BM25 → +activation / semantic (prose benefits more from embeddings).
+2. **Kind-scoped ranking** → BM25 now; **spreading** (slice 4, over edges) and **semantic**
+   (embeddings tier) layer in **within a kind**, never across. Base-level activation is the
+   access-log tier (§4), not a v1 ranking term:
+   - **code**: BM25 → +spreading (graph) → +semantic (embeddings tier).
+   - **doc/kb**: BM25 → +semantic (prose benefits most from embeddings; few code edges).
+   - *(grounding shown, not scored:* git activity per chunk; impact/refs via the impact view.)
 
 **Code-over-md — solved structurally by kind-scoping, NOT by weights (slice 3 decision).**
 The bug: prose-heavy md out-surfaced code because a query term is *mentioned* more in prose.
@@ -298,7 +328,7 @@ it to 0.480 with **12/22 queries** prose-buried. The two surviving structural me
 2. **Code-aware FTS body** (slice 3, `tokenize.indexBody`): identifier-split supplement
    (`getUserData → get user data`) + symbol names folded in, so a descriptive query matches
    identifier-dense code. (AURORA lesson: sparse content → descriptive queries return 0.)
-   *Deps + `k1/b` tuning deferred — neutral on the bench, and deps ride slice-5 edge extraction.*
+   *Deps + `k1/b` tuning deferred — neutral on the bench, and deps ride slice-4 edge extraction.*
 
 ---
 
@@ -484,8 +514,8 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
    (aurora MRR 0.523→0.434; max/sum/top3 pooling all lost), because for *file*-finding whole-file
    BM25 is a strong baseline that sub-file chunks fragment. So the file-level FTS doc stays the
    recall gate (bench holds **exactly** — aurora 0.523/64%, gitdone 0.416/45%) and the line-ranged
-   symbol chunks land *alongside* as the structural substrate that block git-blame (slice 4) and
-   edges (slice 5) ride on. The recall jump the chunks enable arrives in slices 3–4, not here
+   symbol chunks land *alongside* as the structural substrate that edges + spreading (slice 4) ride
+   on. The recall jump the chunks enable arrives in slices 3–4, not here
    (POC: `poc/RESULTS.md` "Slice-2"). Binding: **web-tree-sitter (WASM)** pinned to `0.22.6`,
    grammars **vendored** under `src/grammars/` (py/js/ts, Unlicense) — native tree-sitter was ~3×
    *slower* for this walk-heavy workload with identical output (POC: `binding-bench`). **+1 prod
@@ -500,31 +530,54 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
    AURORA's per-kind hybrid *weights* — those need ≥2 signals and degenerate to a forbidden
    md-penalty under BM25-only. Gate `aurora-mixed` (py+md): `kind:"code"` holds 0.525→**0.545** vs
    0.480 shared-ranking (12/22 prose-buried). 6 new tests pin the invariant. (deps/`k1·b` deferred:
-   neutral on bench; deps ride slice-5 edges.)
-4. ACT-R activation engine + presets + cold-start (§4) → **recall view** ships. Per the POC:
-   base-level → **decay+churn** → context-boost; **validate on both repos before BLA gets weight.**
-   Spreading is scaffolded here but **earns weight in slice 5**, once real edges exist (the POC
-   already proved it generalizes — it's the priority the moment edges land).
-5. tree-sitter + ripgrep edge extraction + per-language semantics config (§7) → graph edges.
-   **Both `calls` (symbol blast radius) and `imports` (file connectivity) — not calls alone (§7,
-   ledger §11);** the dead-code candidate falls out as inverse impact.
-6. **impact view** (reference count → risk bucket; complexity from AST) over the edges.
+   neutral on bench; deps ride slice-4 edges.)
+4. **Edges + spreading (the next ranking win) + git activity metadata** — RESHAPED 2026-06-05
+   after the Slice-4 Step-0 POC (`RESULTS.md`; old slice 4 = "ACT-R activation in recall" is
+   **dissolved** — base-level activation does not earn v1 ranking weight, see §4/§14 #1):
+   - **Edges** — tree-sitter + ripgrep edge extraction + per-language semantics config (§7) →
+     **both `calls` (symbol blast radius) and `imports` (file connectivity)** (§7, ledger §11); the
+     dead-code candidate falls out as inverse impact. The two edge types have **different jobs**
+     (Step-0 POC, `RESULTS.md`): **imports drive recall spreading; calls feed the impact view**
+     (slice 5), not recall.
+   - **Spreading** — 1-hop activation over **import** edges, fused into recall **within a kind** (the
+     slice-3 invariant holds; never re-rank across kinds). This is the POC-validated ranking lift
+     (imports: +0.028 aurora / +0.021 gitdone, holds on both; weight ≈0.4). **Call edges are NOT
+     folded into recall** — under a (noisy) proxy they were repo-dependent (great aurora, −gitdone),
+     the same failure that rejected base-level activation; re-test calls-in-recall only with the
+     precise extractor before ever scoring them. Re-run the multi-repo gate incl. `aurora-mixed`;
+     adopt the weight only if **≥ baseline on every repo**. **Default ranking becomes BM25 +
+     spreading (imports).**
+   - **Git activity metadata** — file-level `git log` → commit count + last-modified attached to
+     each hit as displayed grounding (`gitsig`). **Not a scored term.** Cheap (no per-block blame);
+     independent of edges, so it can land first or alongside.
+5. **impact view** (reference count → risk bucket; complexity from AST) over the slice-4 edges.
+
+**Deferred to post-v1 tiers (schema-reserved, not v1 slices):**
+- **Embeddings / semantic tier** (§8) — opt-in; adds semantic as the third ranking signal
+  (tri-hybrid). Off by default (ML dep + cold latency).
+- **Access log + base-level activation** (§4, §14 #4) — litectx's long-running-memory
+  differentiator. Once real accesses accumulate in the reserved `activations` table, BLA +
+  decay+churn become a *validated* scored signal (on real usage, not git proxy). Git activity
+  metadata (slice 4) is the v1 grounding that stands in for it.
 
 **Impact-view timing:** sequenced *after* recall because it depends on accurate edges
-(step 5). If step 5 slips, recall ships as v1 and impact lands v1.1 — the graph substrate
+(slice 4). If edges slip, recall ships as v1 and impact lands v1.1 — the graph substrate
 makes that a clean cut, not a rework.
 
 ---
 
 ## 12. What to carry over from AURORA (borrow, don't port)
 
-**Reimplement in clean ESM JS** (pure logic, near-verbatim): ACT-R formulas (§4), code-aware
-BM25 tokenizer + `k1/b` (§5), two-stage retrieval + code-over-md fix (§5), 3-tier
-incremental indexing (§6), block-level git-blame extraction (§6), per-language
-edge-semantics config (§7), the `kind`-keyed type taxonomy (§3.1).
+**Reimplement in clean ESM JS** (pure logic, near-verbatim): the **spreading** ACT-R term (§4,
+slice 4), code-aware BM25 tokenizer + `k1/b` (§5), two-stage retrieval + code-over-md fix (§5),
+3-tier incremental indexing (§6), per-language edge-semantics config (§7), the `kind`-keyed type
+taxonomy (§3.1). **File-level** git activity (count+recency) for metadata (slice 4). *(Base-level
+ACT-R formulas + block-level git-blame = access-log tier, deferred — §4, §14 #1.)*
 
 **Carry the calibration, not just the code:**
-- dual-hybrid ≈ 85% vs tri-hybrid ≈ 95% → embeddings are a tier, not the spine.
+- dual-hybrid ≈ 85% vs tri-hybrid ≈ 95% → embeddings are a tier, not the spine. (litectx's v1
+  "dual" = **BM25 + spreading**, not BM25 + base-level activation — the POC showed base-level needs
+  an access log to pull weight; §4, §14 #1.)
 - code-over-md is solved by **kind-scoping** (§5, slice 3), not a penalty hack and not weights:
   AURORA's per-kind hybrid weights need ≥2 signals to be principled and collapse to a forbidden
   md-penalty under BM25-only — and any shared ranking is hostage to the repo's doc/code volume
@@ -532,7 +585,9 @@ edge-semantics config (§7), the `kind`-keyed type taxonomy (§3.1).
   doctrine*, not the weight mechanism.
 - edges from ripgrep/lang-def, **not** tree-sitter's import-parsing (AURORA's
   `_identify_dependencies()` was a dead side-path — do not repeat).
-- type-specific decay + churn parameters (§4) are tuned values worth keeping.
+- type-specific decay + churn parameters (§4) are tuned values worth keeping — but they belong to
+  the **access-log tier** (base-level activation), not v1 ranking (POC: they don't rescue git-only
+  base-level; §14 #1).
 - BM25 content must include deps + file_path or descriptive queries return 0.
 
 **Leave behind entirely:** `soar`/`reasoning`/`spawner`/`cli` (~50k LOC); and AURORA's
@@ -565,20 +620,27 @@ package** (§7).
 
 ## 14. Open questions (DRAFT — settle during build)
 
-1. **Cold-start unification** — ~~does the git-commits-as-pseudo-accesses model (§4.1) hold up
-   in the POC?~~ **POC-ANSWERED (two repos):** the unified `ln(Σ t^-d)` recency prior **does not
-   generalize as a co-equal weight** — net-positive on aurora (hot-file queries) but net-negative
-   on gitdone, where the combined preset lost to plain BM25. Resolution: keep the unified model but
-   it is only valid **paired with decay+churn** (§4) and at a **small weight / tiebreaker**, not
-   the 0.3 used in the POC. Adopt a weight only if it scores **≥ baseline on every repo** in the
-   `poc/` multi-repo harness — one repo is provably not enough (aurora alone would have shipped a
-   gitdone regression).
+1. **Cold-start / git-seeded activation** — ~~does git-commits-as-pseudo-accesses (§4.1) work?~~
+   **CLOSED (Slice-4 Step-0 POC, two repos):** git-seeded **base-level activation does not earn v1
+   ranking weight — not even with decay+churn.** The full formula (BLA − type-decay − churn) is
+   net-positive on aurora but net-negative on gitdone at *every* weight 0.1–0.4 (`RESULTS.md`); the
+   "missing half" (decay+churn) made gitdone *worse*, because churn penalizes *stale* high-churn
+   files and gitdone's failure mode is *recently*-churned ones. Root cause: it is a **repo-dependent
+   prior** because v1 has **no access log** to give base-level real signal. **Resolution:** (a)
+   base-level activation → **access-log tier** (§4, #4 below), validated then on real usage; (b)
+   **git → passive activity metadata** (commit count + recency, displayed, not scored); (c) the v1
+   ranking lift comes from **spreading** (slice 4), which *did* hold ≥ baseline on both repos. The
+   "adopt only if ≥ baseline on every repo" rule stands and is what rejected base-level — one repo
+   (aurora) alone would have shipped a gitdone regression.
 2. **MMR without embeddings** — cheap lexical/structural diversity proxy, or accept that MMR
    is embeddings-tier only? (Default: tier-only.)
 3. **Edge types beyond `calls`/`imports`/`depends_on`** — add `inherits`/`defines` in v1 or
    defer? (Lean: defer; the three cover impact.)
-4. **Access-history write path** — does litectx own "agent accessed chunk X" writes, or does
-   the consumer report accesses? (Affects who drives BLA.)
+4. **Access-history write path** — **now the gate for base-level activation** (#1): it only earns
+   ranking weight once a real access log exists. Open: does litectx own "agent accessed chunk X"
+   writes (e.g. `recall()` logs hits to the reserved `activations` table), or does the consumer
+   report accesses? This is the **access-log tier**'s core design and litectx's long-running-memory
+   differentiator — design it when the first long-running consumer is real.
 5. **Consumption surfaces & graph-view packaging** — **RESOLVED.** The core is the **library**
    (mechanism). A **thin CLI ships in-repo** (`bin/`) from v1 — it serves humans, cron, and
    shell-out agents at near-zero cost, and matches house style. **MCP and the `codegraph`/
@@ -600,11 +662,14 @@ This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm
 schema · tree-sitter symbol chunking `nodes` substrate · **kind-scoped recall** = the code-over-md
 fix; `src/` + CLI + tests + integration gate; §11.2). **DECIDED:** name, stack, storage, indexing,
 edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one, **the code-over-md fix (slice 3:
-kind-scoping, not weights)**, the cold-start design, packaging (§14 #5), and the build methodology
-(§11.1). **POC-REFINED:** graph spreading confirmed as the differentiator; git-seeded BLA must ship
-paired with decay+churn at a gentler weight (§4.1, §14 #1). **SLICE-3-REFINED:** the code-over-md fix
-is *kind-scoping* — AURORA's per-kind hybrid weights need ≥2 signals to be principled and degenerate
-to a forbidden md-penalty under BM25-only; kinds never sharing a ranking dissolves the burial with no
-calibration. **Next action:** slice 4 (ACT-R activation, §4) — git-seeded BLA + decay/churn + 1-hop
-spreading layered *within a kind*; re-run the multi-repo gate (incl. `aurora-mixed`), adopt only
-weights ≥ baseline on every repo. This is where recall should first move beyond BM25.
+kind-scoping, not weights)**, packaging (§14 #5), and the build methodology (§11.1).
+**SLICE-4-STEP-0-REFINED (2026-06-05):** git-seeded **base-level activation does not earn v1 ranking
+weight — not even with decay+churn** (repo-dependent: +aurora / −gitdone at every weight 0.1–0.4;
+`RESULTS.md`). It re-derives aurora's structure: base-level needs a real **access log**, which v1
+lacks. So base-level activation → **access-log tier** (deferred); **git → passive activity metadata**
+(displayed, not scored); the v1 ranking lift comes from **spreading** (validated on both repos).
+**v1 default ranking = BM25 + spreading.** **SLICE-3-REFINED:** the code-over-md fix is *kind-scoping*
+(kinds never share a ranking), not weights. **Next action:** **slice 4 = edges + spreading +
+git-activity-metadata** (§11.2) — tree-sitter+ripgrep `calls`/`imports` edges → 1-hop spreading fused
+*within a kind*; re-run the multi-repo gate (incl. `aurora-mixed`), adopt the spreading weight only if
+≥ baseline on every repo. This is where recall first moves beyond BM25.

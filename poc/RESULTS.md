@@ -172,3 +172,94 @@ object per node across the C++ boundary, WASM stays in linear memory.
 **Decision: WASM** (`web-tree-sitter@0.22.6` + `tree-sitter-wasms`). Faster, identical
 output, leaner/portable, no native compile. Sole cost: pin the runtime to the grammars'
 ABI (0.22.6) — a stable pin, re-evaluated only if we vendor newer-ABI `.wasm` grammars.
+
+---
+
+## Slice-4 Step-0 POC — activation does NOT earn ranking weight (2026-06-05)
+
+Harness: `poc/activation-poc.mjs` (throwaway). Step-0 gate **before** building the git-blame
+plumbing (aurora's "336× indexing killer"): the original POC (above) shipped only the
+**recency half** of ACT-R base-level and it failed gitdone. Ledger §3 named the missing half —
+**type-decay + churn**. The one question: *does git-seeded activation **with** decay+churn (NO
+spreading — that's the edge slice) beat plain BM25 on **both** repos?* Adopt a weight only if
+`≥ baseline on every repo` (the POC's hard rule; gitdone vetoed flat BLA once already).
+
+Model (PRD §4.1.2): commits as pseudo-accesses. `BLA = ln(Σ max(age_days,1)^-0.5)`;
+`decay = (0.40 + 0.1·log10(commits+1)) · log10(max(days_since_last_commit,1))`; `act = BLA − decay`,
+min-max normed, fused with BM25. Swept weights 0.1–0.4 for full-activation and recency-only.
+
+```
+                 aurora ALL    gitdone ALL    adoptable (≥ baseline both)?
+  +bla.4 (rec)   +0.005        -0.030         ✗
+  +act.4         +0.009        -0.094         ✗   ← decay+churn made gitdone WORSE
+  +act.3 (0.3)   +0.038        -0.034         ✗
+  +act.2 (0.2)   +0.060        -0.016         ✗
+  +act.1 (0.1)   +0.005        -0.004         ✗   ← only "safe" because ≈ zero
+```
+
+**Verdict: FAIL — no weight is ≥ baseline on both repos.** Two findings:
+
+1. **The decay+churn term — the half the ledger said was missing — did not rescue gitdone; at
+   co-equal weight it made it *worse* (−0.094 vs −0.030).** Root cause is structural: BLA *and*
+   decay-recency both reward recent commits; the only counterweight to "hot file looks relevant"
+   is **churn**, which raises the decay rate but only bites *stale* high-churn files. gitdone's
+   failure mode is *recently*-churned files — exactly what churn does not catch. So the prescribed
+   fix doesn't address the actual failure. Git-seeded base-level activation is simply
+   **repo-dependent** (great on aurora, poison on gitdone) — the cardinal sin for a ranking prior.
+2. **The only safe weight (0.1) is safe because it contributes ≈ nothing** (gitdone −0.004 = noise).
+
+**Why this is right, not a disappointment.** It re-derives aurora's own structure: aurora never
+scored git directly — git **seeded activation** and was **displayed raw**; the scored activation
+term rode a *real access log* ("accessed 7x"). litectx v1 has no access log, so the activation slot
+is empty and git-alone can't fill it for ranking. POC-first did its job: we learned this **before**
+building the expensive per-block blame plumbing, whose only v1 consumer was this signal.
+
+**What this changes (carried into PRD/ledger):**
+- **Base-level activation (BLA·decay·churn) is deferred to the access-log future** — litectx's
+  long-running-memory differentiator. Schema's `activations` table is reserved; the math is
+  validated *then*, on real usage, not git proxy. (PRD §4, §14 #1/#4; ledger §2/§3/§6/§8.)
+- **Git becomes passive activity metadata** (commit count + recency, file-level — no blame
+  plumbing) shown *alongside* hits as grounding, not a scored term. Mirrors aurora's result card.
+- **"ACT-R" in v1 ranking = spreading** (the graph term), which the original POC validated on both
+  repos (+0.028 aurora / +0.021 gitdone). It needs edges → it becomes the **next ranking slice**.
+- **v1 default ranking = BM25 + spreading** (two zero-ML signals); semantic is the embeddings tier;
+  base-level activation is the access-log tier.
+
+---
+
+## Slice-4 spreading Step-0 POC — imports lift recall; calls are for impact, not recall (2026-06-05)
+
+Harness: `poc/spreading-poc.mjs` (throwaway). The original POC validated spreading with **import**
+edges only; slice 4 plans **both calls + imports**. Two questions before building the `edges` module:
+**Q1** does spreading still lift over the (code-aware) baseline? **Q2** do **call** edges help recall
+spreading, or just imports? Edge approximations: imports = run.mjs's `import`/`require` regex;
+calls ≈ symbol-def → reference scan (crude, over-links; see caveat).
+
+```
+VERDICT — spreading weight ≥ baseline on EVERY repo (ALL MRR):
+  ✓ ADOPTABLE  imp.4    aurora +0.028   gitdone +0.021     ← imports: reproduces the original POC
+  ✓ ADOPTABLE  imp.3    aurora +0.027   gitdone +0.018
+  ✗ rejected   call.4   aurora +0.036   gitdone -0.001     ← calls: great on aurora, dead on gitdone
+  ✗ rejected   both.4   aurora +0.036   gitdone -0.004     ← calls DILUTE the import win on gitdone
+```
+
+**Findings:**
+- **Q1 → YES. Import-edge spreading holds on both repos** (+0.028 aurora / +0.021 gitdone; HARD
+  +0.050 / +0.029, gitdone HARD P@3 50%→70%). Identical to the original POC over the slice-3-era
+  baseline. **Build it** — recall spreading over import edges, weight ≈ 0.4 (0.3 nearly as good).
+- **Q2 → NO (for recall). Call edges do not help recall spreading** — strong on aurora but
+  net-neutral/negative on gitdone, and **adding them to imports drags the combined set below
+  baseline on gitdone**. Same repo-dependence failure mode as base-level activation: a signal that
+  wins on one repo and loses on the other is rejected. **Recall spreading = imports only.**
+- **Calls keep their real job: the impact view** (blast radius, slice 5), where over-counting is
+  acceptable by doctrine. They are not a recall signal in v1.
+
+**⚠️ Caveat — the call result is SUSPECT, not final.** The call approximation over-links badly
+(gitdone: **2069** call-ish edges vs **153** imports, ~13×) because it links any file *mentioning* a
+symbol name, not actual call sites. The real tree-sitter call-query + `ripgrep -w` extraction is far
+more precise. So the honest read is: *imports-in-recall is confirmed; calls-in-recall is unproven and
+looks harmful under a noisy proxy.* Re-test calls-in-recall only with the precise extractor before
+ever folding them into ranking — default to **imports-only recall spreading** until then.
+
+**Slice-4 refinement:** recall spreading rides **import edges**; the `edges` module still extracts
+**both** (imports for recall, calls for impact/slice-5). Don't fuse calls into recall on spec.

@@ -25,7 +25,7 @@
 
 litectx is **one substrate, two views**. The substrate is a code+context **graph**: typed nodes (functions, classes, files, doc chunks), typed edges (calls, called-by, imports), and per-node signals (recency, frequency, churn, complexity). Both views read that same graph — composed at query time, never re-extracted.
 
-- **recall** — ranked search. Candidates are gated by FTS5/BM25, then re-weighted by **ACT-R activation**: base-level (recency × frequency), spreading activation across graph edges, and per-kind decay. The result is what's *relevant now*, not just what lexically matches.
+- **recall** — ranked search. Candidates are gated by FTS5/BM25, then re-weighted by **spreading activation across graph edges** (the ACT-R term validated to generalize). Git activity (commits, recency) rides along as per-hit grounding, not a score. The result is what's *relevant now*, not just what lexically matches. *(Base-level activation — recency × frequency decay — is the long-running-memory tier, layered in once a real access log exists; embeddings add the semantic tier.)*
 - **impact** — give it a symbol; it walks calling / called-by edges to a **blast radius** and buckets the change risk **low / med / high**. Over-counting is acceptable by design — the output is a risk *bucket*, not a precise reference list.
 
 It is **not** an LSP / language server, **not** a code-intelligence SaaS, **not** an embeddings-first semantic search (that's the opt-in tier), and ships **no UI or server** — it's a library against a SQLite file. The only per-adopter customization is *what* to index (by file extension) and *which* tier (deterministic vs. + embeddings); litectx owns the shape (extract → graph → rank).
@@ -67,7 +67,7 @@ const node = ctx.graph.node("src/auth.ts#validateToken");
 const callers = ctx.graph.edges(node, "called-by");
 ```
 
-**Indexing is routed by file extension**, never by sniffing content. v1 languages: **TypeScript, JavaScript, Python** for code, plus **Markdown** docs. Re-indexing is incremental over a 3-tier git check (status → mtime → content-hash), and per-chunk **git-blame** seeds the recency/frequency signals — so a freshly cloned repo ranks sensibly on first index (commit timestamps bootstrap the activation history).
+**Indexing is routed by file extension**, never by sniffing content. v1 languages: **TypeScript, JavaScript, Python** for code, plus **Markdown** docs. Re-indexing is incremental over a 3-tier git check (status → mtime → content-hash), and **git activity** (commit count + recency, from `git log`) is attached to each hit as grounding metadata — so you can see what's been worked on, without it skewing the ranking.
 
 **`kind` is first-class.** v1 indexes `code` and `doc` (Markdown). The schema reserves `fact`, `episode`, and other doc formats (pdf/docx/txt via a `format` field) with **no migration** — activation applies across kinds, which is how longer-term memory lands later.
 
