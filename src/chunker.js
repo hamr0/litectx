@@ -321,11 +321,19 @@ export async function callSitesOf(format, body, name) {
   }
   const callT = new Set(lang.callTypes);
   const defT = new Set(lang.defTypes);
+  const decoT = new Set(lang.decoratorTypes ?? []);
   /** @type {{ line: number, enclosing: string|null }[]} */
   const out = [];
   (function walk(n) {
     if (callT.has(n.type) && calleeName(n.childForFieldName("function")) === name) {
       out.push({ line: n.startPosition.row, enclosing: enclosingDef(n, defT) });
+    } else if (decoT.has(n.type)) {
+      // a bare `@name` / `@a.name` decorator APPLIES (= calls) `name` at decoration time. Skip the
+      // `@name(...)` form — its child is a call node already counted by the branch above (no double).
+      const expr = n.namedChild(0);
+      if (expr && !callT.has(expr.type) && calleeName(expr) === name) {
+        out.push({ line: n.startPosition.row, enclosing: enclosingDef(n, defT) });
+      }
     }
     for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
   })(tree.rootNode);

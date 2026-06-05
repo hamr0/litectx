@@ -159,3 +159,34 @@ test("an unknown symbol has no impact to report", async () => {
     assert.equal(await ctx.impact("doesNotExist"), null);
   });
 });
+
+test("a bare `@decorator` is a CONFIRMED caller, not just a mention", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-deco-"));
+  // handle_errors is only ever applied as `@handle_errors` (no parens) — not a `call` node. Without
+  // decorator handling it would show 0 confirmed callers (mention-floor safe but list-incomplete).
+  writeFileSync(
+    join(root, "deco.py"),
+    [
+      "def handle_errors(f):",
+      "    return f",
+      "",
+      "@handle_errors",
+      "def my_command():",
+      "    return 1",
+      "",
+      "@handle_errors",
+      "def other_command():",
+      "    return 2",
+      "",
+    ].join("\n")
+  );
+  const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+  await ctx.index();
+  const r = await ctx.impact("handle_errors");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+  assert.ok(r);
+  assert.equal(r.confirmed, 2, "both @handle_errors decorations are confirmed call sites");
+  assert.ok(r.callers.some((c) => c.path === "deco.py"), "the decorating file is a caller");
+  assert.equal(r.risk, "low", "2 refs → low, but never isolated");
+});

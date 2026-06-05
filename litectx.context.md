@@ -167,7 +167,7 @@ Impact = {
   mentions: number,     // external `rg -w` word occurrences (the safety floor)
   risk: "low" | "medium" | "high",   // bucket on refCount: ≤2 / 3–10 / 11+
   complexity: number,   // cyclomatic-ish decision-point count (max over defs)
-  callers: { path: string, line: number, symbol: string | null }[],  // confirmed call sites
+  callers: { path: string, line: number, symbol: string | null }[],  // confirmed call sites (incl. bare `@decorator` applications)
   callees: string[],    // intra-repo names this symbol calls (externals dropped)
   hedges: string[],     // §7.2 safety caveats — see below
 }

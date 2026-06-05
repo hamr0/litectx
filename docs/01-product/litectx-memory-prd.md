@@ -662,9 +662,16 @@ view-appropriate metric.** Same machine, different labels:
 | View | Corpus (stable repos) | Labels | Metric | Status |
 |---|---|---|---|---|
 | **recall** | aurora (Py), gitdone (JS) | `{ q → target file }` | **MRR / P@k**, hold-or-beat | ✅ shipped |
-| **impact** | **aurora (Py) + mcprune (JS)** | `{ symbol → known callers; isolated? }` | **caller-recall (miss-rate)** — must be ~100%; over-count tolerated (§7.2) | 🚧 **next** — validates 5a (no TS dependency) |
+| **impact** | **aurora (Py) + mcprune (JS)** | `{ symbol → known callers; isolated? }` | **caller-recall (miss-rate)** — must be ~100%; over-count tolerated (§7.2) | ✅ shipped (`npm run bench:impact`) — 100% confirmed-caller recall, **0 false-isolations** on both repos |
 | **impact (TS false-isolation)** | TS fixture (#1) | symbol reached *only* via alias/barrel → `isolated:false` | asserts impact does **not** report isolated | 🚧 5b (needs #1) |
 | write/compress/select/… | tbd | tbd | tbd | post-v1 |
+
+> **Status (shipped):** `poc/impact-bench.mjs` + audited label sets (`impact-aurora` Py,
+> `impact-mcprune` JS) — **100% confirmed-caller recall, 0 false-isolations** on both. Its first run
+> earned its keep twice: it drove a tool fix (bare `@decorator` applications are now confirmed
+> callers, not just mentions — `langdef.decoratorTypes` + `chunker.callSitesOf`) and it caught an
+> over-inclusive label of mine (a self-application inside the decorator's own def). Labels are
+> hand-audited; trust the metric only as far as the audit (the recurring lesson — cf. multis recall).
 
 **The impact metric is not MRR — it is dictated by the §7.2 asymmetry.** Recall's risk is a *miss
 buries an answer* (ranking quality → MRR). Impact's risk is a *miss is a false "isolated → safe"
