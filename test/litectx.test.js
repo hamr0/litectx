@@ -33,7 +33,7 @@ test("recall ranks the relevant file first", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const hits = ctx.recall("how do we validate the auth token", { limit: 5 });
+  const hits = ctx.recall("how do we validate the auth token", { kind: "code", n: 5 });
   assert.ok(hits.length > 0, "expected at least one hit");
   assert.equal(hits[0].path, "src/auth.js");
   ctx.close();
@@ -44,18 +44,20 @@ test("recall matches on intent via the doc body, not just filename", async () =>
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const hits = ctx.recall("sending email notifications", { limit: 5 });
-  const paths = hits.map((h) => h.path);
+  // grouped default (no kind) → one ranked list per kind; flatten to check the intent matched.
+  const grouped = ctx.recall("sending email notifications");
+  const paths = [...grouped.code, ...grouped.doc].map((h) => h.path);
   assert.ok(paths.includes("src/mailer.js") || paths.includes("README.md"), `got ${paths.join(",")}`);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
 
-test("a query with no usable terms returns no hits", async () => {
+test("a query with no usable terms returns empty groups", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  assert.deepEqual(ctx.recall("a of to"), []);
+  // no kind → grouped over all KINDS; no usable terms → every group empty (never a crash).
+  assert.deepEqual(ctx.recall("a of to"), { code: [], doc: [] });
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

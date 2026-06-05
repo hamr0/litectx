@@ -43,7 +43,7 @@ laid underneath it.
 | First-class `kind` / `format` per document | ✅ shipped |
 | Ranked **recall** over FTS5 (BM25), file-granularity | ✅ shipped |
 | Symbol-level `nodes` substrate (tree-sitter: TS/JS/Python + md sections) | ✅ shipped (slice 2) |
-| Code-aware BM25 + code-over-md fix | 🚧 roadmap (slice 3) |
+| **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
 | ACT-R **activation**-weighted recall + presets + git cold-start | 🚧 roadmap (slice 4) |
 | Graph **edges** (`calls` / `imports`) | 🚧 roadmap (slice 5) |
 | **impact** view (blast radius + risk bucket) · `getNode` / `related` | 🚧 roadmap (slices 5–6) |
@@ -60,7 +60,7 @@ import { LiteCtx } from "litectx";
 
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
-const hits = ctx.recall("where do we validate the auth token?", { limit: 10 });
+const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
 // hits: [{ path, kind, format, score }, ...]  (score: higher = more relevant)
 ctx.close();
 ```
@@ -106,11 +106,24 @@ Builds or **incrementally refreshes** the index over `root`.
   unchanged: number } // skipped (mtime/size or content unchanged)
 ```
 
-### `ctx.recall(query, opts?)` → `Hit[]`
-Ranked recall over the index. Returns `[]` if the query has no usable terms
-(after stopword/length filtering). Synchronous.
+### `ctx.recall(query, opts?)` → `Hit[]` | `Record<kind, Hit[]>`
+Ranked recall over the index, **scoped by memory `kind`**. Synchronous.
 
-- `opts.limit?: number` — max hits (default `10`).
+**Kinds never share a ranking.** Each kind is FTS-gated and BM25-ranked only against its
+own kind, in a separate query — so prose volume can never bury code (no weights, no md
+penalty). The return shape follows the `kind` argument:
+
+| call | mode | returns | default `n` |
+|---|---|---|---|
+| `recall(q, { kind: "code" })` | single kind | flat `Hit[]` | `10` |
+| `recall(q, { kind: ["code","doc"] })` | multiple | grouped `{ code:[…], doc:[…] }` | `5` each |
+| `recall(q)` | omitted → all `KINDS` | grouped `{ code:[…], doc:[…] }` | `5` each |
+
+- `opts.kind?: string | string[]` — one kind (flat list) or several (grouped). Omitted →
+  grouped over all known kinds (the safe CLI/agent default; never a flattened ranking).
+- `opts.n?: number` — max hits **per kind**; raise to dig deeper. No hard cap, no
+  pagination (a larger `n` is a larger context — your budget to manage).
+- No usable query terms → `[]` (single kind) or empty groups `{ code:[], doc:[] }`.
 
 `Hit`:
 ```ts
@@ -129,6 +142,8 @@ Indexed document count (file-granularity).
 Closes the SQLite connection. Call it when done (especially for file-backed DBs).
 
 ### Named exports (advanced / extension)
+- `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
+  over (`["code", "doc"]` in v1; grows as `fact` / `episode` extractors land).
 - `Store` — the SQLite/FTS5 store class (used internally by `LiteCtx`; exposed for
   tooling and tests). Notable read methods: `count()`, `nodeCount()`,
   `nodesForPath(path)` → `{ symbol, node_type, start_line, end_line }[]`.

@@ -40,8 +40,16 @@ Used by:    2 files, 2 refs, complexity 44%, risk MED   impact view
   (`bm25_scorer.py:137`); `IDF = log((N − n + 0.5)/(n + 0.5) + 1)`.
 - **Constants:** `k1 = 1.5`, `b = 0.75` (`bm25_scorer.py:164`).
 - **litectx target:** **slice 3** (code-aware BM25). v1 uses FTS5's native `bm25()`; the `k1/b`
-  matter only if/when we hand-roll scoring. Carry the **two-stage retrieval** (FTS5 top-100 gate →
-  re-rank) and the **code-over-md** structural fix here, not a penalty hack.
+  matter only if/when we hand-roll scoring.
+- **✅ SHIPPED (slice 3) — and corrected AURORA's design.** Carried: FTS5 keyword gate + a
+  code-aware FTS body (`tokenize.indexBody`: camelCase identifier split + symbol names). **Did NOT
+  carry the per-kind hybrid re-rank weights** — verified on `aurora-mixed` (py+md) that with BM25 as
+  the only signal, AURORA's `_CODE_WEIGHTS`/`_KB_WEIGHTS` collapse to a bare `doc × w` md-penalty
+  (the "no penalty hack" doctrine forbids it); the weights only become principled once ≥2 signals
+  exist (slice 4 activation). Instead the code-over-md symptom is dissolved structurally: **kinds
+  never share a ranking** (`recall` is kind-scoped, one FTS query per kind). Result: `kind:"code"`
+  holds 0.525→0.545 with 196 md docs in the index, vs 0.480 / 12-of-22-prose-buried under a shared
+  ranking. `k1/b` tuning + deps-in-body deferred (neutral on bench; deps ride slice-5 edges).
 
 ## 2. Base-level activation (BLA) — `base_level.py`
 

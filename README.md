@@ -54,9 +54,9 @@ const ctx = new LiteCtx({
 
 await ctx.index();   // incremental: git status → mtime → content-hash
 
-// recall — ranked, activation-weighted (not just BM25)
-const hits = ctx.recall("where do we validate the auth token?", { limit: 10 });
-// → [{ path, kind, span, score, activation }, …]
+// recall — kind-scoped; kinds never share a ranking, so prose can't bury code
+const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
+// → [{ path, kind, format, score }, …]   (omit kind → grouped { code, doc }, 5 each)
 
 // impact — blast radius + risk bucket for a symbol
 const blast = ctx.impact("validateToken");

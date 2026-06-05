@@ -3,18 +3,19 @@
 // `index` builds (incrementally re-indexes) the index; `recall` queries it.
 //
 //   litectx index [root] [--force]
-//   litectx recall <query...> [--root <dir>] [--limit <n>]
+//   litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]
 
-import { LiteCtx } from "../src/index.js";
+import { LiteCtx, KINDS } from "../src/index.js";
 
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, limit: number, force: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), limit: 10, force: false, words: [] };
+  /** @type {{root: string, n: number|undefined, kind: string|undefined, force: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, kind: undefined, force: false, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
-    else if (rest[i] === "--limit") opts.limit = Number(rest[++i]);
+    else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
+    else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
     else opts.words.push(rest[i]);
   }
@@ -41,9 +42,21 @@ async function main() {
     if (!query) fail("recall needs a query");
     const ctx = new LiteCtx({ root: opts.root });
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
-    const hits = ctx.recall(query, { limit: opts.limit });
+    /** @param {import("../src/store.js").Hit} h */
+    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}`);
+    if (opts.kind) {
+      // one kind → flat ranked list
+      ctx.recall(query, { kind: opts.kind, n: opts.n }).forEach(line);
+    } else {
+      // no kind → grouped over all kinds (top-n each), so prose never buries code
+      const grouped = ctx.recall(query, { n: opts.n });
+      for (const k of KINDS) {
+        if (!grouped[k]?.length) continue;
+        console.log(`# ${k}`);
+        grouped[k].forEach(line);
+      }
+    }
     ctx.close();
-    for (const h of hits) console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}`);
     return;
   }
 
@@ -55,6 +68,6 @@ main().catch((e) => fail(e instanceof Error ? e.message : String(e)));
 /** @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
-  console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--limit <n>]");
+  console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]");
   process.exit(1);
 }

@@ -17,6 +17,14 @@ import { ftsMatch } from "./tokenize.js";
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 
 /**
+ * The canonical memory-kind vocabulary — the kinds a bare `recall(query)` groups over. v1 ships
+ * `code` (ts/js/py) + `doc` (md); `fact` and `episode` are reserved (schema ready, §3.1) and join
+ * this list as their extractors land. Routing extension → kind lives in `indexer.classify`.
+ * @type {string[]}
+ */
+export const KINDS = ["code", "doc"];
+
+/**
  * @typedef {Object} LiteCtxConfig
  * @property {string} root                 repo root to index
  * @property {string[]} [include]          file extensions to index (default: ts/js/py/md)
@@ -75,15 +83,48 @@ export class LiteCtx {
   }
 
   /**
-   * Ranked recall over the index.
+   * Ranked recall over the index, scoped by memory `kind`.
+   *
+   * Kinds never share a ranking, so high-volume prose can't bury code (§5): each kind is
+   * FTS-gated and BM25-ranked only against its own kind, in a separate query. Three modes:
+   * - **single kind** (`kind: "code"`) → a flat ranked `Hit[]`, default depth `n = 10`.
+   * - **multiple kinds** (`kind: ["code", "doc"]`) → results grouped per kind, default `n = 5` each.
+   * - **omitted** (`recall(q)`) → grouped over all known {@link KINDS}, default `n = 5` each —
+   *   the safe default for a CLI or an agent that didn't state a kind (never a flattened ranking).
+   *
+   * `n` caps results **per kind**; raise it to dig deeper. There is no hard cap and no
+   * pagination — a larger `n` is a larger context, which is the caller's budget to manage.
+   *
+   * @overload
    * @param {string} query
-   * @param {{ limit?: number }} [opts]
+   * @param {{ kind: string, n?: number }} opts
    * @returns {import("./store.js").Hit[]}
+   */
+  /**
+   * @overload
+   * @param {string} query
+   * @param {{ kind?: string[], n?: number }} [opts]
+   * @returns {Record<string, import("./store.js").Hit[]>}
+   */
+  /**
+   * @param {string} query
+   * @param {{ kind?: string | string[], n?: number }} [opts]
+   * @returns {import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>}
    */
   recall(query, opts = {}) {
     const match = ftsMatch(query);
-    if (!match) return [];
-    return this.store.search(match, opts.limit ?? 10);
+    if (typeof opts.kind === "string") {
+      // single kind → one flat ranked list
+      return match ? this.store.search(match, opts.kind, opts.n ?? 10) : [];
+    }
+    // grouped: an explicit subset of kinds, or all known kinds when omitted. One FTS query per
+    // kind, each ranked against only its own kind — no kind ever competes with another for rank.
+    const kinds = Array.isArray(opts.kind) ? opts.kind : KINDS;
+    const n = opts.n ?? 5;
+    /** @type {Record<string, import("./store.js").Hit[]>} */
+    const grouped = {};
+    for (const k of kinds) grouped[k] = match ? this.store.search(match, k, n) : [];
+    return grouped;
   }
 
   /** @returns {number} indexed document count */

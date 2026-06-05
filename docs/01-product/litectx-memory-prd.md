@@ -120,16 +120,16 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `chunker` | file → tree-sitter (code) / section (md) chunks + line ranges → `nodes` | ✅ | slice 2 |
 | `gitsig` | file-level blame cache, slice per range → commit count+recency | new | slice 4 · ledger §8/§12 |
 | `edges` | symbol table → `calls` + `imports` edges | new | slice 5 · ledger §11 |
-| `tokenize` | code-aware BM25 text (split + path + deps) + query match | partial | slice 3 · ledger §1 |
+| `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
 | `activation` | ACT-R **pure fns**: BLA · decay(type+churn) · spreading · boost · total · norm | new | slice 4 · ledger §2–6 |
-| `recall` | FTS gate → kind-aware hybrid fusion → topK | inline | **extract slice 4** · ledger §7 |
+| `recall` | **kind-scoped** FTS gate → per-kind rank (→ +activation slice 4) | ✅ (kind-scoped; hybrid in slice 4) | slice 3 · ledger §7 |
 | `impact` | refs/files → risk bucket + complexity | new | slice 6 · ledger §9 |
 | `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
 
 **Seam rules (do not violate):**
 1. **`store` persists FTS content, never builds it** — code-aware body text is `tokenize`'s job
-   (today `store.applyChanges` doubles path tokens; that logic moves out in slice 3).
+   (✅ slice 3: `store.applyChanges` now calls `tokenize.indexBody`).
 2. **One `langdef` registry** — `chunker`, `edges`, and complexity all read it; never fork it
    per-slice (`.scm` for chunking + node-type config for edges hang off the same module).
 3. **`activation` stays pure** — functions of already-extracted signals, so the bench can ablate
@@ -153,9 +153,11 @@ const lc = new LiteCtx({ root: "/path/to/repo" /*, ...LiteCtxConfig */ });
 await lc.index();                       // incremental, git-aware (§6)
 await lc.index({ paths: ["src/"] });
 
-// view 1 — recall
-const hits = await lc.recall("how does auth work", { topK: 10, kind: "code" });
-// → [{ id, kind, file, lines, score, signals:{ bm25, activation, semantic?, git } }]
+// view 1 — recall (kind-scoped; kinds never share a ranking — §5)
+const code = lc.recall("how does auth work", { kind: "code" });     // flat Hit[], default n=10
+const both = lc.recall("how does auth work");                       // grouped { code:[…5], doc:[…5] }
+const more = lc.recall("how does auth work", { kind: "code", n: 30 }); // dig deeper
+// Hit → { path, kind, format, score }  (signals{activation,semantic,git} arrive in slices 4–5)
 
 // view 2 — impact
 const blast = await lc.impact({ file: "src/auth.ts", line: 42 });
@@ -258,29 +260,45 @@ approach with **safe defaults**:
 
 ---
 
-## 5. Retrieval pipeline + the code-over-md fix (DECIDED)
+## 5. Retrieval pipeline + the code-over-md fix (DECIDED — reshaped in slice 3)
 
 Two-stage (grounding: `hybrid_retriever.py`, `MEM_INDEXING.md §Hybrid`):
 
-1. **FTS5 keyword gate** — SQLite FTS5 BM25 → top ~100 candidates.
-2. **Chunk-kind-aware hybrid re-rank** → top K:
-   - **code**: BM25 50% / activation 30% / semantic 20%
-   - **doc/kb**: BM25 30% / activation 30% / semantic 40%
-   - **Dual-hybrid fallback** (embeddings off, the default): redistribute semantic weight
-     to BM25+activation → **~85% vs ~95%** tri-hybrid.
-   - Scores min-max normalized to [0,1] before weighting.
+1. **FTS5 keyword gate** — SQLite FTS5 BM25 → top ~N candidates **per kind**.
+2. **Kind-scoped ranking** → BM25 now; activation (slice 4) and semantic (embeddings tier)
+   layer in **within a kind**, never across:
+   - **code**: BM25 → +activation 30% / semantic 20% as they land.
+   - **doc/kb**: BM25 → +activation / semantic (prose benefits more from embeddings).
 
-**Code-over-md promotion (the bug we hit, and the fix to carry — grounded, no magic
-boost).** Prose-heavy md chunks were out-surfacing code because a query term is *mentioned*
-more often in prose. The fix was **three structural mechanisms together**, with **no
-explicit md penalty** (verified: none exists in `hybrid_retriever.py`):
-1. **Per-candidate kind-aware weights** — a code chunk is scored with code weights
-   (BM25 0.5, the strongest exact-token signal); an md chunk with doc weights (BM25 0.3).
-2. **FTS5 gate replaced the old activation gate** (v0.17.1) so rare-but-relevant code isn't
-   starved before re-rank.
-3. **Code-aware BM25 tokenizer** (`getUserData → get/User/Data/getuserdata`, `k1=1.5`,
-   `b=0.75`) **+ deps + file_path included in BM25 content**, so code isn't a sparse loser
-   to prose. (AURORA lesson: sparse content → descriptive queries return 0.)
+**Code-over-md — solved structurally by kind-scoping, NOT by weights (slice 3 decision).**
+The bug: prose-heavy md out-surfaced code because a query term is *mentioned* more in prose.
+AURORA's fix was per-kind hybrid **weights** (`hybrid_retriever.py`) — but that only works
+once ≥2 signals exist (in dual-hybrid, code leans BM25 0.625 / doc balances BM25 0.5 with
+activation); **with BM25 as the only signal it degenerates to a tuned md-penalty constant**,
+which the doctrine forbids. Worse, any *shared* ranking is hostage to the doc/code volume
+ratio (AURORA had ~26k lines of md that overpowered code) — a calibration that can't
+generalize across repos.
+
+litectx's fix removes the shared ranking entirely:
+
+> **Invariant: kinds never share a ranking.** `recall` is kind-scoped — one FTS query per
+> kind, each BM25-ranked only against its own kind. A `kind:"code"` result can never contain
+> a doc, no matter how prose-heavy the index. No weights, no md penalty, no calibration.
+
+This matches how a long-running agent queries memory — it knows its intent (`code` /
+`fact` / `episode`), so a required `kind` makes that intent explicit. Three modes: single
+kind → flat list (default `n=10`); multiple, or omitted → grouped per kind (default `n=5`
+each, the safe CLI/agent default); `n` caps per kind, raise to dig deeper.
+
+**Validated (slice 3, `poc/datasets/aurora-mixed.mjs`):** indexing aurora's 497 `.py` *with*
+its 196 `.md` design docs and recalling `kind:"code"` **holds — and slightly beats — the
+py-only baseline** (MRR 0.525 → 0.545 — md in the corpus even sharpens code IDF) where a shared ranking dropped
+it to 0.480 with **12/22 queries** prose-buried. The two surviving structural mechanisms:
+1. **FTS5 gate per kind** so rare-but-relevant code isn't starved.
+2. **Code-aware FTS body** (slice 3, `tokenize.indexBody`): identifier-split supplement
+   (`getUserData → get user data`) + symbol names folded in, so a descriptive query matches
+   identifier-dense code. (AURORA lesson: sparse content → descriptive queries return 0.)
+   *Deps + `k1/b` tuning deferred — neutral on the bench, and deps ride slice-5 edge extraction.*
 
 ---
 
@@ -475,7 +493,14 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
    chunking/edges are doctrine-mandated (ripgrep + tree-sitter only) and not doable in stdlib;
    `tree-sitter-wasms` (50 MB, all langs) was rejected for the 3 vendored grammars (~3.4 MB).
    `index()` is now **async** (the PRD §3 `await lc.index()` shape). 6 new tests.
-3. Code-aware BM25 + FTS5 gate + code-over-md fix (§5).
+3. ✅ **SHIPPED** — Kind-scoped recall = the code-over-md fix (§5). `recall` scoped by `kind`;
+   **kinds never share a ranking** (one FTS query per kind, BM25 within-kind) → prose can't bury
+   code, no weights/calibration. Three modes (single→flat n=10; multi/omitted→grouped n=5 each);
+   `KINDS` export; code-aware `indexBody` (camelCase split + symbol names; seam rule 1). Replaces
+   AURORA's per-kind hybrid *weights* — those need ≥2 signals and degenerate to a forbidden
+   md-penalty under BM25-only. Gate `aurora-mixed` (py+md): `kind:"code"` holds 0.525→**0.545** vs
+   0.480 shared-ranking (12/22 prose-buried). 6 new tests pin the invariant. (deps/`k1·b` deferred:
+   neutral on bench; deps ride slice-5 edges.)
 4. ACT-R activation engine + presets + cold-start (§4) → **recall view** ships. Per the POC:
    base-level → **decay+churn** → context-boost; **validate on both repos before BLA gets weight.**
    Spreading is scaffolded here but **earns weight in slice 5**, once real edges exist (the POC
@@ -500,7 +525,11 @@ edge-semantics config (§7), the `kind`-keyed type taxonomy (§3.1).
 
 **Carry the calibration, not just the code:**
 - dual-hybrid ≈ 85% vs tri-hybrid ≈ 95% → embeddings are a tier, not the spine.
-- code-over-md needs the three structural mechanisms (§5), not a penalty hack.
+- code-over-md is solved by **kind-scoping** (§5, slice 3), not a penalty hack and not weights:
+  AURORA's per-kind hybrid weights need ≥2 signals to be principled and collapse to a forbidden
+  md-penalty under BM25-only — and any shared ranking is hostage to the repo's doc/code volume
+  ratio. litectx's lesson borrowed here is the *symptom* (prose buries code) and the *non-penalty
+  doctrine*, not the weight mechanism.
 - edges from ripgrep/lang-def, **not** tree-sitter's import-parsing (AURORA's
   `_identify_dependencies()` was a dead side-path — do not repeat).
 - type-specific decay + churn parameters (§4) are tuned values worth keeping.
@@ -563,14 +592,19 @@ package** (§7).
 
 ---
 
-## 15. Status: BUILDING v1 — slices 0–1 shipped
+## 15. Status: BUILDING v1 — slices 0–3 shipped
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
-**slices 0–1 shipped** (walking skeleton + incremental git-aware indexing / hardened `kind`/`format`
-schema; `src/` + CLI + tests + integration gate; §11.2). **DECIDED:** name, stack, storage, indexing,
-edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one, the code-over-md fix, the cold-start
-design, packaging (§14 #5), and the build methodology (§11.1). **POC-REFINED:** graph spreading
-confirmed as the differentiator; git-seeded BLA must ship paired with decay+churn at a gentler weight
-(§4.1, §14 #1). **Next action:** slice 2 (tree-sitter symbol-level chunking) per §11.2 — must
-hold-or-beat the slice-0/1 benchmark on both repos; this is where recall numbers should first jump.
+**slices 0–3 shipped** (walking skeleton · incremental git-aware indexing / hardened `kind`/`format`
+schema · tree-sitter symbol chunking `nodes` substrate · **kind-scoped recall** = the code-over-md
+fix; `src/` + CLI + tests + integration gate; §11.2). **DECIDED:** name, stack, storage, indexing,
+edges-are-ripgrep-only, tiers, v1 languages, `kind`-from-day-one, **the code-over-md fix (slice 3:
+kind-scoping, not weights)**, the cold-start design, packaging (§14 #5), and the build methodology
+(§11.1). **POC-REFINED:** graph spreading confirmed as the differentiator; git-seeded BLA must ship
+paired with decay+churn at a gentler weight (§4.1, §14 #1). **SLICE-3-REFINED:** the code-over-md fix
+is *kind-scoping* — AURORA's per-kind hybrid weights need ≥2 signals to be principled and degenerate
+to a forbidden md-penalty under BM25-only; kinds never sharing a ranking dissolves the burial with no
+calibration. **Next action:** slice 4 (ACT-R activation, §4) — git-seeded BLA + decay/churn + 1-hop
+spreading layered *within a kind*; re-run the multi-repo gate (incl. `aurora-mixed`), adopt only
+weights ≥ baseline on every repo. This is where recall should first move beyond BM25.

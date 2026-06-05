@@ -24,7 +24,10 @@ for (const name of DATASETS) {
   const { files } = await ctx.index();
 
   const rows = ds.queries.map((Q) => {
-    const hits = ctx.recall(Q.q, { limit: DEPTH });
+    // every dataset target is a code file; scope recall to kind:"code". For aurora-mixed (md in
+    // the index) this is the whole point — the kind filter holds the py-only baseline exactly,
+    // with no md doc able to bury a code target (§5: kinds never share a ranking).
+    const hits = ctx.recall(Q.q, { kind: "code", n: DEPTH });
     const i = hits.findIndex((h) => h.path === Q.target);
     return { ...Q, rank: i < 0 ? Infinity : i + 1 };
   });

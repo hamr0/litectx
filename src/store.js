@@ -4,7 +4,7 @@
 // nodes/edges/signals tables around this; recall keeps reading FTS.
 
 import Database from "better-sqlite3";
-import { splitIdent } from "./tokenize.js";
+import { indexBody } from "./tokenize.js";
 
 /**
  * @typedef {Object} DocRow
@@ -116,8 +116,11 @@ export class Store {
       for (const u of upserts) {
         delDoc.run(u.path); // replace any prior row for this path
         delNodes.run(u.path);
-        const pathTok = splitIdent(u.path).join(" ");
-        insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: `${pathTok} ${pathTok}\n${u.body}` });
+        // code-aware FTS body (§5 mechanism 3): identifier-split + path + symbol names folded
+        // in by `indexBody`. Symbol names (already in body) repeated as `extra` so a file's own
+        // declarations get a small term-frequency lift over names it merely references.
+        const extra = /** @type {string[]} */ ((u.nodes ?? []).map((c) => c.symbol).filter(Boolean));
+        insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
         upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
         for (const c of u.nodes ?? []) {
           insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text });
@@ -150,17 +153,20 @@ export class Store {
   }
 
   /**
-   * BM25 search over the FTS index.
+   * BM25 search over the FTS index, scoped to a single kind. Kinds never share a ranking
+   * (§5) — the caller runs one `search` per kind and keeps the lists separate, so high-volume
+   * prose can never out-rank code. The `kind = ?` filter rides the UNINDEXED `kind` column.
    * @param {string} match  an FTS5 MATCH expression
+   * @param {string} kind   the memory kind to scope to ("code" | "doc" | ...)
    * @param {number} [limit=10]
    * @returns {Hit[]}
    */
-  search(match, limit = 10) {
+  search(match, kind, limit = 10) {
     const rows = this.db
       .prepare(
-        "SELECT path, kind, format, -bm25(docs) AS score FROM docs WHERE docs MATCH ? ORDER BY score DESC LIMIT ?"
+        "SELECT path, kind, format, -bm25(docs) AS score FROM docs WHERE docs MATCH ? AND kind = ? ORDER BY score DESC LIMIT ?"
       )
-      .all(match, limit);
+      .all(match, kind, limit);
     return /** @type {Hit[]} */ (rows);
   }
 
