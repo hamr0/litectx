@@ -1,6 +1,6 @@
 {
   "name": "litectx",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Lite, local-first code+context graph for recall and impact analysis. SQLite + FTS5 + ACT-R activation, ripgrep + tree-sitter edges, embeddings opt-in. Placeholder — under active design (PRD/POC stage).",
   "type": "module",
   "main": "./src/index.js",
