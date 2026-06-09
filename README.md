@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: design / POC stage.** `litectx@0.0.1` reserves the name. The API below is the **target shape** from the [PRD](docs/01-product/litectx-memory-prd.md), not yet shipped. Everything is gated on one question first — *does activation + graph-aware recall measurably beat plain FTS5/BM25?* (PRD §11). Pass → v1 builds in that sequence. Watch this space.
+> **Status: v1 surface built, pre-release.** The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading-activation** core is on by default. Still roadmap (🚧): opt-in **embeddings**, the access-log **base-level activation** tier, and ergonomic graph accessors. `litectx@0.0.1` remains a **name-reservation placeholder** on npm — the real code ships at the first tagged release.
 
 ## What this is
 
@@ -63,34 +63,30 @@ Node **>= 18**. **One production dependency** (`better-sqlite3`); `typescript` /
 
 ## Quick start
 
-> Target API (design stage — subject to change until v1).
-
 ```js
 import { LiteCtx } from "litectx";
 
-// one config — point it at a repo, choose what to index
+// one config — point it at a repo, choose what to index (by extension)
 const ctx = new LiteCtx({
   root: "/path/to/repo",
   include: [".ts", ".js", ".py", ".md"],   // routed by EXTENSION, never sniffed
-  embeddings: false,                         // the one opt-in tier (off by default)
 });
 
-await ctx.index();   // incremental: git status → mtime → content-hash
+await ctx.index();   // incremental: (mtime, size) fast-skip → content-hash
 
 // recall — kind-scoped; kinds never share a ranking, so prose can't bury code
 const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
-// → [{ path, kind, format, score }, …]   (omit kind → grouped { code, doc }, 5 each)
+// → [{ path, kind, format, score, git }, …]   (omit kind → grouped { code, doc }, 5 each)
 
-// impact — blast radius + risk bucket for a symbol
-const blast = ctx.impact("validateToken");
-// → { risk: "high", callers: [...], calls: [...], reach: 37 }
-
-// the graph is public API — query the substrate directly
-const node = ctx.graph.node("src/auth.ts#validateToken");
-const callers = ctx.graph.edges(node, "called-by");
+// impact — blast radius + risk bucket for a symbol (async; shells `rg -w`)
+const blast = await ctx.impact("validateToken");
+// → { symbol, risk: "high", refCount: 37, confirmed, mentions,
+//     callers: [...], callees: [...], complexity, defs, hedges }  |  null
 ```
 
-**Indexing is routed by file extension**, never by sniffing content. v1 languages: **TypeScript, JavaScript, Python** for code, plus **Markdown** docs. Re-indexing is incremental over a 3-tier git check (status → mtime → content-hash), and **git activity** (commit count + recency, from `git log`) is attached to each hit as grounding metadata — so you can see what's been worked on, without it skewing the ranking.
+The graph substrate is public API; today you query it through the exported `Store` (`symbolDefs`, `nodesForPath`, `allSymbolNames`). Ergonomic accessors (`getNode` / `related`) are 🚧 roadmap.
+
+**Indexing is routed by file extension**, never by sniffing content. v1 languages: **TypeScript, JavaScript, Python** for code, plus **Markdown** docs. The file list comes from `git ls-files` (a filesystem walk outside a git repo); re-indexing is incremental — a `(mtime, size)` fast-skip falls through to a content-hash. **git activity** (commit count + recency, from `git log`) is attached to each hit as grounding metadata — so you can see what's been worked on, without it skewing the ranking.
 
 **`kind` is first-class.** v1 indexes `code` and `doc` (Markdown). The schema reserves `fact`, `episode`, and other doc formats (pdf/docx/txt via a `format` field) with **no migration** — activation applies across kinds, which is how longer-term memory lands later.
 
@@ -99,22 +95,25 @@ const callers = ctx.graph.edges(node, "called-by");
 One SQLite file holds the whole substrate — nodes, edges, signals, and the FTS5 index — so the data outlives the process and one file is the entire read surface.
 
 ```jsonc
-// node: a function, with the signals recall weighs
-{ "id": "src/auth.ts#validateToken", "kind": "code", "lang": "ts",
-  "span": [42, 71], "deps": ["jwt", "src/config.ts"],
-  "recency": 0.81, "frequency": 12, "churn": 0.34, "complexity": 7 }
+// node: a symbol chunk (function/class/method/doc-section), with line span
+{ "symbol": "validateToken", "kind": "code", "format": "ts",
+  "node_type": "function_declaration", "start_line": 42, "end_line": 71 }
 
-// edge: typed, directional — the call graph impact walks
-{ "from": "src/routes.ts#handler", "to": "src/auth.ts#validateToken", "type": "calls" }
+// edge: typed, directional. Today `import` edges are persisted (they drive recall
+// spreading); the `call` graph that impact walks is resolved on demand, not stored.
+{ "type": "import", "src_path": "src/routes.ts", "dst_path": "src/auth.ts" }
 ```
 
 ```js
-// recall result — lexical match gated, then activation re-ranked
-{ path: "src/auth.ts", kind: "code", span: [42, 71], score: 0.91, activation: 1.74 }
+// recall result — BM25-gated, then 1-hop import-spreading re-ranked; git is grounding, not scored
+{ path: "src/auth.ts", kind: "code", format: "ts", score: 0.91, git: { commits: 12, lastCommit: 1.7e9 } }
 
-// impact result — blast radius bucketed, not a raw ref dump
-{ risk: "high", reach: 37, callers: [/* … */], calls: [/* … */] }
+// impact result — blast radius bucketed, not a raw ref dump (refCount = max(confirmed, mentions))
+{ symbol: "validateToken", risk: "high", refCount: 37, confirmed: 31, mentions: 37,
+  callers: [/* … */], callees: [/* … */], complexity: 7, defs: [/* … */], hedges: [/* … */] }
 ```
+
+> **Roadmap signals:** per-node `recency` / `frequency` / `churn` and a recall `activation` term arrive with the **base-level activation** tier (it needs a real access log; git gives *edit* frequency, not *access* frequency). Today recall is **BM25 + spreading**, and `complexity` is computed on demand for impact.
 
 **complexity ≠ risk:** complexity is a local AST branch count; risk/impact is reference count from the call graph (blast radius). They're separate fields, by design.
 
@@ -122,7 +121,7 @@ One SQLite file holds the whole substrate — nodes, edges, signals, and the FTS
 
 | | |
 |---|---|
-| **Integration Guide** (`litectx.context.md`) | The complete adopter contract — every option, the full public API, the graph schema, extension contracts, the refusals. *Hand it to your AI assistant.* **(coming with v1)** |
+| **Integration Guide** (`litectx.context.md`) | The complete adopter contract — every option, the full public API, the graph schema, extension contracts, the refusals. *Hand it to your AI assistant.* Ships in the package. |
 | **[PRD](docs/01-product/litectx-memory-prd.md)** | Locked decisions + *why*, the substrate/views model, the POC gate, build order, the refusals. *(repo-only)* |
 | **[CHANGELOG](CHANGELOG.md)** | keep-a-changelog; an entry every release. |
 
