@@ -7,13 +7,13 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–5: incremental
+> document describes the contract **as actually shipped** (slices 0–6: incremental
 > indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
-> grounding, and the `impact` view incl. the slice-5b barrel/alias mitigation). Where
-> the eventual surface (ACT-R activation weighting, `getNode`/`related` accessors,
-> embeddings) is **not yet available**, it is marked **🚧 roadmap** — do not wire
-> against it yet. What is documented without that mark works today and is covered by tests
-> and the multi-repo benchmark.
+> grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, and the
+> opt-in **embeddings** tier). Where the eventual surface (ACT-R base-level activation
+> weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
+> **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
+> today and is covered by tests and the multi-repo benchmark.
 
 ---
 
@@ -54,7 +54,7 @@ activation signals, an embeddings tier) under that same one-graph contract.
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors | 🚧 roadmap |
-| Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
+| **Embeddings** (semantic tier) | ✅ shipped (slice 6 — opt-in, off by default; `embeddings: true` + the optional peer dep) |
 | Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
@@ -80,8 +80,8 @@ const hits = ctx.recall("where do we validate the auth token?", { kind: "code" }
 ctx.close();
 ```
 
-`index()` is **async** (it parses files with a WebAssembly grammar runtime).
-`recall()`, `size()`, and `close()` are synchronous.
+`index()` and `recall()` are **async** (`index` parses with a WASM grammar runtime;
+`recall` embeds the query when the tier is on). `size()` and `close()` are synchronous.
 
 ## All options — `LiteCtxConfig`
 
@@ -93,6 +93,10 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
 | `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
+| `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `recall()` fuses cosine into the ranking. Requires the optional peer dep `@xenova/transformers` (`npm i @xenova/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
+| `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
+| `embedModel` | `string` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id for the tier. |
+| `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
 
 There is **one** config object and no global state. No environment variables, no
 config files — the adopter passes everything in.
@@ -121,14 +125,19 @@ Builds or **incrementally refreshes** the index over `root`.
   unchanged: number } // skipped (mtime/size or content unchanged)
 ```
 
-### `ctx.recall(query, opts?)` → `Hit[]` | `Record<kind, Hit[]>`
-Ranked recall over the index, **scoped by memory `kind`**. Synchronous.
+### `await ctx.recall(query, opts?)` → `Promise<Hit[] | Record<kind, Hit[]>>`
+Ranked recall over the index, **scoped by memory `kind`**. **Async** (since slice 6 — the
+embeddings tier embeds the query at call time; with embeddings off the work is synchronous,
+just wrapped in a resolved promise, no model touched). `await` it.
 
 **Kinds never share a ranking.** Each kind is FTS-gated and ranked only against its own
 kind, in a separate query — so prose volume can never bury code (no weights, no md
 penalty). Within a kind, ranking is **BM25 + 1-hop additive import-spreading** (a hit
 adjacent to a strong hit in the import graph is lifted; spreading never crosses kinds and
-is a no-op for kinds without edges, e.g. `doc`). The return shape follows the `kind` argument:
+is a no-op for kinds without edges, e.g. `doc`). With the **embeddings tier on**, a wider
+BM25-gated pool is additionally re-ranked by semantic cosine (`norm(dual) + embedWeight·norm(cosine)`)
+— the gate bounds the cosine work to the candidate pool, never the corpus. The return shape
+follows the `kind` argument:
 
 | call | mode | returns | default `n` |
 |---|---|---|---|
@@ -255,9 +264,10 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   a normal claim, but **"isolated / unused / low-risk" is only ever a hedged review
   candidate, never a guarantee** — and dead-code is "likely-unused, review," never
   "safe to delete." Precise import-vs-usage binding is a non-goal. Closed decision.
-- **No embeddings by default.** The semantic tier is the single opt-in (roadmap,
-  off by default): dual-hybrid (BM25 + spreading) ≈ 85% vs tri-hybrid ≈ 95%, and
-  embeddings add cold-start latency + an ML dependency not worth defaulting on.
+- **No embeddings by default.** The semantic tier ships (slice 6) but is the single
+  **opt-in**, off by default: dual-hybrid (BM25 + spreading) ≈ 85% vs tri-hybrid ≈ 95%,
+  and embeddings add cold-start model-load latency + an ML dependency not worth
+  defaulting on. Turn it on with `embeddings: true` + `npm i @xenova/transformers`.
 - **No service / daemon / network / telemetry.** It runs in your process against a
   file on disk.
 - **No alternative store.** SQLite + FTS5, single file. BM25 is native in SQL;
@@ -269,12 +279,12 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 
 ## Gotchas
 
-- **`index()` is async; `recall()` is sync.** `await` the index; do not `await`
-  recall/size/close.
-- **Recall is BM25-only today** (kind-scoped). **Centrality** effects arrive with the
-  spreading slice (graph edges); **recency** effects (base-level activation) are the
-  access-log tier and won't appear from git history alone — the POC showed git-seeded
-  recency is repo-dependent, so git ships as grounding metadata, not ranking weight.
+- **`index()` and `recall()` are async; `size()`/`close()` are sync.** `await` index and
+  recall; don't `await` size/close.
+- **Recall is BM25 + spreading** (kind-scoped), plus **semantic cosine** when the embeddings
+  tier is on. **recency** effects (base-level activation) remain the access-log tier and
+  won't appear from git history alone — the POC showed git-seeded recency is repo-dependent,
+  so git ships as grounding metadata, not ranking weight.
 - **Same-mtime + same-size content swap.** Change detection fast-skips on
   `(mtime, size)`; an edit that lands within one filesystem mtime tick *and* keeps
   the exact byte length can be missed. Use `index({ force: true })` to be certain.

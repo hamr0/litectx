@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: v0.1.0 — first functional release** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading-activation** core is on by default. Still roadmap (🚧): opt-in **embeddings**, the access-log **base-level activation** tier, and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve.
+> **Status: v0.1.0 — first functional release** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
 
 ## What this is
 
@@ -74,8 +74,8 @@ const ctx = new LiteCtx({
 
 await ctx.index();   // incremental: (mtime, size) fast-skip → content-hash
 
-// recall — kind-scoped; kinds never share a ranking, so prose can't bury code
-const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
+// recall — kind-scoped; kinds never share a ranking, so prose can't bury code (async)
+const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
 // → [{ path, kind, format, score, git }, …]   (omit kind → grouped { code, doc }, 5 each)
 
 // impact — blast radius + risk bucket for a symbol (async; shells `rg -w`)
@@ -83,6 +83,8 @@ const blast = await ctx.impact("validateToken");
 // → { symbol, risk: "high", refCount: 37, confirmed, mentions,
 //     callers: [...], callees: [...], complexity, defs, hedges }  |  null
 ```
+
+**Opt-in semantic tier:** `new LiteCtx({ root, embeddings: true })` fuses embedding cosine into recall (the dual≈85% → tri≈95% step). Off by default — it needs the optional peer dep (`npm i @xenova/transformers`) and loads a small local model on first use; the deterministic BM25 + spreading core never touches it.
 
 The graph substrate is public API; today you query it through the exported `Store` (`symbolDefs`, `nodesForPath`, `allSymbolNames`). Ergonomic accessors (`getNode` / `related`) are 🚧 roadmap.
 

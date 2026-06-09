@@ -124,7 +124,7 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
 | `recall` | **kind-scoped** FTS gate → per-kind BM25 **+ additive import-spreading** (+semantic w/ embeddings tier) | ✅ (kind-scoped + spreading) | slice 3–4 · ledger §7 |
 | `impact` | `impact(symbol)`: callees (ts walk) + callers (`rg -w`→ts confirm, + renamed barrel/path-alias resolution) → risk bucket `max(confirmed,mentions)` + complexity, on-demand; §7.2 hedges | ✅ (5a + 5b) | slice 5 · ledger §9 |
-| `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
+| `embeddings` | semantic tier (float32 BLOB / ONNX via transformers.js), off by default | ✅ (slice 6) | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
 
 **Seam rules (do not violate):**
@@ -481,8 +481,10 @@ Embeddings are the **only** tier. There is no LSP tier (§7).
 - **`better-sqlite3` + FTS5.** Single file, synchronous (no connection-pool tax — deletes
   ~330 LOC of AURORA's Python), FTS5 gives BM25 natively in SQL. Correct and final for a
   local-first lib; **"change if something better" is resolved: no.**
-- **Vectors (embeddings tier only):** `sqlite-vec` extension or a `float32` BLOB column —
-  inside the one SQLite file; no second datastore.
+- **Vectors (embeddings tier only):** a `float32` BLOB column inside the one SQLite file
+  (slice 6 — **`sqlite-vec` rejected**: recall is BM25-gated, so cosine runs only over the
+  candidate pool, never the corpus → brute-force is O(pool) and sub-ms at any repo size,
+  and a native extension would cut against the lite/one-dep doctrine). No second datastore.
 - Tables (from AURORA, slimmed): `chunks` (incl. `kind`, `format`), `relationships` (edges,
   indexed both ends), `activations` (reserved — v1 has no access log; git seeds BLA, §4.1),
   `file_index`.
@@ -645,9 +647,16 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      ts-barrel`) + `impact-ts` dataset: the default-rename label was red (false isolation) pre-5b and
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
-**Deferred to post-v1 tiers (schema-reserved, not v1 slices):**
-- **Embeddings / semantic tier** (§8) — opt-in; adds semantic as the third ranking signal
-  (tri-hybrid). Off by default (ML dep + cold latency).
+**Post-v1 tiers:**
+- **Slice 6 — Embeddings / semantic tier (§8) — ✅ SHIPPED (2026-06-09).** Opt-in third ranking
+  signal (tri-hybrid), off by default. POC-validated lift (gitdone dual 0.425 → tri 0.647 @ w=1.0,
+  reproduced through the shipped `LiteCtx`; held-out repo confirmed no overfitting cliff). Decisions
+  locked by the POC: **file-level** vectors (head-truncated text — a distilled signal was a *wash*,
+  so the simpler head shipped); **`float32` BLOB in the same db, no sqlite-vec** (recall is BM25-gated
+  → cosine is O(pool), sub-ms at any repo size); **weight 1.0** default; `Xenova/all-MiniLM-L6-v2` via
+  transformers.js as an **optional peer dep**, lazy-loaded; incremental re-embed + query LRU cache.
+  `recall()` became **async** as a consequence (uniform with index/impact). 9 hermetic tests (stub
+  embedder); recall/impact gates byte-identical (embeddings off ⇒ core untouched).
 - **Access log + base-level activation** (§4, §14 #4) — litectx's long-running-memory
   differentiator. Once real accesses accumulate in the reserved `activations` table, BLA +
   decay+churn become a *validated* scored signal (on real usage, not git proxy). Git activity
