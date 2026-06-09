@@ -339,3 +339,94 @@ export async function callSitesOf(format, body, name) {
   })(tree.rootNode);
   return out;
 }
+
+// ---- impact slice 5b: barrel re-export / import bindings (the renamed-alias under-count, §7.2) ----
+// A name-only caller sweep cannot see a symbol reached under a DIFFERENT name. These two
+// extractors recover the rename: `reExportsOf` reads a barrel's `export { local as exported }
+// from "source"`, and `importBindingsOf` reads a consumer's `import { name } from "source"`. The
+// impact resolver chains them (def → barrel alias → scoped consumer call site). JS/TS only —
+// `export … from` has no Python equivalent in v1. Both parse-fail-soft to [] (impact is hedged,
+// never a hard dependency).
+
+/**
+ * Named re-export bindings of a file: one entry per specifier in `export { local as exported }
+ * from "source"` (exported === local when un-renamed). Star re-exports (`export * from`) are
+ * intentionally omitted: they re-export under the ORIGINAL name (no rename) and never cover a
+ * default export, so they can't hide a symbol from a name sweep.
+ * @param {string} format  "js" | "ts" (others → [])
+ * @param {string} body
+ * @returns {Promise<{ local: string, exported: string, source: string }[]>}
+ */
+export async function reExportsOf(format, body) {
+  const lang = LANGDEFS[format];
+  if (!lang || (format !== "js" && format !== "ts")) return [];
+  let tree;
+  try {
+    tree = (await parserFor(lang)).parse(body);
+  } catch {
+    return [];
+  }
+  /** @type {{ local: string, exported: string, source: string }[]} */
+  const out = [];
+  (function walk(n) {
+    if (n.type === "export_statement") {
+      const source = esImportSource(n); // the `from "…"` string — present iff this re-exports
+      if (source) {
+        for (let i = 0; i < n.namedChildCount; i++) {
+          const clause = n.namedChild(i);
+          if (clause.type !== "export_clause") continue;
+          for (let j = 0; j < clause.namedChildCount; j++) {
+            const spec = clause.namedChild(j);
+            if (spec.type !== "export_specifier") continue;
+            const name = spec.childForFieldName("name");
+            if (!name) continue;
+            const alias = spec.childForFieldName("alias");
+            out.push({ local: name.text, exported: alias ? alias.text : name.text, source });
+          }
+        }
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
+  })(tree.rootNode);
+  return out;
+}
+
+/**
+ * Import bindings of a file: `{ imported, source }` per name brought in by `import { imported }`
+ * / `import { x as local }` (imported = the EXTERNAL name, matched against a barrel's exported
+ * alias) and `import D from "s"` (imported = "default"). Namespace imports (`import * as ns`) are
+ * omitted — member dispatch (`ns.x()`) is out of v1's name-only reach (over-count-safe miss).
+ * @param {string} format  "js" | "ts" (others → [])
+ * @param {string} body
+ * @returns {Promise<{ imported: string, source: string }[]>}
+ */
+export async function importBindingsOf(format, body) {
+  const lang = LANGDEFS[format];
+  if (!lang || (format !== "js" && format !== "ts")) return [];
+  let tree;
+  try {
+    tree = (await parserFor(lang)).parse(body);
+  } catch {
+    return [];
+  }
+  /** @type {{ imported: string, source: string }[]} */
+  const out = [];
+  (function walk(n) {
+    if (n.type === "import_statement") {
+      const source = esImportSource(n);
+      if (source) {
+        (function scan(m) {
+          if (m.type === "import_specifier") {
+            const name = m.childForFieldName("name"); // external name, before any `as local`
+            if (name) out.push({ imported: name.text, source });
+          } else if (m.type === "identifier" && m.parent && m.parent.type === "import_clause") {
+            out.push({ imported: "default", source }); // `import D from "s"`
+          }
+          for (let i = 0; i < m.namedChildCount; i++) scan(m.namedChild(i));
+        })(n);
+      }
+    }
+    for (let i = 0; i < n.namedChildCount; i++) walk(n.namedChild(i));
+  })(tree.rootNode);
+  return out;
+}

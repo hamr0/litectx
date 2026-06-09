@@ -123,7 +123,7 @@ a slice adds a capability over time; the modules below are the code units it lan
 | `tokenize` | code-aware BM25 body (`indexBody`: split + path + symbol names) + query match | ✅ (deps deferred) | slice 3 · ledger §1 |
 | `activation` | ACT-R base-level **pure fns** (BLA · decay+churn · boost) — **deferred to access-log tier** (POC: git-only base-level is repo-dependent; the *spreading* ACT-R term ships via `edges`) | deferred | access-log tier · ledger §2–6 |
 | `recall` | **kind-scoped** FTS gate → per-kind BM25 **+ additive import-spreading** (+semantic w/ embeddings tier) | ✅ (kind-scoped + spreading) | slice 3–4 · ledger §7 |
-| `impact` | `impact(symbol)`: callees (ts walk) + callers (`rg -w`→ts confirm) → risk bucket `max(confirmed,mentions)` + complexity, on-demand; §7.2 hedges | ✅ (5a; alias/barrel mitigations → 5b) | slice 5 · ledger §9 |
+| `impact` | `impact(symbol)`: callees (ts walk) + callers (`rg -w`→ts confirm, + renamed barrel/path-alias resolution) → risk bucket `max(confirmed,mentions)` + complexity, on-demand; §7.2 hedges | ✅ (5a + 5b) | slice 5 · ledger §9 |
 | `embeddings` | semantic tier (sqlite-vec/ONNX), off by default | tier | §8 · ledger §11/§12 |
 | `LiteCtx` | facade: config + wiring | ✅ | §3 |
 
@@ -375,11 +375,19 @@ Grounding: `MEM_INDEXING.md`.
 > walk of the symbol body, callers via `rg -w` confirmed with tree-sitter, risk = `max(confirmed,
 > mentions)` bucketed at the aurora thresholds (≤2/3–10/11+), plus complexity and the §7.2 hedges.
 > **Computed on demand, not persisted** (§7.1's mechanisms are query-time; the `type='call'` edge
-> row stays reserved for a future persist-if-slow optimization). The §7.2 **alias / barrel**
-> anti-false-isolation mitigations are deferred to **slice 5b**, gated on adding a TS bench fixture
-> (POC-first) — the export-root, reflection (unconfirmed-mention) and underscore/public hedges and
-> the universal *unresolved ≠ absent* net ship now. Validated on aurora: hubs bucket `high` with
-> correct fan-in (`SQLiteStore` 235 refs/109 callers, `BaseLevelActivation` 47/36), ~0.1–0.9s/symbol.
+> row stays reserved for a future persist-if-slow optimization). Validated on aurora: hubs bucket
+> `high` with correct fan-in (`SQLiteStore` 235 refs/109 callers, `BaseLevelActivation` 47/36),
+> ~0.1–0.9s/symbol.
+>
+> **Status (slice 5b, shipped 2026-06-09):** the §7.2 **alias / barrel** anti-false-isolation
+> mitigations now ship. A symbol reached only under a *renamed* re-export (e.g. `export { default as
+> Panel } from "./impl"`, imported via a tsconfig path alias) is invisible to a name-only `rg -w`
+> sweep — the canonical false-isolation. `impact()` now resolves it on demand (still no LSP): barrel
+> re-export extraction (`chunker.reExportsOf`/`importBindingsOf`) + tsconfig `paths` resolution
+> (`tsalias.js`, deliberately separate from `edges.js` so recall stays frozen) chain def → barrel
+> alias → consumers that actually import that alias *from the barrel* (path-alias-scoped, so an
+> unrelated same-named symbol is never miscredited) → confirmed call sites, tagged with the alias.
+> Gated by a committed TS fixture (`poc/fixtures/ts-barrel`) + `impact-ts` dataset (§11.3).
 
 The decision is final: **there is no language-server tier.** The one and only edge resolver =
 **tree-sitter queries + `ripgrep -w`** (word-boundary). Zero external binaries; ~2ms/symbol;
@@ -434,8 +442,8 @@ gate repos — aurora Py / gitdone JS — exercise only reflection: 23/497 `geta
 | Framework callbacks / entry points | carry aurora's `entry_*`/`callback` lists as **roots** | ✅ build (exercised; lists borrowed) |
 | Public exports look unused | every export is a **usage root** | ✅ build (trivial, falls out of export nodes) |
 | Reflection / string-keyed (`getattr`, `require(var)`) | flag dynamic-feature files + **string-literal mention check** (rg already running) before any dead/isolated claim | ✅ build (the mode actually in our data; cheap 80/20) |
-| Barrel / `export…from` re-exports | capture re-export **edges**; transitive-through-barrel (bounded) | 🟡 edges now; transitivity deferred (0 incidence/untestable) |
-| Path aliases (`tsconfig paths`) | parse tsconfig/jsconfig `paths`+`baseUrl` | ⏸ **spec, don't build blind** — 0 TS in the bench; gate on adding a TS fixture (POC-first) |
+| Barrel / `export…from` re-exports | resolve renamed re-exports on demand (`reExportsOf` → alias → confirmed call sites) | ✅ build (5b; single-hop — transitive-through-barrel deferred, 0 incidence/now testable via #1) |
+| Path aliases (`tsconfig paths`) | parse tsconfig `paths`+`baseUrl` (`tsalias.js`) to scope alias attribution to true barrel importers | ✅ build (5b; gated by the committed `ts-barrel` fixture, POC-first as required) |
 
 **The universal safety net (cheap, covers the residual):** the only dangerous act is *silently
 dropping a reference*. So any reference we can't resolve — unfollowable alias, dynamic call,
@@ -631,8 +639,11 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      mentions))` at aurora thresholds ≤2/3–10/11+, plus complexity and the §7.2 hedges. Calls
      computed on-demand, not persisted (§7.1). `langdef` gains `callTypes`/`branchTypes`. 9 tests +
      a mutation check (under-count kills the §7.2 tests). Recall bench byte-identical.
-   - **Slice 5b — ⏸ NEXT (gated on #1).** The §7.2 **alias / barrel** false-isolation mitigations,
-     plus the **impact bench gate** that proves them. Sequencing in §11.3.
+   - **Slice 5b — ✅ SHIPPED (2026-06-09).** The §7.2 **alias / barrel** false-isolation mitigations,
+     on demand (`chunker.reExportsOf`/`importBindingsOf` + `tsalias.js` tsconfig-`paths` resolution,
+     impact-only so recall stays frozen). Gated by the committed TS fixture (#1, `poc/fixtures/
+     ts-barrel`) + `impact-ts` dataset: the default-rename label was red (false isolation) pre-5b and
+     green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Deferred to post-v1 tiers (schema-reserved, not v1 slices):**
 - **Embeddings / semantic tier** (§8) — opt-in; adds semantic as the third ranking signal
@@ -663,7 +674,7 @@ view-appropriate metric.** Same machine, different labels:
 |---|---|---|---|---|
 | **recall** | aurora (Py), gitdone (JS) | `{ q → target file }` | **MRR / P@k**, hold-or-beat | ✅ shipped |
 | **impact** | **aurora (Py) + mcprune (JS)** | `{ symbol → known callers; isolated? }` | **caller-recall (miss-rate)** — must be ~100%; over-count tolerated (§7.2) | ✅ shipped (`npm run bench:impact`) — 100% confirmed-caller recall, **0 false-isolations** on both repos |
-| **impact (TS false-isolation)** | TS fixture (#1) | symbol reached *only* via alias/barrel → `isolated:false` | asserts impact does **not** report isolated | 🚧 5b (needs #1) |
+| **impact (TS false-isolation)** | committed `poc/fixtures/ts-barrel` (#1) | symbol reached *only* via renamed barrel + path alias → `isolated:false` | **ISOLATION-accuracy** `(refCount===0)===isolated` + caller-recall | ✅ shipped 5b (`npm run bench:impact impact-ts`) — default-rename red→green, decoy excluded |
 | write/compress/select/… | tbd | tbd | tbd | post-v1 |
 
 > **Status (shipped):** `poc/impact-bench.mjs` + audited label sets (`impact-aurora` Py,
@@ -672,6 +683,14 @@ view-appropriate metric.** Same machine, different labels:
 > callers, not just mentions — `langdef.decoratorTypes` + `chunker.callSitesOf`) and it caught an
 > over-inclusive label of mine (a self-application inside the decorator's own def). Labels are
 > hand-audited; trust the metric only as far as the audit (the recurring lesson — cf. multis recall).
+>
+> **Status (5b, shipped 2026-06-09):** the third gate row is live — `poc/fixtures/ts-barrel` (a
+> committed TS app with a barrel + `@ui` path alias) + the `impact-ts` dataset. It gained an
+> **ISOLATION-accuracy** check, `(refCount===0)===isolated`, alongside the SAFETY (never a *silent*
+> isolation) and caller-recall metrics. It earned its keep as designed: the `barrel-default-alias`
+> label (a renamed default export) read a **false isolation** pre-5b (red, exit 1) and resolved
+> green after; the path-alias scoping that excludes an unrelated same-named decoy is mutation-checked.
+> Recall bench byte-identical — 5b is impact-only.
 
 **The impact metric is not MRR — it is dictated by the §7.2 asymmetry.** Recall's risk is a *miss
 buries an answer* (ranking quality → MRR). Impact's risk is a *miss is a false "isolated → safe"
@@ -681,8 +700,9 @@ metric would pass an impact view that silently drops callers — the one failure
 
 Corpus choice: **aurora + mcprune** are externally-owned and effectively **archived** (frozen), so
 their call graph is a stable oracle that won't drift under the gate. Two languages (Py + JS) catch
-language-specific resolution bugs. TS isolation hazards (alias/barrel) need the dedicated TS fixture
-(#1) — neither aurora nor mcprune is TS — which is exactly why that gate is sequenced into 5b.
+language-specific resolution bugs. TS isolation hazards (alias/barrel) needed a dedicated TS fixture
+— neither aurora nor mcprune is TS — which is why `poc/fixtures/ts-barrel` (#1) was built and the
+gate sequenced into 5b; that fixture is now committed and the gate is green.
 
 Beyond per-view gates, **a composing scenario test** (index once → recall → `impact` on a recalled
 symbol → … ) is the proof that the views share one coherent graph rather than re-extracting — the

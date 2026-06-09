@@ -11,9 +11,10 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join, relative, extname } from "node:path";
+import { basename, join, relative, extname } from "node:path";
 import { langForExt } from "./langdef.js";
-import { analyzeBody, callSitesOf } from "./chunker.js";
+import { analyzeBody, callSitesOf, reExportsOf, importBindingsOf } from "./chunker.js";
+import { loadTsPaths, specResolvesTo } from "./tsalias.js";
 
 // callee names that are ubiquitous noise even when they happen to collide with an indexed symbol —
 // kept SMALL because callees are already filtered to intra-repo definitions (§7.2 over-count safe).
@@ -40,6 +41,7 @@ export function riskBucket(n) {
  * @property {string} path    repo-relative file with a confirmed call
  * @property {number} line    0-based line of the call site
  * @property {string|null} symbol  enclosing caller symbol, or null at module top level
+ * @property {string} [alias] when set, the call reaches the symbol under this re-exported name (5b)
  */
 
 /**
@@ -120,10 +122,23 @@ export async function computeImpact(store, root, include, symbol) {
     }
   }
 
+  // ---- §7.2 slice 5b: callers that reach `symbol` under a re-exported alias (barrel + path
+  // alias). A name-only sweep can't see these — the crux false-isolation mode. Adds callers only
+  // (over-count safe); attributes each to the alias it travelled under. ----
+  const aliasCalls = await aliasCallers(root, include, symbol, defs, inOwnDef);
+  for (const c of aliasCalls) callers.push(c);
+
   const confirmed = callers.length;
   // Over-count-safe blast radius: the larger of the two signals (aurora's max(used_by, text)).
   const refCount = Math.max(confirmed, mentions);
   const risk = riskBucket(refCount);
+
+  // A symbol reachable only under a re-export alias would otherwise read as isolated — surface the
+  // rename so the (now non-zero) blast radius is explainable, not a mystery (§7.2 never-silent).
+  if (aliasCalls.length) {
+    const names = [...new Set(aliasCalls.map((c) => c.alias))].join(", ");
+    hedges.push(`reached under re-exported alias(es) ${names} via a barrel — ${aliasCalls.length} such caller(s) a name-only search would miss (§7.2)`);
+  }
 
   // ---- §7.2 safety net: never a silent "isolated" ----
   if (confirmed === 0 && mentions > 0) {
@@ -194,6 +209,112 @@ function rgWordMatches(name, root, include) {
     });
   }
   return res;
+}
+
+/**
+ * Callers that reach `symbol` under a re-exported alias (slice 5b). Three on-demand hops, all
+ * tree-sitter + rg (no LSP, §7): (1) find barrels whose `export { … } from "…"` resolves to a def
+ * file and re-exports `symbol` under a DIFFERENT name — by rename, or as the file's `default`;
+ * (2) for each such alias, find consumer files that actually `import { alias } from "<barrel>"`
+ * (path-alias aware, so an unrelated same-named symbol is NOT miscredited); (3) confirm the alias's
+ * call sites there. Returns added callers (each tagged with the alias). Empty unless a genuine
+ * rename exists — so it's a no-op for the common, name-reachable case. JS/TS defs only.
+ * @param {string} root
+ * @param {string[]} include
+ * @param {string} symbol
+ * @param {{ path: string, format: string, body: string }[]} defs
+ * @param {(relPath: string, line: number) => boolean} inOwnDef
+ * @returns {Promise<Caller[]>}
+ */
+async function aliasCallers(root, include, symbol, defs, inOwnDef) {
+  const jsDefs = defs.filter((d) => d.format === "js" || d.format === "ts");
+  if (!jsDefs.length) return []; // `export … from` is a JS/TS construct; Python has no analogue here
+  const tsPaths = loadTsPaths(root);
+
+  // (1) discover the alias names under which `symbol` is re-exported, and the barrel exposing each.
+  /** @type {{ name: string, barrel: string }[]} */
+  const aliases = [];
+  for (const d of jsDefs) {
+    const isDefault = /^\s*export\s+default\b/.test(d.body);
+    const stem = basename(d.path).replace(/\.[^.]+$/, ""); // "src/widget-impl.ts" → "widget-impl"
+    for (const cand of rgListFiles(stem, root, include)) {
+      if (cand === d.path) continue;
+      const fmt = fmtOf(cand);
+      if (!fmt) continue;
+      let body;
+      try {
+        body = readFileSync(join(root, cand), "utf8");
+      } catch {
+        continue;
+      }
+      for (const re of await reExportsOf(fmt, body)) {
+        if (!specResolvesTo(cand, re.source, d.path, tsPaths)) continue;
+        let alias = null;
+        if (re.local === symbol && re.exported !== symbol) alias = re.exported; // named rename
+        else if (isDefault && re.local === "default") alias = re.exported; // renamed default export
+        if (alias) aliases.push({ name: alias, barrel: cand });
+      }
+    }
+  }
+  if (!aliases.length) return [];
+
+  // (2)+(3) for each alias, confirm call sites in files that import it FROM the barrel.
+  /** @type {Caller[]} */
+  const out = [];
+  const seen = new Set();
+  for (const { name, barrel } of aliases) {
+    const files = new Set(rgWordMatches(name, root, include).map((m) => m.rel));
+    for (const rel of files) {
+      if (rel === barrel) continue;
+      const fmt = fmtOf(rel);
+      if (!fmt) continue;
+      let body;
+      try {
+        body = readFileSync(join(root, rel), "utf8");
+      } catch {
+        continue;
+      }
+      const importsAlias = (await importBindingsOf(fmt, body)).some(
+        (b) => b.imported === name && specResolvesTo(rel, b.source, barrel, tsPaths)
+      );
+      if (!importsAlias) continue; // a same-named symbol NOT imported from the barrel — not ours
+      for (const site of await callSitesOf(fmt, body, name)) {
+        if (inOwnDef(rel, site.line)) continue;
+        const key = `${rel}:${site.line}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ path: rel, line: site.line, symbol: site.enclosing, alias: name });
+      }
+    }
+  }
+  return out;
+}
+
+// format tag for a repo-relative path, or null when no tree-sitter grammar applies.
+function fmtOf(relPath) {
+  const lang = langForExt(extname(relPath).toLowerCase());
+  return lang ? lang.format : null;
+}
+
+/**
+ * `rg -l -F` — repo-relative files containing the literal `text`, scoped to the indexed extensions.
+ * A bounded discovery sweep (which files even mention a def's module name) before the precise
+ * tree-sitter pass; over-listing is harmless (each candidate is confirmed downstream).
+ * @param {string} text
+ * @param {string} root
+ * @param {string[]} include
+ * @returns {string[]}
+ */
+function rgListFiles(text, root, include) {
+  const globs = include.flatMap((e) => ["-g", `*${e}`]);
+  let out = "";
+  try {
+    out = execFileSync("rg", ["-l", "-F", ...globs, "--", text, root], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  } catch (/** @type {any} */ e) {
+    if (e && typeof e.stdout === "string" && e.stdout) out = e.stdout;
+    else return [];
+  }
+  return out.split("\n").filter(Boolean).map((p) => relative(root, p));
 }
 
 /**

@@ -7,10 +7,12 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–2). Where the
-> eventual surface (`impact`, ACT-R activation weighting, graph edges, embeddings)
-> is **not yet available**, it is marked **🚧 roadmap** — do not wire against it
-> yet. What is documented without that mark works today and is covered by tests
+> document describes the contract **as actually shipped** (slices 0–5: incremental
+> indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
+> grounding, and the `impact` view incl. the slice-5b barrel/alias mitigation). Where
+> the eventual surface (ACT-R activation weighting, `getNode`/`related` accessors,
+> embeddings) is **not yet available**, it is marked **🚧 roadmap** — do not wire
+> against it yet. What is documented without that mark works today and is covered by tests
 > and the multi-repo benchmark.
 
 ---
@@ -28,7 +30,7 @@ laid underneath it.
 ## What litectx is and is not
 
 - **Is:** a lite, local-first, in-process index over your code and docs, exposing
-  ranked recall and (soon) a called-by/calling impact view. The graph is the
+  ranked recall and a called-by/calling impact view. The graph is the
   substrate and is intended to be public API.
 - **Is not:** a language server, a vector database, a hosted service, an agent
   framework, or a token-budget/guardrail layer. It has **no LSP tier — ever**
@@ -46,9 +48,9 @@ laid underneath it.
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
 | **Import edges** + 1-hop **spreading** recall (BM25 + additive boost, w=0.3) | ✅ shipped (slice 4) |
 | **Git activity** metadata per hit (`git: { commits, lastCommit }`; grounding, not scored) | ✅ shipped (slice 4) |
-| **impact** view (`impact(symbol)`: called-by/calling → risk bucket + complexity, on-demand) | ✅ shipped (slice 5a) |
+| **impact** view (`impact(symbol)`: called-by/calling → risk bucket + complexity, on-demand) | ✅ shipped (slice 5a + 5b barrel/alias resolution) |
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
-| Anti-false-isolation for TS aliases / barrels (§7.2) | 🚧 roadmap (slice 5b — gated on a TS bench fixture) |
+| Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors | 🚧 roadmap |
 | Embeddings (semantic tier) | 🚧 roadmap (opt-in, off by default) |
 | Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
@@ -167,7 +169,7 @@ Impact = {
   mentions: number,     // external `rg -w` word occurrences (the safety floor)
   risk: "low" | "medium" | "high",   // bucket on refCount: ≤2 / 3–10 / 11+
   complexity: number,   // cyclomatic-ish decision-point count (max over defs)
-  callers: { path: string, line: number, symbol: string | null }[],  // confirmed call sites (incl. bare `@decorator` applications)
+  callers: { path: string, line: number, symbol: string | null, alias?: string }[],  // confirmed call sites (incl. bare `@decorator` applications; `alias` set when reached via a renamed barrel re-export)
   callees: string[],    // intra-repo names this symbol calls (externals dropped)
   hedges: string[],     // §7.2 safety caveats — see below
 }
@@ -183,8 +185,12 @@ dangerous (a false "isolated → safe" breaks hidden consumers). So:
   `hedges` explains why — an unconfirmed mention is *counted, not dropped* ("unresolved ≠ absent"),
   and an exported/public name is flagged for invisible external consumers. A clean isolation verdict
   is never returned; it's always a hedged *review candidate*.
-- TS path-alias / barrel re-export false-isolation is **not yet mitigated** (slice 5b, gated on a TS
-  bench fixture) — until then, treat isolation claims in alias/barrel-heavy TS as advisory.
+- **Renamed barrel / path-alias re-exports are resolved** (slice 5b). A symbol reached only as a
+  renamed re-export — `export { default as Panel } from "./impl"`, imported via a tsconfig `paths`
+  alias and called as `Panel()` — is invisible to a name-only sweep; `impact()` follows the barrel
+  and tsconfig `paths` to find the real callers (tagged with `caller.alias`) and a hedge naming the
+  alias, so it no longer reads as a false isolation. Single-hop barrels and JS/TS only — multi-hop
+  barrel chains and Python `from x import y as z` re-export barrels are not yet followed.
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).
