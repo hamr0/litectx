@@ -706,7 +706,13 @@ gate sequenced into 5b; that fixture is now committed and the gate is green.
 
 Beyond per-view gates, **a composing scenario test** (index once → recall → `impact` on a recalled
 symbol → … ) is the proof that the views share one coherent graph rather than re-extracting — the
-"validate the whole memory end-to-end" test as the surface completes. At least one bench gate should
+"validate the whole memory end-to-end" test as the surface completes. **✅ shipped
+(`test/composing.test.js`, 2026-06-09):** one `index()` pass, then `recall()` ranks the defining file
+first and `impact()` on the same `ctx` (no re-index) reports that file as the symbol's def site
+(cross-view node identity), resolves its callee + both callers, and the reverse direction (a callee
+links back as a caller) — closing with the invariant that doc/node/edge counts are unchanged after
+both views ran (reads, not re-extractions). Mutation-checked: pointing `impact()` at a fresh empty
+store turns both scenarios red. The remaining end-to-end follow-up: at least one bench gate should
 graduate from human-read to an **asserted threshold** so quality regressions fail CI, not just print.
 
 ---

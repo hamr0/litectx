@@ -20,12 +20,14 @@ but everything you need to *use* litectx is here.
 ## What this is
 
 litectx indexes a repository (code + markdown) into a single local **SQLite**
-file and serves ranked **recall** (search) over it. It is a `import`-able library
+file and serves two views over it: ranked **recall** (search) and **impact**
+(called-by/calling → blast-radius + risk bucket). It is a `import`-able library
 that runs **in your process** against a file on disk — no daemon, no service, no
-network, no telemetry. It is built to grow into a code+context **graph** with two
-views (recall + impact) weighted by ACT-R-style activation signals; today the
-recall view ships and the structural substrate (symbol-level `nodes`) is being
-laid underneath it.
+network, no telemetry. Both views read **one** graph built by a single `index()`
+pass — `impact()` is computed on demand and never re-extracts, so a symbol you
+surface with `recall()` is the same node `impact()` assesses (pinned by
+`test/composing.test.js`). The graph is built to grow further (ACT-R-style
+activation signals, an embeddings tier) under that same one-graph contract.
 
 ## What litectx is and is not
 
