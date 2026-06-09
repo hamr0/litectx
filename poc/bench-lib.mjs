@@ -3,6 +3,14 @@
 // `recall()`, and reports where the ground-truth file lands. This is the always-green
 // gate from PRD §11.1: every slice must hold-or-beat these numbers on BOTH repos.
 //
+// ASSERTED (PRD §11.3): a dataset with a `floor` (its committed ALL-MRR regression line, a small
+// epsilon below the shipped number) FAILS the run if it drops below — `process.exitCode = 1`, so a
+// regression breaks the gate, it doesn't just print. The corpora are LOCAL checkouts (see each
+// dataset's `roots`); an absent repo is SKIPPED, never failed, so this is safe to invoke anywhere
+// (it simply gates nothing when the corpus isn't present — reported explicitly, never silently).
+// Per LIBRARY_CONVENTIONS §5 the merge gate is typecheck+build:types+test only, so this stays a
+// LOCAL pre-push gate, not a CI step.
+//
 // Usage: node bench-lib.mjs            (both datasets)
 //        node bench-lib.mjs gitdone    (one)
 
@@ -11,6 +19,11 @@ import { LiteCtx } from "../src/index.js";
 
 const DATASETS = process.argv[2] ? [process.argv[2]] : ["aurora", "gitdone"];
 const DEPTH = 100;
+
+/** @type {{ name: string, status: "PASS"|"FAIL"|"skipped (no floor)", mrr: number, floor: number }[]} */
+const gate = [];
+let floorFailures = 0;
+let checked = 0;
 
 const rr = (r) => (r === Infinity ? 0 : 1 / r);
 const pct = (x) => (x * 100).toFixed(0).padStart(3) + "%";
@@ -50,5 +63,27 @@ for (const name of DATASETS) {
   line("HARD", rows.filter((r) => r.diff === "hard"));
   const missed = rows.filter((r) => r.rank === Infinity).map((r) => r.target);
   if (missed.length) console.log(`    not in top ${DEPTH}: ${missed.join(", ")}`);
+
+  // ---- the asserted floor (§11.3): ALL MRR must hold-or-beat the committed line ----
+  const mrr = agg(rows).mrr;
+  if (typeof ds.floor === "number") {
+    checked++;
+    const pass = mrr >= ds.floor;
+    if (!pass) floorFailures++;
+    gate.push({ name, status: pass ? "PASS" : "FAIL", mrr, floor: ds.floor });
+    console.log(`    GATE  ALL MRR ${mrr.toFixed(3)} ${pass ? "≥" : "<"} floor ${ds.floor.toFixed(3)}  →  ${pass ? "PASS" : "FAIL"}`);
+  } else {
+    gate.push({ name, status: "skipped (no floor)", mrr, floor: NaN });
+  }
 }
+
+// ---- gate summary: explicit about what was enforced vs skipped (no silent pass) ----
+console.log(`\nGATE SUMMARY (§11.3 recall regression floor):`);
+for (const g of gate) {
+  const detail = Number.isNaN(g.floor) ? "" : ` (MRR ${g.mrr.toFixed(3)} vs floor ${g.floor.toFixed(3)})`;
+  console.log(`  ${g.name.padEnd(10)} ${g.status}${detail}`);
+}
+if (checked === 0) console.log(`  ⚠ no floored dataset present — gate enforced NOTHING (corpora are local; see dataset roots)`);
+console.log(`  floor failures (MUST be 0): ${floorFailures}`);
+process.exitCode = floorFailures === 0 ? 0 : 1;
 console.log();

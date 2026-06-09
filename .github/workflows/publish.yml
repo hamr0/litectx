@@ -1,0 +1,60 @@
+# Publish gate (LIBRARY_CONVENTIONS §5): same gates as CI, then publish to npm.
+#  - MANUAL (workflow_dispatch) — you publish when you want, not on every tag/merge.
+#  - Trusted publishing via OIDC (id-token: write) — NO NPM_TOKEN secret. Configure the trusted
+#    publisher for `litectx` at npmjs.com once before the first run.
+#  - prepublishOnly builds the types into the tarball (npm runs it automatically on `npm publish`).
+#  - Idempotent: skip if the version is already on the registry; verify END-STATE rather than
+#    trusting npm's exit code.
+name: Publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # OIDC — trusted publishing, no token
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install -g npm@latest   # trusted publishing (OIDC) needs npm >= 11.5.1
+      - run: npm ci
+      # ---- same gates as CI before anything ships ----
+      - run: npm run typecheck
+      - run: npm test
+      # ---- idempotent publish: skip if this exact version is already on the registry ----
+      - name: Resolve package identity
+        id: pkg
+        run: |
+          echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Check registry
+        id: check
+        run: |
+          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} already published — skipping"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        run: npm publish   # prepublishOnly → build:types runs here, types land in the tarball
+      # ---- verify end-state, don't trust the exit code ----
+      - name: Verify on registry
+        run: |
+          for i in 1 2 3 4 5; do
+            if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
+              echo "verified ${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} on registry"
+              exit 0
+            fi
+            echo "not visible yet — retrying in 5s"; sleep 5
+          done
+          echo "ERROR: ${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} not found after publish"
+          exit 1

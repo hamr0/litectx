@@ -712,8 +712,19 @@ first and `impact()` on the same `ctx` (no re-index) reports that file as the sy
 (cross-view node identity), resolves its callee + both callers, and the reverse direction (a callee
 links back as a caller) — closing with the invariant that doc/node/edge counts are unchanged after
 both views ran (reads, not re-extractions). Mutation-checked: pointing `impact()` at a fresh empty
-store turns both scenarios red. The remaining end-to-end follow-up: at least one bench gate should
-graduate from human-read to an **asserted threshold** so quality regressions fail CI, not just print.
+store turns both scenarios red.
+
+**Asserted thresholds — ✅ shipped (2026-06-09).** Both view gates now *fail*, they don't just
+print. `impact-bench` already exit-codes on the load-bearing §7.2 invariants (silent isolations = 0,
+ISOLATION-accuracy misses = 0); its caller-recall QUALITY stays deliberately un-gated (over/under-count
+in the LIST is informative, not a safety failure). `bench-lib` (recall) is now graduated too: each
+dataset carries a committed **ALL-MRR floor** — a *small epsilon* below the shipped number (aurora
+≥ 0.55 vs 0.552; gitdone ≥ 0.42 vs 0.425) — and a drop below it sets a non-zero exit. The corpora are
+**local checkouts**, so an absent repo is *skipped, never failed* (reported explicitly — the gate
+states when it enforced nothing), which is also why these stay a **local pre-push gate, not a CI
+step**: per LIBRARY_CONVENTIONS §5 the merge gate is `typecheck` + `build:types` + `test` only. That
+CI now exists — `.github/workflows/ci.yml` (push/PR) + `publish.yml` (manual, OIDC trusted publishing,
+idempotent) — closing the convention's standing "CI runs `tsc --noEmit` on every push/PR" requirement.
 
 ---
 

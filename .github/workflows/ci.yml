@@ -1,0 +1,24 @@
+# Push / PR gate (LIBRARY_CONVENTIONS §5): npm ci → typecheck → build:types → test.
+# Nothing else gates a merge — no lint step (tsc with checkJs + strictNullChecks already catches
+# the bug class that matters; the ESLint ecosystem cuts against the dependency hierarchy for a small
+# vanilla-ESM lib). The recall/impact bench floors are a LOCAL pre-push gate, not here: their
+# corpora are local checkouts that don't exist on a CI runner (see poc/bench-lib.mjs).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck   # tsc --noEmit — JSDoc/code mismatch blocks merge (anti-drift §2)
+      - run: npm run build:types  # prove the .d.ts actually generate from the JSDoc
+      - run: npm test             # node --test — all integration tests are hermetic (own tmp fixtures)

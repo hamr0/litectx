@@ -4,6 +4,9 @@
 export default {
   name: "gitdone",
   roots: ["/home/hamr/PycharmProjects/gitdone", "/home/hamr/Documents/PycharmProjects/gitdone"],
+  // Asserted regression floor for `bench-lib` (ALL MRR). Small epsilon below the shipped number
+  // (0.425) — hold-or-beat, noise-tolerant. See aurora.mjs.
+  floor: 0.42,
   pathspecs: ["app/**/*.js"],
   include: [".js"],         // extensions the litectx library should index
   edges: "cjs",             // resolve relative require('./x') to files

@@ -3,6 +3,9 @@
 export default {
   name: "aurora",
   roots: ["/home/hamr/PycharmProjects/aurora", "/home/hamr/Documents/PycharmProjects/aurora"],
+  // Asserted regression floor for `bench-lib` (ALL MRR). Set a small epsilon below the shipped
+  // number (0.552) so the gate fails on a real regression, not on float noise. Hold-or-beat.
+  floor: 0.55,
   pathspecs: ["*.py"],
   include: [".py"],         // extensions the litectx library should index
   edges: "python",          // resolve `from aurora_x.y import z` to files
