@@ -30,6 +30,27 @@ litectx is **one substrate, two views**. The substrate is a code+context **graph
 
 It is **not** an LSP / language server, **not** a code-intelligence SaaS, **not** an embeddings-first semantic search (that's the opt-in tier), and ships **no UI or server** — it's a library against a SQLite file. The only per-adopter customization is *what* to index (by file extension) and *which* tier (deterministic vs. + embeddings); litectx owns the shape (extract → graph → rank).
 
+## Where litectx fits
+
+litectx is one piece of a small family, and it helps to know the split:
+
+- **litectx = what an agent *knows*, and how it's organized** — the context organ / memory. A library you `import`; no loop, no LLM, no process of its own.
+- **baresuite (`bareagent` + `bareguard`) = what an agent *does*, step by step, safely** — the runtime: the agent loop, the human-in-the-loop gates, tool dispatch, budgets, content-trust.
+
+If litectx is memory, baresuite is the nervous system and muscles. They meet at one seam — a `{ store, search, get, delete }` interface — so baresuite *calls* litectx whenever a task runs long enough that context management starts to matter. The dependency points one way: **baresuite consumes litectx; never the reverse.** litectx is standalone.
+
+| | baresuite | litectx |
+|---|---|---|
+| **is a** | runtime / harness | library |
+| **owns** | loop, tools, gates, spawn, budgets | recall, impact, graph, memory, the context primitives |
+| **made for** | lightweight **one-shot** automation | **persistent, long-running** agent loops |
+| **LLM / loop** | yes | no — deterministic |
+| **depends on** | imports litectx | nothing (standalone) |
+
+The short version: baresuite runs a task *once*; litectx is what turns a naive agent-in-a-loop into a **smart, flexible one that remembers** — carrying context and decisions across iterations instead of starting cold every pass.
+
+> **On "cede".** In the design docs you'll see capabilities marked ⊘ **CEDE** — that's the plain verb *cede* (to hand off), **not** an acronym. It marks what litectx deliberately **doesn't** do because it belongs to baresuite: the agent loop, sub-agent orchestration, sandboxes, the *decision* of when to compress. litectx owns the data and the mechanism; baresuite owns the control flow.
+
 ## Install
 
 ```sh
@@ -37,6 +58,8 @@ npm install litectx
 ```
 
 Node **>= 18**. **One production dependency** (`better-sqlite3`); `typescript` / `@types/node` are dev-only (JSDoc → generated `.d.ts`, so you get autocomplete out of the box). Embeddings, if enabled, pull in their own optional tier.
+
+> **`impact()` needs `ripgrep` (`rg`) on `PATH`.** The caller sweep shells out to `rg -w` (no LSP, ever) — it is *not* bundled. Without `rg`, the sweep returns nothing and a symbol reads as **0 callers**, i.e. falsely *isolated* (the one dangerous error litectx guards against). Install ripgrep on any host that calls `impact()`; `recall`/`index` don't need it.
 
 ## Quick start
 

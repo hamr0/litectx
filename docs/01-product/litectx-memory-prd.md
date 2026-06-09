@@ -725,6 +725,12 @@ states when it enforced nothing), which is also why these stay a **local pre-pus
 step**: per LIBRARY_CONVENTIONS §5 the merge gate is `typecheck` + `build:types` + `test` only. That
 CI now exists — `.github/workflows/ci.yml` (push/PR) + `publish.yml` (manual, OIDC trusted publishing,
 idempotent) — closing the convention's standing "CI runs `tsc --noEmit` on every push/PR" requirement.
+**Validated on a real runner:** `ci.yml` was watched green end-to-end (it caught a real gap first —
+the runner had no `ripgrep`, so `impact()`'s caller sweep returned 0 and 8 impact tests failed; both
+workflows now install `rg`, and it's documented as an adopter prerequisite). `publish.yml`'s gates and
+idempotency guard are grounded (the version-exists check correctly skips re-publishing `0.0.1`), but
+its **OIDC `npm publish` handshake stays unproven until the first real release** — it requires the
+one-time npmjs trusted-publisher setup + a version bump, and is untestable short of actually publishing.
 
 ---
 
