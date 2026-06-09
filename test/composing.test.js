@@ -92,7 +92,7 @@ test("recall and impact compose over a single index pass — same graph, both di
     assert.ok(edges0 >= 2, `expected the import chain's edges (handler→auth, auth→crypto) (got ${edges0})`);
 
     // ---- recall view: find the auth concept → top code hit is the file that defines it. ----
-    const hits = ctx.recall("authentication entrypoint validate session token", { kind: "code" });
+    const hits = (await ctx.recall("authentication entrypoint validate session token", { kind: "code" }));
     assert.ok(hits.length > 0, "recall returns hits");
     assert.equal(hits[0].path, "src/auth.js", "recall ranks the defining file first");
 
@@ -136,7 +136,7 @@ test("a symbol discovered through recall hands off to impact with no re-index", 
 
     // The realistic loop: an agent recalls a concept, picks a symbol from a hit, then asks impact
     // to weigh the change — all against the graph already in memory.
-    const grouped = ctx.recall("handle login authentication");
+    const grouped = (await ctx.recall("handle login authentication"));
     const codePaths = grouped.code.map((h) => h.path);
     assert.ok(codePaths.includes("src/handler.js"), `recall surfaces the handler (got ${codePaths})`);
     // the doc kind is ranked separately in the same call — one graph, two non-competing lists.

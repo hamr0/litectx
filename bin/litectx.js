@@ -47,10 +47,10 @@ async function main() {
     const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtGit(h.git)}`);
     if (opts.kind) {
       // one kind → flat ranked list
-      ctx.recall(query, { kind: opts.kind, n: opts.n }).forEach(line);
+      (await ctx.recall(query, { kind: opts.kind, n: opts.n })).forEach(line);
     } else {
       // no kind → grouped over all kinds (top-n each), so prose never buries code
-      const grouped = ctx.recall(query, { n: opts.n });
+      const grouped = await ctx.recall(query, { n: opts.n });
       for (const k of KINDS) {
         if (!grouped[k]?.length) continue;
         console.log(`# ${k}`);

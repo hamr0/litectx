@@ -35,7 +35,7 @@ async function indexed() {
 
 test("single kind → a flat ranked list of only that kind", async () => {
   const { ctx, root } = await indexed();
-  const hits = ctx.recall("activation", { kind: "code" });
+  const hits = (await ctx.recall("activation", { kind: "code" }));
   assert.ok(Array.isArray(hits), "single kind returns a flat array");
   assert.ok(hits.length > 0);
   assert.ok(hits.every((h) => h.kind === "code"), "every hit is code");
@@ -47,7 +47,7 @@ test("INVARIANT: a doc can never appear in a kind:code result, however prose-hea
   const { ctx, root } = await indexed();
   // "activation" is mentioned far more in docs.md than in activation.js — under a shared ranking
   // the doc would bury the code. The kind filter makes that structurally impossible.
-  const code = ctx.recall("activation", { kind: "code" });
+  const code = (await ctx.recall("activation", { kind: "code" }));
   assert.ok(code.some((h) => h.path === "src/activation.js"), "the code file is found");
   assert.ok(code.every((h) => h.path !== "docs.md"), "no doc leaks into a code result");
   ctx.close();
@@ -56,7 +56,7 @@ test("INVARIANT: a doc can never appear in a kind:code result, however prose-hea
 
 test("kind:doc returns only docs, ranked among themselves", async () => {
   const { ctx, root } = await indexed();
-  const docs = ctx.recall("activation", { kind: "doc" });
+  const docs = (await ctx.recall("activation", { kind: "doc" }));
   assert.ok(docs.length > 0 && docs.every((h) => h.kind === "doc"));
   assert.ok(docs.some((h) => h.path === "docs.md"));
   ctx.close();
@@ -65,7 +65,7 @@ test("kind:doc returns only docs, ranked among themselves", async () => {
 
 test("omitted kind → grouped over all KINDS (the safe default)", async () => {
   const { ctx, root } = await indexed();
-  const grouped = ctx.recall("activation");
+  const grouped = (await ctx.recall("activation"));
   assert.deepEqual(Object.keys(grouped).sort(), [...KINDS].sort(), "one group per known kind");
   assert.ok(grouped.code.every((h) => h.kind === "code"));
   assert.ok(grouped.doc.every((h) => h.kind === "doc"));
@@ -75,7 +75,7 @@ test("omitted kind → grouped over all KINDS (the safe default)", async () => {
 
 test("explicit multiple kinds → grouped over exactly those kinds", async () => {
   const { ctx, root } = await indexed();
-  const grouped = ctx.recall("activation", { kind: ["code", "doc"] });
+  const grouped = (await ctx.recall("activation", { kind: ["code", "doc"] }));
   assert.deepEqual(Object.keys(grouped).sort(), ["code", "doc"]);
   ctx.close();
   rmSync(root, { recursive: true, force: true });
@@ -90,10 +90,10 @@ test("n caps results per kind; default is 10 single / 5 grouped", async () => {
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
 
-  assert.equal(ctx.recall("handler", { kind: "code" }).length, 10, "single-kind default n=10");
-  assert.equal(ctx.recall("handler", { kind: "code", n: 3 }).length, 3, "n overrides the default");
-  assert.equal(ctx.recall("handler", { kind: ["code"] }).code.length, 5, "grouped default n=5 per kind");
-  assert.equal(ctx.recall("handler", { kind: ["code"], n: 8 }).code.length, 8, "grouped n override");
+  assert.equal((await ctx.recall("handler", { kind: "code" })).length, 10, "single-kind default n=10");
+  assert.equal((await ctx.recall("handler", { kind: "code", n: 3 })).length, 3, "n overrides the default");
+  assert.equal((await ctx.recall("handler", { kind: ["code"] })).code.length, 5, "grouped default n=5 per kind");
+  assert.equal((await ctx.recall("handler", { kind: ["code"], n: 8 })).code.length, 8, "grouped n override");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

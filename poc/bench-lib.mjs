@@ -36,14 +36,16 @@ for (const name of DATASETS) {
   const ctx = new LiteCtx({ root, include: ds.include, pathspecs: ds.pathspecs, dbPath: ":memory:" });
   const { files } = await ctx.index();
 
-  const rows = ds.queries.map((Q) => {
+  /** @type {any[]} */
+  const rows = [];
+  for (const Q of ds.queries) {
     // every dataset target is a code file; scope recall to kind:"code". For aurora-mixed (md in
     // the index) this is the whole point — the kind filter holds the py-only baseline exactly,
     // with no md doc able to bury a code target (§5: kinds never share a ranking).
-    const hits = ctx.recall(Q.q, { kind: "code", n: DEPTH });
+    const hits = await ctx.recall(Q.q, { kind: "code", n: DEPTH });
     const i = hits.findIndex((h) => h.path === Q.target);
-    return { ...Q, rank: i < 0 ? Infinity : i + 1 };
-  });
+    rows.push({ ...Q, rank: i < 0 ? Infinity : i + 1 });
+  }
   ctx.close();
 
   const agg = (rs) => ({

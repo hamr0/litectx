@@ -73,10 +73,10 @@ test("a changed file is the only one re-indexed, and recall reflects the new con
   assert.equal(r.updated, 1);
   assert.equal(r.added, 0);
   assert.equal(r.unchanged, 2);
-  const hits = ctx.recall("rotate credentials refresh session", { kind: "code", n: 5 });
+  const hits = (await ctx.recall("rotate credentials refresh session", { kind: "code", n: 5 }));
   assert.equal(hits[0].path, "src/auth.js");
   // the old body is gone: a query for words only in the old content no longer matches auth.js
-  assert.ok(ctx.recall("signature check", { kind: "code", n: 5 }).every((h) => h.path !== "src/auth.js"));
+  assert.ok((await ctx.recall("signature check", { kind: "code", n: 5 })).every((h) => h.path !== "src/auth.js"));
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -118,7 +118,7 @@ test("a removed file is dropped from the index and from recall", async () => {
   const r = await ctx.index();
   assert.equal(r.removed, 1);
   assert.equal(r.files, 2);
-  assert.ok(ctx.recall("send email", { kind: "code", n: 5 }).every((h) => h.path !== "src/mailer.py"));
+  assert.ok((await ctx.recall("send email", { kind: "code", n: 5 })).every((h) => h.path !== "src/mailer.py"));
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -139,11 +139,11 @@ test("hits carry first-class kind and format from the extension", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const code = ctx.recall("auth token validate", { kind: "code", n: 5 }).find((h) => h.path === "src/auth.js");
+  const code = (await ctx.recall("auth token validate", { kind: "code", n: 5 })).find((h) => h.path === "src/auth.js");
   assert.ok(code);
   assert.equal(code.kind, "code");
   assert.equal(code.format, "js");
-  const doc = ctx.recall("demo notifications email", { kind: "doc", n: 5 }).find((h) => h.path === "README.md");
+  const doc = (await ctx.recall("demo notifications email", { kind: "doc", n: 5 })).find((h) => h.path === "README.md");
   assert.ok(doc);
   assert.equal(doc.kind, "doc");
   assert.equal(doc.format, "md");

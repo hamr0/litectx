@@ -32,7 +32,7 @@ test("hits carry accurate per-file commit count + last-commit time", async () =>
   const root = gitRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const hits = ctx.recall("function", { kind: "code", n: 10 });
+  const hits = (await ctx.recall("function", { kind: "code", n: 10 }));
   const a = hits.find((h) => h.path === "a.js");
   const b = hits.find((h) => h.path === "b.js");
   assert.ok(a && b, "both files recalled");
@@ -49,7 +49,7 @@ test("gitsig is grounding only — it never reorders the ranked hits", async () 
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
   // ranking must be identical whether or not we look at git — compare paths to a metadata-blind run.
-  const withGit = ctx.recall("function", { kind: "code", n: 10 }).map((h) => h.path);
+  const withGit = (await ctx.recall("function", { kind: "code", n: 10 })).map((h) => h.path);
   // b.js has FEWER commits but if gitsig leaked into the score, order could shift; assert it tracks
   // BM25 only: the two files tie on the query, so order is stable and commit count is irrelevant.
   assert.ok(withGit.includes("a.js") && withGit.includes("b.js"));
@@ -61,13 +61,13 @@ test("gitsig refreshes on re-index when a new commit lands", async () => {
   const root = gitRepo(); // a.js already has 2 commits
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const count = () => ctx.recall("function", { kind: "code", n: 10 }).find((h) => h.path === "a.js")?.git?.commits;
-  assert.equal(count(), 2, "starts at 2 commits");
+  const count = async () => (await ctx.recall("function", { kind: "code", n: 10 })).find((h) => h.path === "a.js")?.git?.commits;
+  assert.equal(await count(), 2, "starts at 2 commits");
   writeFileSync(join(root, "a.js"), "export function alpha(){ return 3; }\n");
   execFileSync("git", ["-C", root, "add", "-A"], { stdio: "pipe" });
   execFileSync("git", ["-C", root, "commit", "-qm", "third"], { stdio: "pipe" });
   await ctx.index(); // content changed → file re-indexed → gitsig recomputed
-  assert.equal(count(), 3, "incremental re-index picks up the new commit");
+  assert.equal(await count(), 3, "incremental re-index picks up the new commit");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -79,7 +79,7 @@ test("a tracked-but-uncommitted file has no history → git: null", async () => 
   execFileSync("git", ["-C", root, "add", "c.js"], { stdio: "pipe" });
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const c = ctx.recall("function", { kind: "code", n: 10 }).find((h) => h.path === "c.js");
+  const c = (await ctx.recall("function", { kind: "code", n: 10 })).find((h) => h.path === "c.js");
   assert.ok(c, "c.js indexed (staged, so git ls-files lists it)");
   assert.equal(c.git, null, "no commit history → git is null (same contract as a non-git tree)");
   ctx.close();
@@ -91,7 +91,7 @@ test("non-git tree degrades gracefully to git: null", async () => {
   writeFileSync(join(root, "x.js"), "export function ex(){ return 1; }\n");
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });
   await ctx.index();
-  const x = ctx.recall("function", { kind: "code", n: 10 }).find((h) => h.path === "x.js");
+  const x = (await ctx.recall("function", { kind: "code", n: 10 })).find((h) => h.path === "x.js");
   assert.ok(x, "file indexed via the filesystem-walk fallback");
   assert.equal(x.git, null, "no git → git is null, never throws");
   ctx.close();

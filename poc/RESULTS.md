@@ -297,3 +297,24 @@ tier.**
   weight + fusion form is a build-time tuning task.
 - Only the general model was tested; a code-specific embedding model may lift further (not needed to
   pass the gate). File-level + head-truncation already wins; chunk-level is a build-time refinement.
+
+### Embeddings POC — round 2 (build-claim validation, before shipping to src/)
+
+Validated the three build claims on aurora + gitdone (tuning) + **multis (held-out)**, fusion =
+norm(dual) + w·norm(cosine) over the BM25-gated pool:
+
+- **(A) representation — DISTILLED vs HEAD-truncation = a WASH.** Same-weight MRR within noise on all
+  three repos (aurora head 0.774 / distilled 0.752; gitdone distilled 0.726 / head 0.716; multis
+  distilled 0.774 / head 0.699). Distilled does **not** beat head → **ship head-truncation** (simpler;
+  the claimed distillation win didn't materialize, so it doesn't earn its complexity).
+- **(B) weight — NO overfitting cliff.** Held-out multis lift stays strongly positive across the whole
+  sweep (w0.3 +0.10 → w1.5 +0.24 → w3.0 +0.17), peaking w1–1.5 — unlike the spreading cliff that sank
+  the held-out repo at high weight. **Default w=1.0**, conservative: the bench is natural-language-only,
+  so semantic isn't over-weighted for the exact-identifier queries it doesn't exercise (aurora keeps
+  code-semantic low, 0.2, for that reason). Tunable.
+- **(C) search latency — 4–6 ms/query warm** (query-embed + brute-force cosine over the ~400-pool).
+  Confirms BLOB + brute-force needs no sqlite-vec; the only real cost is the one-time lazy model load.
+
+**Build decisions locked:** file-level (matches recall's unit), one float32 BLOB per file from
+head-truncated text; brute-force cosine over the gated pool; weight 1.0 default; embeddings OFF by
+default; transformers.js (Xenova/all-MiniLM-L6-v2) lazy-loaded as an OPTIONAL peer dep.

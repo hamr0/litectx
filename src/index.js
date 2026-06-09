@@ -16,8 +16,24 @@ import { buildResolveCtx, resolveImports } from "./edges.js";
 import { collectGitSig } from "./gitsig.js";
 import { computeImpact } from "./impact.js";
 import { ftsMatch } from "./tokenize.js";
+import { Embedder, cosine } from "./embedder.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
+
+// Embeddings tier (slice 6): when on, recall re-ranks a wider BM25-gated pool by semantic cosine.
+// POOL is the candidate set the semantic signal can reorder — 400 matches the POC (a true answer
+// ranked deep by BM25 can still be lifted). Weight 1.0 is the POC-validated default (held-out repo
+// confirmed no overfitting cliff); the bench is NL-only, so it's deliberately not pushed higher.
+const SEMANTIC_POOL = 400;
+const DEFAULT_EMBED_WEIGHT = 1.0;
+const QUERY_CACHE_CAP = 128; // LRU of query→vector so repeated queries skip re-embedding (aurora-borrowed)
+
+/** Min–max normalise to [0,1] so BM25-spread scores and cosine compose on one scale. @param {number[]} a */
+function minmax(a) {
+  const lo = Math.min(...a);
+  const hi = Math.max(...a);
+  return a.map((x) => (hi > lo ? (x - lo) / (hi - lo) : 1));
+}
 
 // v1 default ranking = BM25 + 1-hop import-spreading (additive boost; see store.search). Weight
 // settled on a 4-repo bench (aurora py, gitdone+multis js, aurora-mixed): additive@0.3 is the only
@@ -41,6 +57,13 @@ export const KINDS = ["code", "doc"];
  * @property {string[]} [include]          file extensions to index (default: ts/js/py/md)
  * @property {string[]} [pathspecs]        optional git pathspecs to scope the index (e.g. ["app/**\/*.js"])
  * @property {string} [dbPath]             SQLite file path (default: <root>/.litectx/index.db)
+ * @property {boolean} [embeddings]        enable the opt-in semantic tier (default false). When on,
+ *                                         `index()` embeds each file and `recall()` fuses cosine into
+ *                                         the ranking. Requires the optional peer dep `@xenova/transformers`.
+ * @property {number} [embedWeight]        semantic fusion weight (default 1.0); higher = more semantic
+ * @property {string} [embedModel]         transformers.js model id (default Xenova/all-MiniLM-L6-v2)
+ * @property {{ embed(text: string): Promise<Float32Array> }} [embedder]  inject a custom/stub embedder
+ *                                         (advanced/testing); overrides the built-in model loading
  */
 
 /**
@@ -62,6 +85,36 @@ export class LiteCtx {
     this.dbPath = config.dbPath ?? join(this.root, ".litectx", "index.db");
     if (this.dbPath !== ":memory:") mkdirSync(dirname(this.dbPath), { recursive: true });
     this.store = new Store(this.dbPath);
+
+    // embeddings tier (slice 6) — off by default. The embedder is lazy: built on first use only when
+    // the tier is on (or injected for tests), so the default path never imports the ML dependency.
+    this.embeddings = config.embeddings ?? false;
+    this.embedWeight = config.embedWeight ?? DEFAULT_EMBED_WEIGHT;
+    this.embedModel = config.embedModel;
+    /** @type {{ embed(text: string): Promise<Float32Array> } | null} */
+    this._embedder = config.embedder ?? null;
+    /** @type {Map<string, Float32Array>} LRU query-embedding cache */
+    this._qcache = new Map();
+  }
+
+  /** The embedder for this instance — injected, or lazily constructed when the tier is on. */
+  get embedder() {
+    if (!this._embedder) this._embedder = new Embedder({ model: this.embedModel });
+    return this._embedder;
+  }
+
+  /** Embed a query with a small LRU cache (repeated queries skip the model). @param {string} q */
+  async _embedQuery(q) {
+    const hit = this._qcache.get(q);
+    if (hit) {
+      this._qcache.delete(q); // refresh recency
+      this._qcache.set(q, hit);
+      return hit;
+    }
+    const v = await this.embedder.embed(q);
+    this._qcache.set(q, v);
+    if (this._qcache.size > QUERY_CACHE_CAP) this._qcache.delete(this._qcache.keys().next().value);
+    return v;
   }
 
   /**
@@ -104,6 +157,13 @@ export class LiteCtx {
       for (const u of upserts) u.git = sig.get(u.path);
     }
 
+    // embeddings tier (slice 6): embed ONLY the changed files (incremental — unchanged files keep
+    // their stored vector). File-level, head-truncated text (POC-validated). The vector rides on the
+    // upsert into `applyChanges`, written as a BLOB. Sequential by design (batching deferred).
+    if (this.embeddings) {
+      for (const u of upserts) u.embedding = await this.embedder.embed(u.body);
+    }
+
     this.store.applyChanges({ upserts, touch, deletes }, Date.now());
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
@@ -123,27 +183,32 @@ export class LiteCtx {
    * `n` caps results **per kind**; raise it to dig deeper. There is no hard cap and no
    * pagination — a larger `n` is a larger context, which is the caller's budget to manage.
    *
+   * **Async** since slice 6: the embeddings tier embeds the query at call time. With embeddings off
+   * (the default) no model is touched — the work is synchronous, just wrapped in a resolved promise.
+   *
    * @overload
    * @param {string} query
    * @param {{ kind: string, n?: number }} opts
-   * @returns {import("./store.js").Hit[]}
+   * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
    * @param {{ kind?: string[], n?: number }} [opts]
-   * @returns {Record<string, import("./store.js").Hit[]>}
+   * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
    * @param {{ kind?: string | string[], n?: number }} [opts]
-   * @returns {import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>}
+   * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    */
-  recall(query, opts = {}) {
+  async recall(query, opts = {}) {
     const match = ftsMatch(query);
+    // embed the query ONCE up front (cached) when the tier is on; per-kind ranking is then sync.
+    const qvec = this.embeddings && match ? await this._embedQuery(query) : null;
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
-      return match ? this.store.search(match, opts.kind, opts.n ?? 10, SPREAD_WEIGHT) : [];
+      return this._rankKind(match, opts.kind, opts.n ?? 10, qvec);
     }
     // grouped: an explicit subset of kinds, or all known kinds when omitted. One FTS query per
     // kind, each ranked against only its own kind — no kind ever competes with another for rank.
@@ -151,8 +216,33 @@ export class LiteCtx {
     const n = opts.n ?? 5;
     /** @type {Record<string, import("./store.js").Hit[]>} */
     const grouped = {};
-    for (const k of kinds) grouped[k] = match ? this.store.search(match, k, n, SPREAD_WEIGHT) : [];
+    for (const k of kinds) grouped[k] = this._rankKind(match, k, n, qvec);
     return grouped;
+  }
+
+  /**
+   * Rank one kind. Dual path (BM25 + spreading) when `qvec` is null; tri-hybrid when it's the query
+   * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)`, then sliced to
+   * `n`. The pool is the only place cosine runs (gated, ~hundreds), so it's O(pool), not O(corpus).
+   * @param {string|null} match  FTS expression, or null when the query has no usable terms
+   * @param {string} kind
+   * @param {number} n
+   * @param {Float32Array|null} qvec
+   * @returns {import("./store.js").Hit[]}
+   */
+  _rankKind(match, kind, n, qvec) {
+    if (!match) return [];
+    if (!qvec) return this.store.search(match, kind, n, SPREAD_WEIGHT); // dual path (unchanged contract)
+    const pool = this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT);
+    if (pool.length < 2) return pool.slice(0, n);
+    const vecs = this.store.getEmbeddings(pool.map((h) => h.path));
+    const sN = minmax(pool.map((h) => h.score));
+    const cN = minmax(pool.map((h) => cosine(qvec, vecs.get(h.path))));
+    return pool
+      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
+      .sort((a, b) => b.f - a.f)
+      .slice(0, n)
+      .map((x) => x.h);
   }
 
   /**
@@ -181,3 +271,4 @@ export class LiteCtx {
 
 export { Store } from "./store.js";
 export { splitIdent, keywords, ftsMatch } from "./tokenize.js";
+export { Embedder, cosine } from "./embedder.js";

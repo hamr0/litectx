@@ -15,9 +15,10 @@ import { indexBody } from "./tokenize.js";
  */
 
 /**
- * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig }} Upsert
+ * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig, embedding?: Float32Array }} Upsert
  * `imports` are raw specifiers from the chunker; `edges` are those resolved to intra-repo dst paths
- * (edges.js); `git` is file-level activity metadata (gitsig.js).
+ * (edges.js); `git` is file-level activity metadata (gitsig.js); `embedding` is the file's float32
+ * vector when the embeddings tier is on (slice 6), absent otherwise.
  */
 
 /**
@@ -60,6 +61,11 @@ const SCHEMA = [
   // file-level git activity (slice 4): commit count + last-commit time, attached to hits as
   // displayed grounding — NOT scored (§4.1). 1:1 with `path`, refreshed when a file is re-indexed.
   "CREATE TABLE IF NOT EXISTS git_sig(path TEXT PRIMARY KEY, commits INTEGER NOT NULL, last_commit INTEGER)",
+  // file-level embeddings (slice 6, opt-in tier): one float32 vector per file, stored as a BLOB in
+  // the SAME db (no sqlite-vec — recall is BM25-gated, so cosine only ever runs over the candidate
+  // pool, never the corpus; brute-force is sub-ms regardless of repo size, POC-validated). Only
+  // populated when the embeddings tier is on; 1:1 with `path`, refreshed/dropped with the file.
+  "CREATE TABLE IF NOT EXISTS file_embeddings(path TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL)",
 ];
 
 export class Store {
@@ -85,6 +91,7 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS nodes");
     this.db.exec("DROP TABLE IF EXISTS edges");
     this.db.exec("DROP TABLE IF EXISTS git_sig");
+    this.db.exec("DROP TABLE IF EXISTS file_embeddings");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -132,6 +139,11 @@ export class Store {
       "INSERT INTO git_sig(path, commits, last_commit) VALUES (@path, @commits, @last) " +
         "ON CONFLICT(path) DO UPDATE SET commits = excluded.commits, last_commit = excluded.last_commit"
     );
+    const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+    const upEmb = this.db.prepare(
+      "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
+        "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
+    );
 
     const tx = this.db.transaction(() => {
       for (const p of deletes) {
@@ -140,6 +152,7 @@ export class Store {
         delNodes.run(p);
         delEdgesOf.run(p, p);
         delGit.run(p);
+        delEmb.run(p);
       }
       for (const u of upserts) {
         delDoc.run(u.path); // replace any prior row for this path
@@ -159,6 +172,10 @@ export class Store {
         // no history (non-git tree, or a tracked-but-uncommitted file) → no row → recall `git: null`.
         if (u.git) upGit.run({ path: u.path, commits: u.git.commits, last: u.git.lastCommit });
         else delGit.run(u.path);
+        // embeddings tier (slice 6): store the file's float32 vector as a BLOB when present. Computed
+        // only for changed files (incremental) — unchanged files keep their stored vector untouched.
+        if (u.embedding) upEmb.run({ path: u.path, dim: u.embedding.length, vec: Buffer.from(u.embedding.buffer, u.embedding.byteOffset, u.embedding.byteLength) });
+        else delEmb.run(u.path);
       }
       for (const t of touch) touchIdx.run({ path: t.path, mtime: t.mtime });
     });
@@ -298,6 +315,33 @@ export class Store {
   /** @returns {number} number of import edges (slice 4 — for tests/introspection) */
   edgeCount() {
     return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM edges WHERE type = 'import'").get()).n;
+  }
+
+  /**
+   * Stored embedding vectors for the given paths (slice 6). Reads only the requested rows — at
+   * search time that's the BM25-gated pool, never the whole corpus — so cosine stays O(pool).
+   * Reconstructs each BLOB into its own Float32Array (copied, so it never aliases SQLite's buffer).
+   * @param {string[]} paths
+   * @returns {Map<string, Float32Array>}
+   */
+  getEmbeddings(paths) {
+    /** @type {Map<string, Float32Array>} */
+    const m = new Map();
+    if (!paths.length) return m;
+    const ph = paths.map(() => "?").join(",");
+    const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
+      this.db.prepare(`SELECT path, vec FROM file_embeddings WHERE path IN (${ph})`).all(...paths)
+    );
+    for (const r of rows) {
+      const u8 = Uint8Array.from(r.vec); // copy out of SQLite's buffer, guarantees 4-byte alignment
+      m.set(r.path, new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4));
+    }
+    return m;
+  }
+
+  /** @returns {number} number of stored file embeddings (slice 6 — for tests/introspection) */
+  embeddingCount() {
+    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM file_embeddings").get()).n;
   }
 
   close() {
