@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: "20"
           cache: npm
+      # impact() shells out to ripgrep (`rg -w`) — a runtime dependency, not bundled. Without it the
+      # caller sweep returns nothing and every impact test reads 0 callers. Install it explicitly so
+      # the gate never depends on the runner image happening to ship it.
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: rg --version
       - run: npm ci
       - run: npm run typecheck   # tsc --noEmit — JSDoc/code mismatch blocks merge (anti-drift §2)
       - run: npm run build:types  # prove the .d.ts actually generate from the JSDoc

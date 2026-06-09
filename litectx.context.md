@@ -286,10 +286,17 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 - **`.tsx` / `.jsx` are best-effort.** v1 grammars are TS, JS, Python; JSX-heavy
   files may fall back to a file-level chunk. They are not in the default `include`.
 - **`close()` matters for file DBs.** The store uses WAL; close to flush cleanly.
+- **`impact()` requires `ripgrep` (`rg`) on `PATH`.** The caller sweep shells out to
+  `rg -w`; it is **not** bundled. If `rg` is missing the sweep returns nothing and
+  `impact()` reports **0 callers** — i.e. a symbol can read as isolated purely because
+  the tool is absent (a §7.2 false-isolation, the one dangerous error). Install
+  ripgrep on any host (CI, container, dev box) that calls `impact()`. `recall()` and
+  `index()` do **not** need it.
 
 ## Constraints
 
-- **Runtime:** Node **≥ 18**, ESM only (`"type": "module"`).
+- **Runtime:** Node **≥ 18**, ESM only (`"type": "module"`). **`ripgrep` (`rg`) on
+  `PATH`** is required for `impact()` (not for `recall`/`index`) — see Gotchas.
 - **Dependencies (shipped):** `better-sqlite3` (native SQLite) and
   `web-tree-sitter` (WASM parser runtime, pinned). The 3 grammars (Python, JS, TS)
   are **vendored** in the package (~3.4 MB unpacked) — no extra grammar download.

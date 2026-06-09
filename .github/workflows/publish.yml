@@ -23,6 +23,7 @@ jobs:
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep   # impact() runtime dep (rg -w); needed for `npm test`
       - run: npm install -g npm@latest   # trusted publishing (OIDC) needs npm >= 11.5.1
       - run: npm ci
       # ---- same gates as CI before anything ships ----
