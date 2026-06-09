@@ -728,9 +728,11 @@ idempotent) — closing the convention's standing "CI runs `tsc --noEmit` on eve
 **Validated on a real runner:** `ci.yml` was watched green end-to-end (it caught a real gap first —
 the runner had no `ripgrep`, so `impact()`'s caller sweep returned 0 and 8 impact tests failed; both
 workflows now install `rg`, and it's documented as an adopter prerequisite). `publish.yml`'s gates and
-idempotency guard are grounded (the version-exists check correctly skips re-publishing `0.0.1`), but
-its **OIDC `npm publish` handshake stays unproven until the first real release** — it requires the
-one-time npmjs trusted-publisher setup + a version bump, and is untestable short of actually publishing.
+idempotency guard are grounded (the version-exists check correctly skips re-publishing `0.0.1`), and
+the **OIDC `npm publish` handshake is now proven**: the trusted publisher was configured at npmjs.com
+and the workflow ran green end-to-end on `workflow_dispatch`, publishing **v0.1.0** (verified live:
+`npm view litectx version` → `0.1.0`). The full release path — gates → build types into the tarball →
+OIDC publish → on-registry verify — is exercised and reproducible for every subsequent version bump.
 
 ---
 

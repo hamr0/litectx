@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: v1 surface built, pre-release.** The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading-activation** core is on by default. Still roadmap (🚧): opt-in **embeddings**, the access-log **base-level activation** tier, and ergonomic graph accessors. `litectx@0.0.1` remains a **name-reservation placeholder** on npm — the real code ships at the first tagged release.
+> **Status: v0.1.0 — first functional release** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading-activation** core is on by default. Still roadmap (🚧): opt-in **embeddings**, the access-log **base-level activation** tier, and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve.
 
 ## What this is
 
