@@ -263,3 +263,37 @@ ever folding them into ranking — default to **imports-only recall spreading** 
 
 **Slice-4 refinement:** recall spreading rides **import edges**; the `edges` module still extracts
 **both** (imports for recall, calls for impact/slice-5). Don't fuse calls into recall on spec.
+
+---
+
+## Embeddings POC (post-v1 tier gate) — `embeddings-poc.mjs`
+
+**Question:** does adding a semantic embedding signal to the shipped dual recall (BM25 + 1-hop
+import-spreading) measurably beat dual on litectx's OWN benches? (The "~85% → ~95%" figure is
+aurora's; validate the lift here before building the tier — POC-first.)
+
+**Method:** BM25 gates a candidate pool (DEPTH 400), embeddings RE-RANK within it (the PRD's "lexical
+match gated, then re-weighted"). Local ONNX model `Xenova/all-MiniLM-L6-v2` (384-dim) via
+transformers.js — open-source, in-process, no vendor lock-in. File-granularity (matches recall's
+gate), head-truncated to 6000 chars. Fused = norm(dualScore) + w·norm(cosine); weight swept.
+
+**Result — PASS, decisively, on BOTH repos:**
+
+| repo | dual (BM25+spread) | tri best | lift | rescued / hurt |
+|---|---|---|---|---|
+| aurora (482 files, 22 q) | 0.552 | 0.774 (w=1.5) | **+0.222** | 12 / 2 |
+| gitdone (100 files, 20 q) | 0.425 | 0.716 (w=1.5) | **+0.291** | 14 / 0 |
+
+Positive at **every** weight (0.3→1.5), monotonic upward, near-zero harm (2 hurt on aurora, 0 on
+gitdone). An order of magnitude larger than the spreading lift (+0.01–0.03). **Embeddings earn their
+tier.**
+
+**Caveats / build-time notes:**
+- **Cold latency confirms why it's opt-in:** ~50s to embed aurora's 482 files (~100ms/file) on CPU.
+  This is the cost the PRD flagged — embeddings stay OFF by default, an explicit tier.
+- **Weight is NOT tuned yet.** The sweep is monotonic up to 1.5 (the max tested) on the two *tuning*
+  repos — production weight needs the held-out check the spreading slice used (multis / aurora-mixed)
+  to avoid the overfitting cliff. The gate question (does it beat dual?) is answered; the optimum
+  weight + fusion form is a build-time tuning task.
+- Only the general model was tested; a code-specific embedding model may lift further (not needed to
+  pass the gate). File-level + head-truncation already wins; chunk-level is a build-time refinement.
