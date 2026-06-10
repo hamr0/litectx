@@ -4,7 +4,7 @@
 // nodes/edges/signals tables around this; recall keeps reading FTS.
 
 import Database from "better-sqlite3";
-import { indexBody } from "./tokenize.js";
+import { indexBody, splitIdent } from "./tokenize.js";
 
 /**
  * @typedef {Object} DocRow
@@ -29,18 +29,35 @@ import { indexBody } from "./tokenize.js";
  */
 
 /**
+ * @typedef {Object} ChunkRef
+ * @property {string|null} symbol   function/class name, or the md heading; null for anonymous/file chunks
+ * @property {string} nodeType      tree-sitter node type, "section" (md), or "file" (fallback chunk)
+ * @property {number} startLine     0-based, inclusive
+ * @property {number} endLine       0-based, inclusive
+ */
+
+/**
  * @typedef {Object} Hit
  * @property {string} path
  * @property {string} kind
  * @property {string} format
  * @property {number} score   higher = more relevant
  * @property {import("./gitsig.js").GitSig | null} [git]  file-level git activity (grounding, not scored)
+ * @property {ChunkRef | null} [chunk]  the best-matching chunk inside the hit (function pointer >
+ *                            file pointer); null when nothing localizes — written memory has no
+ *                            chunks (the row IS the unit), and a path-only match names none
  */
 
 const SCHEMA = [
   // path tokens are folded into `body` (doubled) so filename matches count;
-  // path/kind/format are stored but not full-text indexed.
-  "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, body)",
+  // path/kind/format and the slice-7 write-path metadata are stored but not full-text indexed.
+  //   source     — 'file' (indexed from disk) | 'direct' (written via remember). The recall gate
+  //                rides `docs` for ALL kinds; written memory is never in `file_index`, so the
+  //                incremental sweep (deletes = file_index keys) structurally can't touch it —
+  //                `source` makes that invariant explicit and powers forget-by-query / HITL.
+  //   provenance — 'human' | 'agent' (written memory only; NULL for indexed files). The trust axis.
+  //   occurred_at— episode timestamp (epoch ms; NULL for facts/docs/code). Stored, not yet scored.
+  "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, source UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body)",
   // change detection (§6): (mtime, size) is the fast skip, content_hash the arbiter.
   // size guards the case where an edit lands within one filesystem mtime tick of the last
   // index (mtime unchanged but length moved); `index({ force: true })` covers the rest.
@@ -66,7 +83,26 @@ const SCHEMA = [
   // pool, never the corpus; brute-force is sub-ms regardless of repo size, POC-validated). Only
   // populated when the embeddings tier is on; 1:1 with `path`, refreshed/dropped with the file.
   "CREATE TABLE IF NOT EXISTS file_embeddings(path TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL)",
+  // recall audit log (slice 7): one row per recall hit — the genuine access log §4's base-level
+  // tier will later score (written memory produces real access events, not git's proxy). v1 records
+  // it but does not rank on it. Also feeds HITL promotion (§3.2): an agent fact whose hit count
+  // crosses the review threshold becomes a human-review candidate. Append-only; many rows per path.
+  // `symbol` = the hit's best-matching chunk (chunk-granular recall) so the future edit-bind can
+  // join "recalled" and "edited" at the same grain (§14 #4); NULL for written memory / unlocalized.
+  "CREATE TABLE IF NOT EXISTS recall_log(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, symbol TEXT, ts INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS recall_log_path ON recall_log(path)",
+  // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
+  // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
+  // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
+  // on the unstemmed `docs` table — porter-everywhere was measured and REJECTED (in code, word-forms
+  // are distinct symbols; aurora gate broke, gitdone P@1 collapsed). Kinds never share a ranking, so
+  // a kind routes to exactly one table and BM25 scores never merge across the two. Direct-written
+  // `doc` rows stay in `docs` (one kind = one ranking domain).
+  "CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body, tokenize='porter unicode61')",
 ];
+
+/** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
+const MEM_KINDS = new Set(["fact", "episode"]);
 
 export class Store {
   /** @param {string} dbPath path to the SQLite file, or ":memory:" */
@@ -82,6 +118,17 @@ export class Store {
     this.db.pragma("mmap_size = 268435456"); // 256 MB memory-mapped reads
     this.db.pragma("temp_store = MEMORY");
     for (const stmt of SCHEMA) this.db.exec(stmt);
+    // self-heal pre-release schemas (CREATE IF NOT EXISTS leaves stale tables in place, and the
+    // first INSERT would crash). The rule: an upgrade that can preserve data does; one that can't
+    // only ever drops re-indexable data. A `docs` table without `source` predates the write path
+    // (≤ 0.1.0) — it cannot contain written memory, only files `index()` rebuilds → reset. A
+    // `recall_log` without `symbol` (pre-slice-8) is column-additive → ALTER, log preserved.
+    const docsCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(docs)"));
+    if (!docsCols.some((c) => c.name === "source")) this.reset();
+    else {
+      const logCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(recall_log)"));
+      if (!logCols.some((c) => c.name === "symbol")) this.db.exec("ALTER TABLE recall_log ADD COLUMN symbol TEXT");
+    }
   }
 
   /** Drop and recreate everything (full reindex; used by `index({ force: true })`). */
@@ -92,6 +139,8 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS edges");
     this.db.exec("DROP TABLE IF EXISTS git_sig");
     this.db.exec("DROP TABLE IF EXISTS file_embeddings");
+    this.db.exec("DROP TABLE IF EXISTS recall_log");
+    this.db.exec("DROP TABLE IF EXISTS mem");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -118,7 +167,12 @@ export class Store {
   applyChanges({ upserts, touch, deletes }, indexedAt) {
     const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ?");
     const delIdx = this.db.prepare("DELETE FROM file_index WHERE path = ?");
-    const insDoc = this.db.prepare("INSERT INTO docs(path, kind, format, body) VALUES (@path, @kind, @format, @body)");
+    // indexed files are always source='file' with no provenance/occurred_at (those are write-path
+    // metadata — slice 7 §3.2). Written memory uses a separate insert path (`writeMemory`).
+    const insDoc = this.db.prepare(
+      "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
+        "VALUES (@path, @kind, @format, 'file', NULL, NULL, @body)"
+    );
     const upIdx = this.db.prepare(
       "INSERT INTO file_index(path, content_hash, mtime, size, indexed_at) VALUES (@path, @hash, @mtime, @size, @indexed_at) " +
         "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at"
@@ -182,14 +236,136 @@ export class Store {
     tx();
   }
 
-  /** @returns {number} number of indexed documents */
+  /**
+   * Write one directly-authored memory — a fact/episode/doc with no file behind it (slice 7, §3.2).
+   * Upsert by `id` (the row's `path`/key): replaces any prior **direct** row with the same id, and
+   * **never** clobbers an indexed (`source='file'`) row. Always `source='direct'`, so the incremental
+   * index sweep — whose `deletes` come only from `file_index` keys — structurally can't touch it.
+   * Stored **whole** (no chunking); the FTS body is identifier-split like any other (`indexBody`).
+   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, embedding?: Float32Array }} m
+   */
+  writeMemory(m) {
+    const tx = this.db.transaction(() => {
+      // route by kind (§5.1): fact/episode → the stemmed `mem` table; direct `doc` → `docs`
+      // (one kind = one ranking domain, so a direct FAQ ranks against file docs, unstemmed).
+      if (MEM_KINDS.has(m.kind)) {
+        this.db.prepare("DELETE FROM mem WHERE path = ?").run(m.id);
+        this.db
+          .prepare("INSERT INTO mem(path, kind, format, provenance, occurred_at, body) VALUES (@path, @kind, @format, @provenance, @occurred_at, @body)")
+          .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+      } else {
+        this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
+        this.db
+          .prepare(
+            "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
+              "VALUES (@path, @kind, @format, 'direct', @provenance, @occurred_at, @body)"
+          )
+          .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+      }
+      if (m.embedding) {
+        this.db
+          .prepare("INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
+          .run({ path: m.id, dim: m.embedding.length, vec: Buffer.from(m.embedding.buffer, m.embedding.byteOffset, m.embedding.byteLength) });
+      } else {
+        this.db.prepare("DELETE FROM file_embeddings WHERE path = ?").run(m.id);
+      }
+    });
+    tx();
+  }
+
+  /**
+   * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
+   * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
+   * touched. Cleans the row's embedding + recall-log alongside it. Returns rows removed.
+   * @param {{ id?: string, kind?: string, provenance?: string }} sel
+   * @returns {number}
+   */
+  forgetMemory(sel) {
+    /** @type {string[]} */
+    const clauses = [];
+    /** @type {Record<string, string>} */
+    const params = {};
+    if (sel.id != null) (clauses.push("path = @id"), (params.id = sel.id));
+    if (sel.kind != null) (clauses.push("kind = @kind"), (params.kind = sel.kind));
+    if (sel.provenance != null) (clauses.push("provenance = @provenance"), (params.provenance = sel.provenance));
+    // both written-memory homes (§5.1): the stemmed `mem` table (facts/episodes — all direct by
+    // construction) and `docs` rows guarded by source='direct' (directly-written docs only).
+    const docsCond = ["source = 'direct'", ...clauses].join(" AND ");
+    const memCond = clauses.length ? clauses.join(" AND ") : "1=1";
+    const tx = this.db.transaction(() => {
+      const paths = [
+        .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM docs WHERE ${docsCond}`).all(params)),
+        .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM mem WHERE ${memCond}`).all(params)),
+      ].map((r) => r.path);
+      const removed =
+        this.db.prepare(`DELETE FROM docs WHERE ${docsCond}`).run(params).changes +
+        this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
+      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
+      for (const p of paths) (delEmb.run(p), delLog.run(p));
+      return removed;
+    });
+    return tx();
+  }
+
+  /**
+   * Append recall hits to the audit log (slice 7, §3.2) — the genuine access log §4's base-level tier
+   * will later score. v1 records, does not rank. One row per hit.
+   * @param {{ path: string, kind: string, chunk?: ChunkRef | null }[]} hits
+   * @param {number} ts  epoch ms
+   */
+  logRecall(hits, ts) {
+    if (!hits.length) return;
+    const ins = this.db.prepare("INSERT INTO recall_log(path, kind, symbol, ts) VALUES (@path, @kind, @symbol, @ts)");
+    const tx = this.db.transaction(() => {
+      for (const h of hits) ins.run({ path: h.path, kind: h.kind, symbol: h.chunk?.symbol ?? null, ts });
+    });
+    tx();
+  }
+
+  /** @returns {number} total stored items — indexed documents + written memory (both FTS tables) */
   count() {
-    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM docs").get()).n;
+    return (
+      /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM docs").get()).n +
+      /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM mem").get()).n
+    );
   }
 
   /** @returns {number} number of symbol/section chunks across all files */
   nodeCount() {
     return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM nodes").get()).n;
+  }
+
+  /**
+   * How many times `path` has been recalled (slice 7 audit log, §3.2). Feeds HITL review: an
+   * agent-asserted fact whose count crosses the review threshold is a promotion candidate.
+   * @param {string} path
+   * @returns {number}
+   */
+  recallCount(path) {
+    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM recall_log WHERE path = ?").get(path)).n;
+  }
+
+  /**
+   * HITL review candidates (§3.2): agent-asserted facts whose recall-hit count has crossed
+   * `threshold` — the set a human is asked to validate (→ re-`remember` as `by:'human'`) or
+   * invalidate (→ `forget`). A plain query over provenance + the recall log. Acting on a candidate
+   * removes it from the set (promotion flips provenance off `'agent'`; forget deletes the row), so no
+   * separate "reviewed" flag is needed. The count gates REVIEW, not ranking — not a feedback loop.
+   * @param {number} [threshold=5]
+   * @returns {{ path: string, hits: number }[]}
+   */
+  reviewCandidates(threshold = 5) {
+    // facts live in the stemmed `mem` table (§5.1); all mem rows are direct-written by construction.
+    return /** @type {{ path: string, hits: number }[]} */ (
+      this.db
+        .prepare(
+          "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
+            "WHERE m.kind = 'fact' AND m.provenance = 'agent' " +
+            "GROUP BY m.path HAVING hits >= ? ORDER BY hits DESC, m.path"
+        )
+        .all(threshold)
+    );
   }
 
   /**
@@ -246,6 +422,17 @@ export class Store {
    * @returns {Hit[]}
    */
   search(match, kind, limit = 10, spreadWeight = 0) {
+    // written-memory kinds route to the stemmed `mem` table (§5.1) — their own ranking domain
+    // (kinds never share a ranking, so no BM25 score ever merges across the two tables). No
+    // spreading: facts/episodes have no edges. Shape matches `docs` hits (`git` → null).
+    if (MEM_KINDS.has(kind)) {
+      const rows = /** @type {Hit[]} */ (
+        this.db
+          .prepare("SELECT path, kind, format, -bm25(mem) AS score FROM mem WHERE mem MATCH ? AND kind = ? ORDER BY score DESC LIMIT ?")
+          .all(match, kind, limit)
+      );
+      return this.attachGit(rows);
+    }
     // Pull a pool wider than `limit` so spreading can pull a graph-adjacent file up into the
     // top results. 200 covers the validated bench depth; bounded so the neighbour query's
     // bind-parameter count stays well under SQLite's limit.
@@ -292,6 +479,68 @@ export class Store {
     });
     blended.sort((a, b) => b.score - a.score);
     return this.attachGit(blended.slice(0, limit));
+  }
+
+  /**
+   * Attach the best-matching chunk pointer to each hit, in place (chunk-granular recall). File-level
+   * ranking is untouched — the benches gate on hit order and this never reorders; it localizes WHICH
+   * function/section inside an already-ranked file carried the query terms (a function pointer beats
+   * a file pointer). Scoring is structural, no weights: both sides identifier-split the same way
+   * (`splitIdent`, the indexing convention) and score = distinct query terms present in the chunk.
+   * The one non-obvious rule: **the winner may not strictly contain another scoring chunk.** Chunks
+   * nest (file/preamble ⊃ class ⊃ method ⊃ arrow), so a container's term set is a superset of its
+   * children's and would *always* out-count them — a class chunk that wins only by aggregating a
+   * method's match is the file-pointer problem again at class scale. A container still wins when the
+   * match genuinely lives in container-level code (no scoring descendant). Ties: named beats
+   * anonymous, then smaller span, then first-in-file; an anonymous winner (arrow/lambda) is labeled
+   * with its nearest named container. Runs only over the final returned hits (≤ n per kind), never
+   * the pool. `chunk: null` when nothing localizes: written memory has no nodes rows (the row IS
+   * the unit), and a match carried only by path/filename tokens names no chunk.
+   * @param {Hit[]} hits
+   * @param {string[]} terms  identifier-split query keywords (`keywords(query)`)
+   * @returns {Hit[]}
+   */
+  attachChunks(hits, terms) {
+    const sel = this.db.prepare("SELECT symbol, node_type, start_line, end_line, body FROM nodes WHERE path = ? ORDER BY id");
+    /** @type {(a: {start_line:number,end_line:number}, b: {start_line:number,end_line:number}) => boolean} */
+    const contains = (a, b) =>
+      a.start_line <= b.start_line && a.end_line >= b.end_line && a.end_line - a.start_line > b.end_line - b.start_line;
+    /** @type {(r: {start_line:number,end_line:number}) => number} */
+    const span = (r) => r.end_line - r.start_line;
+    for (const h of hits) {
+      h.chunk = null;
+      if (!terms.length) continue;
+      const rows = /** @type {{ symbol: string|null, node_type: string, start_line: number, end_line: number, body: string }[]} */ (sel.all(h.path));
+      const scored = [];
+      for (const r of rows) {
+        const toks = new Set(splitIdent(`${r.symbol ?? ""} ${r.body}`));
+        let s = 0;
+        for (const t of terms) if (toks.has(t)) s++;
+        if (s > 0) scored.push({ r, s });
+      }
+      if (!scored.length) continue;
+      // disqualify aggregators; if every scoring chunk aggregates (degenerate), keep them all
+      const leaf = scored.filter((x) => !scored.some((o) => o !== x && contains(x.r, o.r)));
+      const pool = leaf.length ? leaf : scored;
+      let best = pool[0];
+      for (const x of pool) {
+        if (
+          x.s > best.s ||
+          (x.s === best.s && x.r.symbol != null && best.r.symbol == null) ||
+          (x.s === best.s && (x.r.symbol != null) === (best.r.symbol != null) && span(x.r) < span(best.r))
+        )
+          best = x;
+      }
+      // an anonymous winner is labeled with its nearest (smallest) named container
+      let c = best.r;
+      if (c.symbol == null) {
+        let named = null;
+        for (const o of rows) if (o.symbol != null && contains(o, c) && (!named || span(o) < span(named))) named = o;
+        if (named) c = named;
+      }
+      h.chunk = { symbol: c.symbol, nodeType: c.node_type, startLine: c.start_line, endLine: c.end_line };
+    }
+    return hits;
   }
 
   /**

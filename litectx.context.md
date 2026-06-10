@@ -7,10 +7,11 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–6: incremental
+> document describes the contract **as actually shipped** (slices 0–7: incremental
 > indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
-> grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, and the
-> opt-in **embeddings** tier). Where the eventual surface (ACT-R base-level activation
+> grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, the
+> opt-in **embeddings** tier, and the **write path** — `remember`/`forget` for
+> facts/episodes/direct docs). Where the eventual surface (ACT-R base-level activation
 > weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
 > **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
 > today and is covered by tests and the multi-repo benchmark.
@@ -19,21 +20,32 @@ but everything you need to *use* litectx is here.
 
 ## What this is
 
-litectx indexes a repository (code + markdown) into a single local **SQLite**
-file and serves two views over it: ranked **recall** (search) and **impact**
-(called-by/calling → blast-radius + risk bucket). It is a `import`-able library
-that runs **in your process** against a file on disk — no daemon, no service, no
-network, no telemetry. Both views read **one** graph built by a single `index()`
-pass — `impact()` is computed on demand and never re-extracts, so a symbol you
+litectx is a local, searchable **memory across kinds** for AI agents, in one
+**SQLite** file. Content enters two ways — **`index()`** reads a repository
+(code + markdown) from disk, and **`remember()`** writes knowledge that isn't a
+file (facts, episodes, runtime docs/FAQs). Over that one store it serves ranked
+**recall** (search, kind-scoped) and **impact** (called-by/calling →
+blast-radius + risk bucket). It is an `import`-able library that runs **in your
+process** against a file on disk — no daemon, no service, no network, no
+telemetry. The views read **one** graph built by a single `index()` pass —
+`impact()` is computed on demand and never re-extracts, so a symbol you
 surface with `recall()` is the same node `impact()` assesses (pinned by
 `test/composing.test.js`). The graph is built to grow further (ACT-R-style
-activation signals, an embeddings tier) under that same one-graph contract.
+activation signals scored on the recall log) under that same one-graph contract.
+
+**The entry path decides the available kinds:** files via `index()` →
+`code`/`doc` (by extension — you cannot index a file *as* a fact; distilling a
+doc into facts is your extraction, then `remember`). Direct writes via
+`remember()` → `fact`/`episode`/`doc`. `doc` is the one kind both produce.
+`index()` is **never mandatory** — a litectx used only as a fact/episode store
+(no repo, no `index()` call) is a fully supported mode.
 
 ## What litectx is and is not
 
-- **Is:** a lite, local-first, in-process index over your code and docs, exposing
-  ranked recall and a called-by/calling impact view. The graph is the
-  substrate and is intended to be public API.
+- **Is:** a lite, local-first, in-process memory over your code, docs, and written
+  knowledge (facts/episodes), exposing ranked recall, a called-by/calling impact
+  view, and a `remember`/`forget` write path. The graph is the substrate and is
+  intended to be public API.
 - **Is not:** a language server, a vector database, a hosted service, an agent
   framework, or a token-budget/guardrail layer. It has **no LSP tier — ever**
   (see *What's NOT in litectx*). Curation, thresholds, prompt assembly, and budget
@@ -55,7 +67,9 @@ activation signals, an embeddings tier) under that same one-graph contract.
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors | 🚧 roadmap |
 | **Embeddings** (semantic tier) | ✅ shipped (slice 6 — opt-in, off by default; `embeddings: true` + the optional peer dep) |
-| Base-level **activation** (recency/frequency decay) | 🚧 roadmap (access-log tier, long-running memory) |
+| **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
+| **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
+| Base-level **activation** (recency/frequency decay, trust-weighted ranking) | 🚧 roadmap (access-log tier — scored on the recall log slice 7 now records) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
 > importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for
@@ -75,13 +89,19 @@ import { LiteCtx } from "litectx";
 
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
-const hits = ctx.recall("where do we validate the auth token?", { kind: "code" });
+const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
 // hits: [{ path, kind, format, score, git }, ...]  (score: higher = more relevant; git: activity, not scored)
+
+// memory that isn't a file (slice 7): facts / episodes / runtime docs
+await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
+const facts = await ctx.recall("jwt auth", { kind: "fact" });
+ctx.forget("fact:auth-uses-jwt");                     // by key; or forget({ by: "agent" }) in bulk
 ctx.close();
 ```
 
-`index()` and `recall()` are **async** (`index` parses with a WASM grammar runtime;
-`recall` embeds the query when the tier is on). `size()` and `close()` are synchronous.
+`index()`, `recall()`, and `remember()` are **async** (`index` parses with a WASM grammar
+runtime; `recall`/`remember` embed when the tier is on). `forget()`, `reviewCandidates()`,
+`size()`, and `close()` are synchronous.
 
 ## All options — `LiteCtxConfig`
 
@@ -142,28 +162,44 @@ follows the `kind` argument:
 | call | mode | returns | default `n` |
 |---|---|---|---|
 | `recall(q, { kind: "code" })` | single kind | flat `Hit[]` | `10` |
-| `recall(q, { kind: ["code","doc"] })` | multiple | grouped `{ code:[…], doc:[…] }` | `5` each |
-| `recall(q)` | omitted → all `KINDS` | grouped `{ code:[…], doc:[…] }` | `5` each |
+| `recall(q, { kind: ["code","fact"] })` | multiple | grouped `{ code:[…], fact:[…] }` | `5` each |
+| `recall(q)` | omitted → all `KINDS` | grouped `{ code:[…], doc:[…], fact:[…], episode:[…] }` | `5` each |
 
 - `opts.kind?: string | string[]` — one kind (flat list) or several (grouped). Omitted →
-  grouped over all known kinds (the safe CLI/agent default; never a flattened ranking).
+  grouped over **all four** known kinds (the safe CLI/agent default; never a flattened
+  ranking). A kind with no content returns an empty array — honest, not an error.
 - `opts.n?: number` — max hits **per kind**; raise to dig deeper. No hard cap, no
   pagination (a larger `n` is a larger context — your budget to manage).
-- No usable query terms → `[]` (single kind) or empty groups `{ code:[], doc:[] }`.
+- No usable query terms → `[]` (single kind) or all-empty groups.
+- `opts.log?: boolean` (default `true`) — set `false` to skip the recall audit log. The log
+  is a **demand signal**: queries from dashboards, CI checks, batch tooling, or a read-only
+  db open aren't real demand and shouldn't pollute it.
+- **Side effect (unless `log: false`):** every hit returned is appended to the **recall
+  audit log** (slice 7) — the trail behind `reviewCandidates` and the future access-log
+  activation tier. Each row records the hit's chunk symbol, so the future edit-bind can
+  join "recalled" and "edited" at the same grain. Ranking is unaffected.
 
 `Hit`:
 ```ts
-{ path: string,    // repo-relative file path
-  kind: string,    // "code" | "doc"
-  format: string,  // "ts" | "js" | "py" | "md" | ...
+{ path: string,    // repo-relative file path — or, for written memory, the caller's `id` key
+  kind: string,    // "code" | "doc" | "fact" | "episode"
+  format: string,  // "ts" | "js" | "py" | "md" | "text" | ...
   score: number,   // higher = more relevant (BM25 + additive import-spreading)
-  git: { commits: number, lastCommit: number|null } | null }  // activity metadata; null = no history
+  git: { commits: number, lastCommit: number|null } | null,  // activity metadata; null = no history
+  chunk: { symbol: string|null, nodeType: string,            // the best-matching chunk INSIDE the
+           startLine: number, endLine: number } | null }     // hit — a function pointer, not just a file
 ```
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
 > from one `git log` pass at index time. It never affects ranking; `null` means no commit history
 > (a non-git tree, or a tracked-but-uncommitted file).
-> 🚧 The richer roadmap shape (`{ id, lines, signals: { bm25, activation, ... } }`)
-> is not shipped yet. Today a hit is the five fields above.
+> `chunk` is **chunk-granular recall**: the function / method / md-section inside the file that
+> best carries your query terms (0-based inclusive lines). It **localizes, never reorders** —
+> ranking stays file-level and bench-identical. The most *specific* match wins: a class that
+> merely contains the matching method never shadows it, and an anonymous arrow is labeled with
+> its nearest named container. `null` when nothing localizes: written memory has no chunks
+> (the row IS the unit), and a match carried only by the filename names none.
+> 🚧 The richer roadmap shape (`{ id, signals: { bm25, activation, ... } }`)
+> is not shipped yet. Today a hit is the six fields above.
 
 ### `await ctx.impact(symbol)` → `Promise<Impact | null>`
 The **impact** view (§7): *if I change this symbol, what's the blast radius and how risky?*
@@ -203,6 +239,54 @@ dangerous (a false "isolated → safe" breaks hidden consumers). So:
   alias, so it no longer reads as a false isolation. Single-hop barrels and JS/TS only — multi-hop
   barrel chains and Python `from x import y as z` re-export barrels are not yet followed.
 
+### `await ctx.remember(id, text, opts?)` → `Promise<void>`
+Write one **directly-authored memory** — knowledge that isn't a file (slice 7). The write
+counterpart to `index()`. **Upsert by `id`**: writing the same id again replaces the
+content. The `id` is your handle for update/forget — namespace it (`"fact:auth-uses-jwt"`,
+`"faq:refunds"`, `"ep:2026-06-09-deploy"`); it appears as the hit's `path` in recall.
+
+- `opts.kind?: "fact" | "episode" | "doc"` — default `"fact"`.
+  - **`fact`** — a durable, decontextualized assertion ("we use JWT"). No timestamp.
+  - **`episode`** — a time-stamped event ("deploy rolled back on …"). `occurredAt` applies.
+  - **`doc`** — a prose passage handed to you at runtime (an FAQ/KB entry with no file).
+  - `code` is rejected — code enters via `index()` only.
+- `opts.by?: "human" | "agent"` — **provenance** (who asserted it), default `"agent"`.
+  The trust axis: human-asserted is durable/high-trust; agent-asserted is tentative until
+  promoted (see `reviewCandidates`). Stored now; trust-*weighted ranking* is 🚧 roadmap.
+- `opts.occurredAt?: number` — episode timestamp, epoch **ms**; defaults to write-time.
+  Ignored for facts/docs (a durable assertion has no constitutive "when").
+- `opts.format?: string` — defaults to `"md"` for docs, `"text"` otherwise. Metadata only
+  for direct writes (nothing is chunked or parsed).
+
+Content is stored **whole** — one searchable unit, no tree-sitter/section chunking. You
+control granularity by how you split before writing (ten atomic facts beat one blob).
+With the embeddings tier on, `remember` embeds the text at write time (hence async).
+
+Written memory **coexists with the index in one store and survives every `index()`
+pass** — structurally: `index()` reconciles deletions only against files it has itself
+indexed, and written rows are never in that set.
+
+### `ctx.forget(idOrQuery)` → `number`
+Delete directly-written memory. Returns the number of rows removed.
+
+- `forget("fact:auth-uses-jwt")` — drop one item by key.
+- `forget({ kind: "fact", by: "agent" })` — **bulk invalidation** by query: every
+  agent-asserted fact. At least one of `kind` / `by` is required (`forget({})` throws).
+
+**`forget` can never touch indexed files** — it operates only on written
+(`remember`-created) rows. To remove an indexed file from the store, delete the file and
+re-`index()`.
+
+### `ctx.reviewCandidates(threshold = 5)` → `{ path, hits }[]`
+The **human-in-the-loop promotion query** (review earned by use): agent-asserted facts
+whose recall-hit count has crossed `threshold`, most-recalled first. The intended loop is
+**yours, not litectx's**: show each candidate to a human, who either **validates** it —
+`remember(id, text, { by: "human" })`, flipping provenance to durable/high-trust — or
+**invalidates** it — `forget(id)`. Acting on a candidate removes it from the set (no
+"reviewed" flag exists or is needed). The hit count gates *review*, never *ranking* —
+frequently-recalled facts do not rank higher (that would be a feedback loop; ranking
+weight is the 🚧 access-log tier, validated separately).
+
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).
 
@@ -211,7 +295,8 @@ Closes the SQLite connection. Call it when done (especially for file-backed DBs)
 
 ### Named exports (advanced / extension)
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
-  over (`["code", "doc"]` in v1; grows as `fact` / `episode` extractors land).
+  over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
+  routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).
 - `Store` — the SQLite/FTS5 store class (used internally by `LiteCtx`; exposed for
   tooling and tests). Notable read methods: `count()`, `nodeCount()`,
   `nodesForPath(path)` → `{ symbol, node_type, start_line, end_line }[]`.
@@ -242,9 +327,15 @@ signals, graph edges, and the impact view in later slices.
 
 ## Architecture
 
-One SQLite file holds an FTS5 table (`docs`, file-granularity, BM25) for recall, a
-`file_index` table for incremental change detection, and a `nodes` table for the
-symbol substrate. Indexing is **routed by file extension** (never by content) and
+One SQLite file holds two FTS5 tables — `docs` (code + all docs, keyword-exact;
+indexed files and direct-written docs share it, discriminated by a `source`
+column) and `mem` (facts + episodes, porter-stemmed) — plus a `file_index` table
+for incremental change detection, a `nodes` table for the symbol substrate,
+`edges` (imports → spreading; impact), `git_sig` (activity metadata),
+`file_embeddings` (the opt-in tier), and `recall_log` (the slice-7 audit/access
+log). A `kind` routes to exactly one FTS table, and kinds never share a ranking,
+so BM25 scores never merge across the two. Indexing is **routed by file
+extension** (never by content) and
 prefers `git ls-files` (tracked files, respects `.gitignore`), falling back to a
 filesystem walk that skips the usual noise directories. The whole thing runs
 synchronously against the file except parsing, which uses an async WASM runtime.
@@ -275,6 +366,13 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 - **No token-budget / guardrail / prompt-assembly concerns.** That is the
   caller's (harness) layer. litectx returns ranked results; what you do with them
   is policy.
+- **No extraction LLM, no trust funnel, no consolidation.** `remember()` stores what you
+  hand it — litectx never runs a model to distill docs into facts, decide what's worth
+  remembering, merge near-duplicates, or run the human-review loop. It supplies the
+  *mechanism* (write, recall, the `reviewCandidates` trigger, promote/forget actions);
+  *what* becomes a fact and *which* facts get promoted is consumer policy. litectx is the
+  low-write-bar retrieval store (write freely; only relevant items surface) — curating a
+  high-bar "hot" always-injected memory on top of it is your layer.
 - **No content sniffing.** Language is decided by extension only.
 
 ## Gotchas
@@ -295,6 +393,29 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   filesystem walk is used instead.
 - **`.tsx` / `.jsx` are best-effort.** v1 grammars are TS, JS, Python; JSX-heavy
   files may fall back to a file-level chunk. They are not in the default `include`.
+- **`recall()` writes — unless you opt out.** Since slice 7, every recall appends its hits
+  to the `recall_log` audit table — so by default recall needs a writable db, and the log
+  grows with use (append-only; small rows, but unbounded — pruning policy is yours until
+  the access-log tier defines one). Pass `{ log: false }` for read-only opens and for any
+  consumer whose queries aren't real demand (dashboards, CI, batch tooling) — the log is a
+  demand signal, and non-demand traffic pollutes it.
+- **Facts/episodes recall across word forms; docs and code stay keyword-exact — deliberately.**
+  `fact`/`episode` recall is porter-stemmed: *"refund policy"* finds a fact stored as
+  *"refunds are honored…"* (inflection — plurals, -ed/-ing — is covered; derivational shifts
+  like "deployment"→"deploys" and compounds like "rollback"→"rolled back" are not). `doc` and
+  `code` are **not** stemmed: in code, word-forms are distinct symbols (`token`/`tokens`/
+  `tokenize`), and stemming measurably hurt code ranking — so an FAQ written via `remember`
+  still needs exact words (or key terms repeated in its `id`, which is indexed). Pure
+  paraphrase ("money back" → "refunds") matches nothing lexically for any kind — that is the
+  embeddings tier's job.
+- **`forget` only forgets written memory.** It cannot remove an indexed file (delete the
+  file + re-`index()` for that), and `remember` cannot overwrite an indexed file's row —
+  the two populations share the store but are write-isolated by design.
+- **Upgrading over an old index db is safe — the store self-heals on open.** A db created
+  by ≤ 0.1.0 (its `docs` table predates the write-path columns) is detected and rebuilt on
+  the next open — it can only contain re-indexable files, never written memory, so nothing
+  is lost; run `index()` once to repopulate. Newer column-additive deltas are applied with
+  `ALTER`, preserving data. You never need to delete `.litectx/` by hand.
 - **`close()` matters for file DBs.** The store uses WAL; close to flush cleanly.
 - **`impact()` requires `ripgrep` (`rg`) on `PATH`.** The caller sweep shells out to
   `rg -w`; it is **not** bundled. If `rg` is missing the sweep returns nothing and

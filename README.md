@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: v0.1.0 — first functional release** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the v1 surface is **implemented, tested (55 integration tests), and CI-gated**: **recall** and **impact** over one shared graph, for TS / JS / Python + Markdown. The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
+> **Status: v0.1.0 published; write path + chunk-granular recall landed on main** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the surface is **implemented, tested (87 integration tests), and CI-gated**: **recall** (every hit carries a `chunk` pointer — the matching function/section inside the file) and **impact** over one shared graph (TS / JS / Python + Markdown), plus the **write path** (`remember`/`forget` for facts, episodes, and runtime docs — unreleased, next is 0.2.0). The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
 
 ## What this is
 
@@ -76,12 +76,17 @@ await ctx.index();   // incremental: (mtime, size) fast-skip → content-hash
 
 // recall — kind-scoped; kinds never share a ranking, so prose can't bury code (async)
 const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-// → [{ path, kind, format, score, git }, …]   (omit kind → grouped { code, doc }, 5 each)
+// → [{ path, kind, format, score, git }, …]   (omit kind → grouped { code, doc, fact, episode }, 5 each)
 
 // impact — blast radius + risk bucket for a symbol (async; shells `rg -w`)
 const blast = await ctx.impact("validateToken");
 // → { symbol, risk: "high", refCount: 37, confirmed, mentions,
 //     callers: [...], callees: [...], complexity, defs, hedges }  |  null
+
+// memory that isn't a file — facts/episodes/runtime docs; survives every index() pass
+await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
+const facts = await ctx.recall("jwt auth", { kind: "fact" });
+ctx.forget("fact:auth-uses-jwt");   // by key — or forget({ by: "agent" }) in bulk
 ```
 
 **Opt-in semantic tier:** `new LiteCtx({ root, embeddings: true })` fuses embedding cosine into recall (the dual≈85% → tri≈95% step). Off by default — it needs the optional peer dep (`npm i @xenova/transformers`) and loads a small local model on first use; the deterministic BM25 + spreading core never touches it.
@@ -90,7 +95,7 @@ The graph substrate is public API; today you query it through the exported `Stor
 
 **Indexing is routed by file extension**, never by sniffing content. v1 languages: **TypeScript, JavaScript, Python** for code, plus **Markdown** docs. The file list comes from `git ls-files` (a filesystem walk outside a git repo); re-indexing is incremental — a `(mtime, size)` fast-skip falls through to a content-hash. **git activity** (commit count + recency, from `git log`) is attached to each hit as grounding metadata — so you can see what's been worked on, without it skewing the ranking.
 
-**`kind` is first-class.** v1 indexes `code` and `doc` (Markdown). The schema reserves `fact`, `episode`, and other doc formats (pdf/docx/txt via a `format` field) with **no migration** — activation applies across kinds, which is how longer-term memory lands later.
+**`kind` is first-class — and the write path is live.** Files enter via `index()` → `code` / `doc` (Markdown); knowledge that isn't a file enters via `remember()` → `fact` / `episode` / `doc` (an agent's learned facts, session events, runtime FAQs). Written memory lives in the same store, recalls through the same kind-scoped ranking, carries provenance (`by: "human" | "agent"`), and structurally survives re-indexing. Every recall hit is logged — the audit trail behind `reviewCandidates()` (human-in-the-loop promotion of well-used agent facts) and the future access-log activation tier. Other doc formats (pdf/docx/txt via `format`) remain schema-reserved, **no migration**.
 
 ## The graph
 

@@ -15,7 +15,7 @@ import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
 import { collectGitSig } from "./gitsig.js";
 import { computeImpact } from "./impact.js";
-import { ftsMatch } from "./tokenize.js";
+import { ftsMatch, keywords } from "./tokenize.js";
 import { Embedder, cosine } from "./embedder.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
@@ -44,12 +44,13 @@ function minmax(a) {
 const SPREAD_WEIGHT = 0.3;
 
 /**
- * The canonical memory-kind vocabulary — the kinds a bare `recall(query)` groups over. v1 ships
- * `code` (ts/js/py) + `doc` (md); `fact` and `episode` are reserved (schema ready, §3.1) and join
- * this list as their extractors land. Routing extension → kind lives in `indexer.classify`.
+ * The canonical memory-kind vocabulary — the kinds a bare `recall(query)` groups over. `code`
+ * (ts/js/py) + `doc` (md) enter via `index()` (files, routed by `indexer.classify`); `fact` +
+ * `episode` enter via `remember()` (written directly — slice 7, §3.2). `doc` is the one kind both
+ * paths produce. A bare grouped `recall` returns a (possibly empty) list per kind.
  * @type {string[]}
  */
-export const KINDS = ["code", "doc"];
+export const KINDS = ["code", "doc", "fact", "episode"];
 
 /**
  * @typedef {Object} LiteCtxConfig
@@ -186,29 +187,39 @@ export class LiteCtx {
    * **Async** since slice 6: the embeddings tier embeds the query at call time. With embeddings off
    * (the default) no model is touched — the work is synchronous, just wrapped in a resolved promise.
    *
+   * Every hit carries a `chunk` pointer — the best-matching function/section inside the file
+   * (chunk-granular recall; `null` for written memory, where the row is the unit). Ranking stays
+   * file-level and is unchanged by this: the pointer localizes, it never reorders.
+   *
+   * `log: false` skips the recall audit log. The log is a **demand signal** — anything that isn't
+   * real demand (dashboards, CI checks, batch tooling, read-only-db consumers) must not write to it.
+   *
    * @overload
    * @param {string} query
-   * @param {{ kind: string, n?: number }} opts
+   * @param {{ kind: string, n?: number, log?: boolean }} opts
    * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
-   * @param {{ kind?: string[], n?: number }} [opts]
+   * @param {{ kind?: string[], n?: number, log?: boolean }} [opts]
    * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
-   * @param {{ kind?: string | string[], n?: number }} [opts]
+   * @param {{ kind?: string | string[], n?: number, log?: boolean }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    */
   async recall(query, opts = {}) {
     const match = ftsMatch(query);
     // embed the query ONCE up front (cached) when the tier is on; per-kind ranking is then sync.
     const qvec = this.embeddings && match ? await this._embedQuery(query) : null;
+    const terms = keywords(query); // for chunk localization — same split the FTS body uses
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
-      return this._rankKind(match, opts.kind, opts.n ?? 10, qvec);
+      const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec), terms);
+      if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
+      return hits;
     }
     // grouped: an explicit subset of kinds, or all known kinds when omitted. One FTS query per
     // kind, each ranked against only its own kind — no kind ever competes with another for rank.
@@ -216,7 +227,8 @@ export class LiteCtx {
     const n = opts.n ?? 5;
     /** @type {Record<string, import("./store.js").Hit[]>} */
     const grouped = {};
-    for (const k of kinds) grouped[k] = this._rankKind(match, k, n, qvec);
+    for (const k of kinds) grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
+    if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
     return grouped;
   }
 
@@ -259,7 +271,63 @@ export class LiteCtx {
     return computeImpact(this.store, this.root, this.include, symbol);
   }
 
-  /** @returns {number} indexed document count */
+  /**
+   * Write a directly-authored memory — a `fact`/`episode`/`doc` with no file behind it (§3.2). This
+   * is the write counterpart to `index()`: knowledge that isn't a file enters here. Upsert by `id`
+   * (also the update/forget handle — recommend namespacing it, e.g. `"fact:auth-uses-jwt"`). Stored
+   * **whole** (never chunked). Written rows are `source='direct'`, so `index()` never reconciles them
+   * away; recall finds them like any other kind. Embeds the text when the embeddings tier is on.
+   *
+   * @param {string} id    caller key / identity (lands in the row's `path`)
+   * @param {string} text  the content
+   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number }} [opts]
+   *   `kind` ∈ {fact, episode, doc} (default `fact`); `by` = provenance `"human"|"agent"` (default
+   *   `"agent"`); `occurredAt` = episode timestamp (epoch ms, default now; ignored for non-episodes);
+   *   `format` defaults to `md` for docs, `text` otherwise.
+   * @returns {Promise<void>}
+   */
+  async remember(id, text, opts = {}) {
+    const kind = opts.kind ?? "fact";
+    if (kind !== "fact" && kind !== "episode" && kind !== "doc") {
+      throw new Error(`remember: kind must be fact | episode | doc (got "${kind}"); code/doc-from-file enter via index()`);
+    }
+    const by = opts.by ?? "agent";
+    if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
+    const format = opts.format ?? (kind === "doc" ? "md" : "text");
+    const occurredAt = kind === "episode" ? opts.occurredAt ?? Date.now() : null;
+    const embedding = this.embeddings ? await this.embedder.embed(text) : undefined;
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, embedding });
+  }
+
+  /**
+   * Forget directly-written memory (§3.2). Pass an `id` to drop one item, or a query
+   * (`{ kind?, by? }`) for bulk human invalidation (e.g. drop every agent-asserted fact). **Only ever
+   * removes `source='direct'` rows** — an indexed file is never touched. Returns the count removed.
+   *
+   * @param {string | { kind?: string, by?: string }} sel
+   * @returns {number}
+   */
+  forget(sel) {
+    if (typeof sel === "string") return this.store.forgetMemory({ id: sel });
+    if (sel.kind == null && sel.by == null) throw new Error("forget(query) needs at least { kind } or { by }");
+    return this.store.forgetMemory({ kind: sel.kind, provenance: sel.by });
+  }
+
+  /**
+   * Human-in-the-loop review candidates (§3.2): agent-asserted facts whose recall count has crossed
+   * `threshold`. The intended loop is the **consumer's** — it shows each candidate to a human who
+   * either validates it (re-`remember(id, text, { by: "human" })`, promoting it to durable/high-trust)
+   * or invalidates it (`forget(id)`). litectx supplies only the candidate set + those two actions;
+   * the threshold and the review flow are the consumer's. Review is earned by use, so a human never
+   * sees every agent fact — only the ones that proved useful.
+   * @param {number} [threshold=5]
+   * @returns {{ path: string, hits: number }[]}
+   */
+  reviewCandidates(threshold = 5) {
+    return this.store.reviewCandidates(threshold);
+  }
+
+  /** @returns {number} total stored items — indexed documents + written memory */
   size() {
     return this.store.count();
   }

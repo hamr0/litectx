@@ -165,6 +165,12 @@ const more = lc.recall("how does auth work", { kind: "code", n: 30 }); // dig de
 const blast = await lc.impact({ file: "src/auth.ts", line: 42 });
 // → { symbol, usedBy:{refs, files}, risk:"low"|"med"|"high", complexity, callers, callees }
 
+// the write path — directly-written memory (slice 7, §3.2): facts/episodes/docs with no file on disk
+await lc.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact" });
+await lc.remember("faq:refunds", "Refunds within 30 days…", { kind: "doc", format: "md" });
+await lc.remember("ep:2026-06-09-async", "recall() became async.", { kind: "episode", occurredAt: 1717900000 });
+await lc.forget("fact:auth-uses-jwt");                              // update / forget by caller key
+
 // the substrate itself (foundation for codegraph/contextgraph)
 const node = await lc.getNode(id);
 const related = await lc.related(id, { edge: "calls", hops: 1 });
@@ -180,12 +186,15 @@ AURORA shipped a fixed `code | kb | doc | reas` set keyed by extension
 present in the schema from day one**, because the engine is meant to grow into a general
 ACT-R memory (short- and long-term), not just a code index.
 
-| `kind` | v1? | What | Chunker |
-|---|---|---|---|
-| `code` | ✅ v1 | AST chunks (function/method/class) | tree-sitter |
-| `doc` | ✅ v1 (**md only**) | human docs; markdown sections | section-aware md chunker |
-| `fact` | reserved | semantic memory — asserted/extracted facts | (future) |
-| `episode` | reserved | episodic memory — session events/observations | (future) |
+| `kind` | v1? | What | Chunker | Source |
+|---|---|---|---|---|
+| `code` | ✅ v1 | AST chunks (function/method/class) | tree-sitter | file |
+| `doc` | ✅ v1 (**md**) | authored prose passages (README, FAQ, KB…) | section-aware md chunker | file **or** direct |
+| `fact` | ✅ **slice 7** | semantic memory — a decontextualized, durable assertion | none (stored whole) | direct |
+| `episode` | ✅ **slice 7** | episodic memory — a time-stamped event/observation | none (stored whole) | direct |
+
+> The full write-path contract — the `remember`/`forget` API, the `source`/`path`/`occurred_at`
+> fields, fact-vs-doc, FAQ-is-a-doc, and the cold/warm-vs-hot split — is **§3.2**.
 
 Design rules (DECIDED):
 - **Doc *formats* are a `format` field under `kind=doc`** (`md` in v1; `pdf`/`docx`/`txt`
@@ -196,6 +205,205 @@ Design rules (DECIDED):
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
+
+### 3.2 The write path — facts, episodes, and directly-written docs (DECIDED — slice 7)
+
+v1 indexes content *from files on disk* (`code`, `doc`). A long-running agent memory also needs to
+**write content that is not a file** — a fact it learned, an episode it observed, a doc/FAQ handed to
+it at runtime. Slice 7 adds that write path. It rests on **one new idea — a `source` discriminator —
+and otherwise reuses the existing `kind`/`format`/`path` triad unchanged.**
+
+**Three orthogonal axes (do not conflate — the most-litigated point of the design):**
+
+| Axis | Field | Values | Decides |
+|---|---|---|---|
+| **memory type** | `kind` | `code` · `doc` · `fact` · `episode` | retrieval semantics + decay rate |
+| **content form** | `format` | `ts`·`js`·`py`·`md` (`pdf`/`docx`/`txt` reserved) | chunker; **never** a new top-level kind |
+| **origin** | `source` | `file` · `direct` (+ provenance: user/agent/doc) | `index()` reconciliation + trust |
+
+`path` is the **identity / name** on every node and the disambiguator across all of them:
+`README.md` and `faqs.md` are *byte-identical* in `kind` (`doc`) and `format` (`md`) — they differ
+only by `path`. "Give me only the FAQs" is a `path` filter, **not** a new kind. For directly-written
+content `path` holds the **caller-supplied key** (`"fact:auth-uses-jwt"`, `"faq:refunds"`), which is
+also the update/forget handle.
+
+**Two entry paths, and the entry path decides the available kinds.** Files enter via `index()` →
+`code`/`doc` (kind by file extension; you **cannot** index a file *as* a fact — distilling a doc into
+facts is consumer extraction, then `remember`). Knowledge enters via `remember()` →
+`fact`/`episode`/`doc`. `doc` is the only kind both paths produce. **`index()` is never mandatory:** a
+litectx with only `remember()`/`recall()` and no repo is a supported **pure-memory** store; indexing
+is also scopable (`index({ paths: ["docs/"] })`).
+
+**The API (mechanism, not policy):**
+
+```js
+await lc.remember(id, text, { kind, format?, by?, occurredAt? });  // upsert by `id` (→ path)
+await lc.forget(id);                                               // delete by `id`
+await lc.forget({ kind: "fact", by: "agent" });                   // forget-by-query (human invalidation)
+```
+
+- `kind ∈ {fact, episode, doc}` — directly-written **docs are first-class**, not only facts (an FAQ
+  with no file is `remember("faq:x", …, { kind: "doc" })`).
+- **`by` = provenance** (`"human"` | `"agent"`, default `"agent"`) — *who asserted it*, for trust.
+  The caller never passes `source`: calling `remember()` already means `source="direct"` (set
+  internally). Two different "who/how" axes — **source = HOW it entered** (file vs direct; the
+  engine's reconciliation key) and **`by`/provenance = WHO said it** (human vs agent; the trust key).
+- `occurredAt` is the **episode timestamp** (epoch ms; defaults to write-time). Facts ignore it.
+- Stored **whole** — one node, no tree-sitter/section chunking (`symbol`/`node_type` → null/`"whole"`).
+  The caller controls granularity by how it splits before writing.
+- `source="direct"` (internal) lets files and written memory **coexist in one store**: `index()`
+  reconciles only `source="file"` rows against disk, so a written fact is never deleted as a
+  "vanished file."
+
+**fact vs episode (a *type* split, NOT a source split):**
+
+- **fact** — a *decontextualized, durable assertion*, true regardless of when learned ("auth uses
+  JWT"). No constitutive timestamp. **Slow decay.** Source is orthogonal: user-asserted, agent-
+  derived, and doc-extracted are *all* facts — origin is recorded as provenance, it does not change
+  the kind. ("User instructions that don't change" are just the `source=user` cell — one corner, not
+  the definition.)
+- **episode** — a *time-stamped event* ("on 2026-06-09 `recall()` became async"). `occurred_at` is
+  **constitutive** (cheap now, expensive to retrofit). **Fast decay** (recency-dominated).
+
+**fact vs doc (both prose — keep the line clean):** a **doc** is retrieved as a *passage* (classic
+RAG — read the FAQ answer whole); a **fact** is a *distilled assertion*. An FAQ is a `doc`; if you
+later extract its policy line, *that* derived assertion is a `fact` (`provenance=doc`). Most
+chatbot-KB use is doc-retrieval; facts are the distilled layer on top.
+
+**History + trust — recorded in slice 7, scored later.** Two "memory" layers beyond search land now
+as *recorded data*, not yet as ranking:
+- **History** — every `recall()` hit is logged (an audit row: which item, when). This shows *what
+  agents lean on*, catches over-use, and traces *where a wrong belief came from*. It is the genuine
+  **access log** the base-level tier (§4) will later score — and unlike code's git proxy, written
+  memory produces *real* access events, so this log is signal, not proxy. v1 records it, does not rank.
+- **Trust** — each written item carries `by` (human/agent). Human-asserted should outrank
+  agent-asserted — *later*, in the activation tier; v1 just stores it.
+
+**Human-in-the-loop promotion — review earned by use (consumer policy; litectx supplies the trigger +
+the two actions).** To avoid a human reviewing *every* agent fact, review is **earned by use**: when
+an agent-asserted fact crosses a recall-hit threshold (**default 5**), it becomes a **review
+candidate**. The consumer's loop shows candidates to a human, who either **validates** →
+`remember(id, text, { by: "human" })` (provenance flips to human; now durable/high-trust) or
+**invalidates** → `forget(id)`. litectx's role is *only*: store `by` + recall counts, expose the
+candidate set via **`reviewCandidates(threshold=5)`** (`by="agent" ∧ hits ≥ threshold`, read off the
+recall log; acting on a candidate removes it from the set — promotion flips provenance off `'agent'`,
+forget deletes — so no separate "reviewed" flag is needed), and the promote (`remember`) / `forget`
+actions. The *threshold value* and the *review flow* are the consumer's. **Safety:** this count gates
+**review, not ranking**, so it is **not** the rich-get-richer feedback loop §4 forbids — over-triggering
+a review is harmless (a human just confirms).
+
+**Ranking of facts/episodes in v1 — honest scope.** The recall engine is kind-agnostic, so
+BM25 (+ embeddings if the tier is on) ranks them today *for free*. But they have **no import/call
+edges, so spreading does not apply** — their v1 ranking is BM25(+semantic), not the graph-spreading
+that powers code recall. The behavior that makes fact/episode memory *cognitively* work — **slow
+decay + reinforcement-on-retrieval for facts, recency-fade for episodes** — is exactly the
+**access-log / base-level tier** (§4, §14 #4), which is **deferred**. Slice 7 makes that tier's
+*need* concrete (it resolves §14 #6); it does not build it. Decay is one line per kind in the
+existing kind-keyed map (`fact` very slow; `episode` fast) — no schema change.
+
+**litectx is the cold/warm store, not hot memory (mechanism vs policy).** Because a written fact only
+surfaces *when a query is relevant to it*, litectx's **bar for writing is low** — storing 10k facts
+costs nothing if only the relevant few ever surface. This is the opposite regime from an
+always-injected hot `MEMORY.md`, whose bar must be high (one bad fact poisons every session). They
+compose: litectx holds the long tail (retrieved on relevance); a consumer curates the few that get
+promoted hot. So litectx deliberately ships **no extraction LLM, no trust funnel, no consolidation** —
+*what* becomes a fact and *which* facts go hot is consumer policy (non-goals §13: ML opt-in, no LLM
+orchestration). litectx provides `remember`/`forget` + kind-scoped recall; nothing more. (The
+liteagents `/stash → /friction → /remember` pipeline is the *reference* for such a consumer — borrowed
+as a model, **not** built into litectx.)
+
+**Corpus separation (a codebase *and* a product KB in one process).** Both are `kind=doc`, so kind
+won't split them — but that is a **namespace** concern, orthogonal to kind. v1 answer: **separate
+stores** (two `LiteCtx` instances / db files — zero new schema, works today). A `namespace` field is
+added only if a consumer needs cross-corpus recall *in a single query* — DEFERRED until then.
+
+**Schema delta (no migration):** a `source` column (`file|direct`), a `provenance` column
+(`human|agent`, exposed as `by`), an `occurred_at` column (episodes), a **recall-log** table (one row
+per hit — the access log §4 will later score), `fact`+`episode` added to `KINDS`, and two decay rates
+(`fact` slow, `episode` fast — stored, not yet scored). Everything else in the node row
+(`path`/`kind`/`format`/`symbol`/`node_type`/line-range/`body`) is unchanged.
+
+---
+
+### 3.3 The memory model at a glance — kinds × operations (2026-06-10)
+
+> The whole machine is **four kinds × six operations with two frozen weights**. Everything else in
+> this PRD is either a *weight* inside the rank step or a *future event type* feeding heat — the
+> skeleton below doesn't change.
+
+**Table 1 — the four kinds (what lives in memory)**
+
+| | **code** | **doc** | **fact** | **episode** |
+|---|---|---|---|---|
+| Enters via | `index()` | `index()` (.md) or `remember()` | `remember()` | `remember()` |
+| The unit | function/class (tree-sitter chunk) | heading section | the row itself | the row itself |
+| Word matching | exact tokens | exact tokens | stemmed (deploys=deploy) | stemmed |
+| Graph boost | yes (imports) | no | no | no |
+| Survives re-index | re-built from file | re-built / survives if direct | always survives | always survives |
+| Future heat source | edit-after-recall | edit-after-recall | corrective re-remember | recency (occurred_at) |
+
+One sentence to hold it all: **files are indexed and chunked; knowledge is written whole; each
+kind ranks only against its own kind.**
+
+**Table 2 — the six operations (what you can do)**
+
+| Operation | What it does |
+|---|---|
+| `index()` | Read repo from disk. Skip unchanged files (mtime+size→hash). Changed files: re-chunk, re-FTS, re-edge. |
+| `remember(id, text, {kind, by})` | Write/overwrite one fact/episode/doc by id. `by` = human or agent. |
+| `forget(id)` | Hard delete: row + embedding + its log rows. Gone is gone. Can't touch indexed files. |
+| `recall(query, {log?})` | **Gate** (lexical match, per kind) → **rank** (BM25 + 0.3·neighbor + optional semantics) → attach each hit's best **chunk** pointer → return grouped by kind → **log** one impression per hit (skipped with `log: false` — non-demand consumers must not pollute the signal). |
+| `reviewCandidates(5)` | List agent facts recalled ≥5× → a human promotes (re-remember `by:"human"`) or kills (forget). |
+| `get(id)` *(not built)* | Fetch one item's text by id. Needed before MCP. |
+
+**The story, once through**
+
+```
+Day 1   index() reads the repo. auth/refresh.js → 3 chunks. README.md → 5 sections.
+        remember("deploy-oidc", "npm publish uses GitHub OIDC — no tokens", {kind:"fact"})
+
+Day 2   recall("token refresh")
+        ├─ harvest: stat the few recently-recalled files — nothing changed, move on
+        ├─ gate:    FTS5 finds 40 code candidates containing "token"/"refresh"
+        ├─ rank:    refresh.js scores 0.9, +0.3×0.8 from its neighbor session.js → #1
+        ├─ return:  {code: [...], doc: [...], fact: [...], episode: [...]}
+        └─ log:     one impression row per hit
+
+        Agent edits the refresh function.
+
+Day 3   recall("session expiry")
+        └─ harvest: refresh.js mtime moved → re-hash → re-parse → diff chunks
+                    → only the refresh function changed → edit event for THAT chunk
+                    (access-log tier: that chunk now carries heat, decaying over weeks)
+
+Day 30  "deploy-oidc" has been recalled 6 times → shows up in reviewCandidates(5)
+        → human re-remembers it by:"human" → durable trust. (Or forget() → gone.)
+```
+
+(The harvest step is the access-log tier's capture — designed, not yet built; see §14 #4
+"SETTLED — capture mechanics." Impressions get a *slight, bounded* boost only over tens of
+retrievals, and only if the bench admits it — an item earns its place, it is never gifted it.)
+
+**Open items behind this picture** (full text in §14): build order = ~~chunk-granular recall~~
+(✅ slice 8 — hits carry `chunk` pointers, the log records the symbol) → `get(id)` → MCP/CLI →
+access-log tier; activation calibration is all "run the bench" and that bench doesn't exist yet
+(the biggest IOU).
+
+**Closed 2026-06-10 (discussion w/ user):**
+- **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
+  default, which is structurally blocked twice over: the embedder is an **optional peer dep**
+  (`@xenova/transformers` — defaults can't depend on it; requiring it doubles prod deps for a
+  corpus of dozens) and the model cold-loads in 15–19s (opt-in pays it knowingly; a default makes
+  every adopter's first recall hang). **Facts ride the single existing tier switch** — already the
+  implemented behavior (`writeMemory` embeds when the tier is on). No second knob (one-config
+  doctrine). The paraphrase hole in the default config is an **accepted, documented gotcha**:
+  write facts in the words you'll query (the id is indexed too — "deploy-oidc" hits a "deploy"
+  query); stemming covers word-forms. The memory bench's labeled para queries measure the
+  embeddings lift for free whenever the tier is on.
+- **`log: false` on `recall()` — approved.** The recall log is a **demand signal**; anything that
+  isn't real demand must not write to it. Agent/human queries log (default `true`); dashboards,
+  CI checks, batch tooling, and read-only-db consumers pass `{ log: false }`. One boolean, nothing
+  else. Ships with the next code slice.
 
 ---
 
@@ -262,6 +470,13 @@ A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
   `0.05`, class `0.20`, function/method/`code` `0.40`, toc-entry `0.01`; pdf/docx `0.02`
   (reserved). Markdown decays ~8× slower than functions. ⚠️ **aurora tuned _markdown_ at `0.05`**
   — its `0.02` rate was for paginated pdf/docx; do **not** apply `0.02` to md (ledger §3/§10).
+  - **Written-memory rates (slice 7, §3.2) — `fact` `0.02`** (durable semantic memory, ~never
+    fades) and **`episode` `0.40`** (recency-dominated, fades like volatile code). **Provisional** —
+    these are *calibration only*, not yet code: nothing scores decay in v1 (no access log), so a
+    decay-map constant would be dead code. They are validated when the **access-log tier** scores
+    base-level on real recall history (§11.2 — the log slice 7 starts recording). The split itself
+    is load-bearing (it *is* the semantic-vs-episodic distinction); the exact constants are a
+    starting point to re-validate, per "carry the calibration, re-validate any change."
 - **Churn factor** — `0.1 · log10(commits+1)` added to decay (volatile code decays faster).
 - **MMR diversity rerank** (optional) — needs embeddings; off by default.
 
@@ -348,6 +563,36 @@ it to 0.480 with **12/22 queries** prose-buried. The two surviving structural me
    (`getUserData → get user data`) + symbol names folded in, so a descriptive query matches
    identifier-dense code. (AURORA lesson: sparse content → descriptive queries return 0.)
    *Deps + `k1/b` tuning deferred — neutral on the bench, and deps ride slice-4 edge extraction.*
+
+### 5.1 Written-memory stemming — the gate fix for short prose (DECIDED 2026-06-10)
+
+The `bench:memory` gate (§11.3) measured the dominant written-memory failure: FTS5 has no stemming,
+so a fact stored as *"refunds…"* is **never** retrieved by *"refund policy"* — morph MRR **0.000**,
+total, because the FTS **gate** is lexical and a zero-match item never reaches ranking (activation
+can't fix this — it re-ranks, never gates). Short fact texts have no redundancy to absorb it; code
+does (identifiers repeat, the tokenizer splits them).
+
+**Measured before decided (both options, real pipeline):**
+- **Porter on everything — REJECTED by the every-repo rule.** Flipping the one `docs` table to
+  `porter unicode61`: memory morph 0.000→**0.722**, but aurora **0.552→0.530 (breaks its committed
+  floor)**, multis 0.457→0.431, gitdone P@1 **25%→15%**. Mechanism: in code, word-forms are distinct
+  *symbols* (`token`/`tokens`/`tokenize`/`tokenizer`) — stemming merges them and dilutes identifier
+  precision. In prose, forms are one meaning — full win, no loss (exact held 1.000).
+- **Aurora grounding (MEM_INDEXING.md):** aurora ships `tokenize='porter ascii'` on everything — but
+  its stemmed FTS is **stage-1 gate only**, re-scored by a separate code-aware ranker; porter widens
+  *who gets in*, never *who ranks first*. litectx's FTS table is gate **and** ranker, which is
+  exactly why porter-everywhere moved our rankings. The faithful borrow for code — **"stem the gate,
+  rank exact"** (a stemmed candidate gate + the existing exact-token BM25 as ranker) — is the
+  DOCUMENTED FUTURE OPTION if a code-morph case ever shows on the bench; not built now.
+
+**The decision — porter for `fact`/`episode` only, routed by kind (one table per ranking domain):**
+written facts/episodes live in their own FTS table with `tokenize='porter unicode61'`; `code`/`doc`
+stay on the unstemmed `docs` table. Because **kinds never share a ranking** (§5), no query ever
+merges BM25 scores across the two tables — the kind routes to exactly one. `doc` stays unstemmed
+*even for direct writes* (an FAQ written via `remember`): `doc` is the one kind both entry paths
+produce, and stemming only the direct half would fork one kind into two incomparable ranking
+domains. Doc passages are long enough that morphology rarely zero-matches; the residual is the
+embeddings tier's job (para stays 0 under porter — stemming is not semantics).
 
 ---
 
@@ -485,9 +730,19 @@ Embeddings are the **only** tier. There is no LSP tier (§7).
   (slice 6 — **`sqlite-vec` rejected**: recall is BM25-gated, so cosine runs only over the
   candidate pool, never the corpus → brute-force is O(pool) and sub-ms at any repo size,
   and a native extension would cut against the lite/one-dep doctrine). No second datastore.
-- Tables (from AURORA, slimmed): `chunks` (incl. `kind`, `format`), `relationships` (edges,
-  indexed both ends), `activations` (reserved — v1 has no access log; git seeds BLA, §4.1),
-  `file_index`.
+- Tables (from AURORA, slimmed): `chunks`/`nodes` (incl. `kind`, `format`, `path`, and — slice 7,
+  §3.2 — `source` `file|direct`, `provenance` `human|agent`, `occurred_at` for episodes),
+  `relationships` (edges, indexed both ends), `activations` (reserved — v1 has no *scored* access
+  log; git seeds BLA, §4.1), `file_index`.
+- **`source` is the file-vs-direct discriminator (slice 7):** `index()` reconciles only
+  `source="file"` rows against disk; `source="direct"` rows (written via `remember`) are never
+  swept as vanished files. This is the single column that lets indexed and written memory share one
+  store.
+- **Recall log (slice 7):** every `recall()` hit appends an audit row (item + time). This is the
+  genuine **access log** the `activations`/base-level tier (§4) will later score — v1 records it but
+  does not rank on it. (Unlike code's git proxy, written memory generates *real* access events, so
+  this log is signal once scored.) It also feeds HITL promotion (§3.2): an agent fact past the
+  recall threshold becomes a human-review candidate.
 
 ---
 
@@ -647,7 +902,63 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      ts-barrel`) + `impact-ts` dataset: the default-rename label was red (false isolation) pre-5b and
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
-**Post-v1 tiers:**
+**Next + post-v1 tiers:**
+- **Slice 8 — chunk-granular recall + `log: false` — ✅ SHIPPED (2026-06-10).** Every hit carries
+  `chunk: { symbol, nodeType, startLine, endLine } | null` — the best-matching chunk *inside* the
+  already-ranked file (function pointer > file pointer; §14 #4 quality motivation, NOT capture).
+  Attached **after** ranking to the final hits only (never the pool): localizes, never reorders —
+  all gates **byte-identical** (aurora 0.552 / gitdone 0.425 / memory / impact). Localization =
+  `splitIdent` both sides (the indexing convention), distinct-terms-present score, plus the
+  containment rule a live probe on litectx itself forced: chunks nest, a container's term set is a
+  superset of its children's, so naive max-count always returned the whole class — shipped rule is
+  **the winner may not strictly contain another scoring chunk** (ties: named > anonymous > smaller
+  span; anonymous winners labeled by nearest named container). `null` for written memory (the row
+  IS the unit) and filename-only matches (honest). `recall_log` gains the hit's chunk `symbol` →
+  recalled-and-edited now join at the **same grain** when the access-log tier's edit-bind lands.
+  `recall(q, { log: false })` ships the demand-signal opt-out (dashboards/CI/read-only opens must
+  not pollute the log). CLI prints the pointer (`→ symbol:start-end`). Bonus hardening from
+  validation: the Store **self-heals pre-release schemas on open** (≤0.1.0 docs table → rebuild,
+  it can only hold re-indexable files; missing log column → ALTER, data preserved) — the upgrade
+  crash every 0.1.0 adopter would have hit. +8 tests (87 total); `tsc` clean.
+- **Slice 7b — written-memory stemming (§5.1) — ✅ SHIPPED (2026-06-10).** A second FTS table
+  (`mem`, `porter unicode61`) for `fact`/`episode` rows, routed by kind in `search()`/`writeMemory()`;
+  `code`/`doc` (incl. direct docs) stay on the unstemmed `docs` table — no query ever merges the two
+  (kinds never share a ranking). `forgetMemory` covers both homes; `reviewCandidates` reads `mem`.
+  **Gates all landed as specced:** `bench:memory` morph **0.000 → 0.722** (the `expected` pin
+  tripped on the move as designed, then morph **graduated to a floor ≥0.7**); exact held 1.000;
+  **code/doc gates byte-identical** (aurora 0.552 / gitdone 0.425; impact 0/0); +2 tests pin
+  "fact/episode found across inflection" and the deliberate "doc stays keyword-exact" boundary
+  (79 total); `tsc` clean.
+- **Slice 7 — Write path (facts · episodes · direct docs) — ✅ SHIPPED (2026-06-09, §3.2).**
+  `remember(id, text, { kind, by?, occurredAt? })` / `forget(id)` / `forget({ kind, by })`;
+  `fact`+`episode` activated in `KINDS`; `docs` FTS gained `source`/`provenance`/`occurred_at`; a
+  `recall_log` table records every hit. **The reconcile seam is structural** — written rows are
+  `source='direct'` and never enter `file_index`, and `index()` computes `deletes` solely from
+  `file_index` keys, so written memory is provably immune to the sweep (no per-row guard needed; the
+  `source` column makes it explicit + powers `forget`-scoping and forget-by-query). Recall is free
+  (kind-agnostic engine). HITL review is a built query — **`reviewCandidates(threshold=5)`** returns
+  agent facts past the recall threshold (`recallCount` feeds it); the consumer validates
+  (re-`remember({ by:"human" })`) or invalidates (`forget`). **13 integration tests**
+  (`test/memory.test.js`) pin the round-trip, forget-by-id/query, indexed-files-untouched, the seam
+  (survives scoped + full + real-sweep `index()`), upsert, the audit log, the **embeddings-on write
+  path** (vector stored + tri-hybrid recall), **`occurred_at`** defaulting (episode→now, fact→null),
+  **forget side-table cleanup** (embedding + log), and **`reviewCandidates`**; recall bench
+  **byte-identical** (logging doesn't move ranking); `tsc` clean. Base-level **decay/scoring stays the
+  deferred access-log tier** — the rates are §4 calibration, not code (no dead constant). Original NEXT-slice spec retained below for the
+  record. `remember(id, text,
+  { kind })` / `forget(id)`; activate `fact`+`episode` in `KINDS`; add `source` (`file|direct`) so
+  `index()` reconciles only file-sourced rows, and `occurred_at` for episodes. Directly-written
+  `doc` is first-class (FAQ/KB with no file on disk). Stored **whole** (no chunking). Each item also
+  stores **`by`** (human/agent) for trust, **every `recall()` hit is logged** (audit + the future
+  access log), and **HITL promotion** is supported as *consumer policy* — an agent fact past a
+  recall threshold (default 5) is a review candidate → re-`remember({ by: "human" })` to validate or
+  `forget` to invalidate (litectx supplies the candidate query + the two actions, not the loop).
+  Recall comes free (the engine is kind-agnostic: BM25 +embeddings) — but **no spreading**
+  (facts/episodes have no edges) and **no base-level decay yet** (that is the access-log tier below,
+  whose need this slice makes concrete — resolves §14 #6). **POC-light:** the recall path already
+  exists; the work is the write/reconcile seam. Gates: a labeled **write→recall round-trip** bench
+  (§11.3 — a written fact/episode/doc surfaces for its query and survives a re-`index()`); `tsc`
+  clean; integration tests on `:memory:` + a tmp repo.
 - **Slice 6 — Embeddings / semantic tier (§8) — ✅ SHIPPED (2026-06-09).** Opt-in third ranking
   signal (tri-hybrid), off by default. POC-validated lift (gitdone dual 0.425 → tri 0.647 @ w=1.0,
   reproduced through the shipped `LiteCtx`; held-out repo confirmed no overfitting cliff). Decisions
@@ -684,7 +995,9 @@ view-appropriate metric.** Same machine, different labels:
 | **recall** | aurora (Py), gitdone (JS) | `{ q → target file }` | **MRR / P@k**, hold-or-beat | ✅ shipped |
 | **impact** | **aurora (Py) + mcprune (JS)** | `{ symbol → known callers; isolated? }` | **caller-recall (miss-rate)** — must be ~100%; over-count tolerated (§7.2) | ✅ shipped (`npm run bench:impact`) — 100% confirmed-caller recall, **0 false-isolations** on both repos |
 | **impact (TS false-isolation)** | committed `poc/fixtures/ts-barrel` (#1) | symbol reached *only* via renamed barrel + path alias → `isolated:false` | **ISOLATION-accuracy** `(refCount===0)===isolated` + caller-recall | ✅ shipped 5b (`npm run bench:impact impact-ts`) — default-rename red→green, decoy excluded |
-| write/compress/select/… | tbd | tbd | tbd | post-v1 |
+| **write (memory)** | `:memory:` + tmp keys | `remember(id,…)` for `fact`/`episode`/direct-`doc` → `recall` | **round-trip recall** — written item surfaces for its query *and* survives a re-`index()` (not swept as a vanished file) | ✅ shipped (`test/memory.test.js`) — integration, not an MRR bench: the metric is round-trip *survival* (boolean), not ranking quality |
+| **written-memory recall quality** | committed corpus **in the dataset** (24 facts + 5 episodes, `memory-facts.mjs` — no local checkout; pure-memory mode, no `index()`) | `{ q → target id }`, every query labeled **exact / morph / para** + a mechanical **label audit** (exact must share ≥1 keyword with the target's indexed text; morph/para must share 0 — mislabels fail the run) | **per-category MRR**: `exact` floored ≥0.8 (shipped 1.000); `morph` floored ≥0.7 (graduated with 7b: 0.000→**0.722**; its pre-7b `expected` pin tripped on the move exactly as designed); `para` **pinned at 0.000** (the embeddings-tier case — moves fail until consciously updated) | ✅ shipped (`npm run bench:memory`) — exact **1.000** / morph **0.722** / para **0.000**; mutation-checked (mislabel → audit fails; floor above 1.0 → fails; stale `expected` → fails) |
+| compress/select/isolate/… | tbd | tbd | tbd | post-v1 |
 
 > **Status (shipped):** `poc/impact-bench.mjs` + audited label sets (`impact-aurora` Py,
 > `impact-mcprune` JS) — **100% confirmed-caller recall, 0 false-isolations** on both. Its first run
@@ -816,10 +1129,71 @@ package** (§7).
 3. **Edge types beyond `calls`/`imports`/`depends_on`** — add `inherits`/`defines` in v1 or
    defer? (Lean: defer; the three cover impact.)
 4. **Access-history write path** — **now the gate for base-level activation** (#1): it only earns
-   ranking weight once a real access log exists. Open: does litectx own "agent accessed chunk X"
-   writes (e.g. `recall()` logs hits to the reserved `activations` table), or does the consumer
-   report accesses? This is the **access-log tier**'s core design and litectx's long-running-memory
-   differentiator — design it when the first long-running consumer is real.
+   ranking weight once a real access log exists. Slice 7 resolved the *impression* half: `recall()`
+   logs every hit to `recall_log`. The remaining design is the **click** half — an "access" is a
+   *retrieval that was used*, and litectx alone cannot observe use (it happens in the agent's
+   reasoning). **Capture must BIND, not ask — and binds to ACTIONS, not reads (REVISED ×2,
+   2026-06-10):** an opt-in `used(id)` courtesy API would yield an empty log — nobody instruments
+   politeness. A *fetch* toll-gate (recall returns pointers; `get(id)` logs the body fetch) was
+   considered and **demoted**: agents fetch greedily (give an LLM 5 snippets, it takes 5 — context
+   is cheap, agent "attention" is not scarce like human clicks), so **fetch degenerates into
+   impression** and scoring it reintroduces the forbidden rich-get-richer loop; fetch-once/use-many
+   (context-holding) under-counts the same way. And MCP binds nothing — it *offers* tools. The
+   principle that survives: **reads can be faked, skipped, or inflated; actions cannot.**
+   - **Code — the edit is the bind (anchor signal, immune to all of the above).** The agent's job
+     *is* the edit, and `index()` sees it from disk truth: content-hash + `nodes` line ranges →
+     "recalled at t, chunk X changed by next `index()`" = **chunk-level** use (chunk = the
+     tree-sitter/AST unit; aurora's activation was per-chunk and ours must be — file-level is too
+     blunt). Needs a recency window (recalled-this-session). `impact(symbol)` is a second
+     in-library symbol-touch.
+   - **Facts/episodes — the write-backs are the binds, not the reads:** re-`remember()` of an
+     existing id (reinforcement — an action, not a report), `forget(id)` (binding negative), human
+     promotion (`by` agent→human; the strongest trust event). **Sparse-but-true beats
+     dense-but-fake** — the friction-redesign lesson (15 false antigens from dense machine proxies
+     → 0 from sparse observed reactions).
+   - **Dense-but-weak signals (impressions; fetches once `get(id)` exists) are logged with type
+     tags but structurally powerless:** BLA is (1) **bounded** — log-scaled, small additive term, a
+     fresh lexical match always able to win; (2) **decaying** — entrenchment requires continued
+     wins; (3) **bench-gated per signal type** — a signal earns ranking weight only if ≥ baseline
+     on the bench, so if fetch is impression-noise the bench rejects it and fact-BLA rides only the
+     write-backs. `used()` stays as an additive channel for rich harnesses, never the foundation.
+   - **Chunk-granular recall hits** are the right move for *precision* (a function pointer beats a
+     file pointer) — but NOT as a capture mechanism (forced-choice "ask for which chunk" dies to
+     greedy fetching). Quality motivation only.
+   - **SETTLED 2026-06-10 — capture mechanics (discussion w/ user):**
+     - **Harvest at recall, scoped to the log window.** No cron, no daemon, no host cooperation:
+       at the start of every `recall()`, stat only the files appearing in the recent `recall_log`
+       window (a handful, O(window) not O(repo)), re-hash the ones whose mtime moved, and record
+       edit events before serving the query. Full-repo `index()` stays host-cadence for content
+       freshness; the *signal* harvest no longer depends on it.
+     - **File hash is the trigger, chunk diff is the attribution — no equal boost.** Old chunk
+       text is already stored in `nodes`; after re-parse, diff old vs new chunks per file and
+       credit only the chunks whose text changed. (~~Join is path-level until chunk-granular
+       recall lands~~ — landed, slice 8: `recall_log` records each hit's chunk symbol, so
+       recalled-and-edited join at the same grain.)
+     - **`forget` is NOT a scored signal — dropped.** `forget` hard-deletes the row, its
+       embedding, and its `recall_log` rows; nothing remains to demote, so its "demotion" is total
+       by definition. The only write-back that carries ranking weight is the corrective
+       re-`remember` (the row survives). No tombstones, no soft-delete states, no forget-event
+       table.
+     - **Trust ≠ activation.** Provenance (`by: human`) is *durable* — who-asserted-this doesn't
+       fade. Activation is *perishable* — events decay power-law (`ln(Σ age^-d)`), computed at
+       query time from timestamps (no background job mutates scores). Human promotion does both:
+       a durable provenance flip + a decaying activation event.
+     - **Impressions may earn a *tiny* bounded weight, only via bench** — the intuition "tens of
+       retrievals should slightly lift an item to earn its place" is exactly the log-scale bounded
+       additive term, and it ships at zero weight unless the bench shows lift. **Survived-exposure**
+       (many recalls, `forget` available and never invoked) is a candidate in the same bucket:
+       weak Bayesian evidence, impression-adjacent, unproven — bench it like everything else.
+     - **Wrongness is out of scope for ranking.** litectx cannot detect falsehood; the guards are
+       structural — impressions powerless (a wrong fact recalled 40× gains ≈ nothing), unreviewed
+       ≠ promoted (silence never elevates trust), corrective re-`remember` outweighs any
+       impression count, and decay starves whatever isn't re-fueled by actions. The residue (a
+       wrong fact that lexically matches keeps appearing until corrected) is handled by surfaces,
+       not scores: provenance on every hit + the review queue.
+   The governing rules stand: score *actions*, never *appearances*; and **activation re-ranks, it
+   never gates** — a zero-match item is invisible regardless of activation (stemming fixes the
+   gate; activation fixes the rank).
 5. **Consumption surfaces & graph-view packaging** — **RESOLVED.** The core is the **library**
    (mechanism). A **thin CLI ships in-repo** (`bin/`) from v1 — it serves humans, cron, and
    shell-out agents at near-zero cost, and matches house style. **MCP and the `codegraph`/
@@ -828,12 +1202,17 @@ package** (§7).
    in the lib, policy in the adopter). MCP **stdio** is a client-spawned subprocess, not a daemon,
    so it stays compatible with the "no service tier" rule — it just lives in its own package
    (`litectx-mcp` or a bare-suite member) when a consumer needs it.
-6. **`fact`/`episode` kinds** — what writes them, and do they share the code decay map or
-   need their own? (§3.1; design when the first non-code memory need is real.)
+6. **`fact`/`episode` kinds** — ~~what writes them, and do they share the code decay map or need
+   their own?~~ **RESOLVED → slice 7 (§3.2).** Written via `remember(id, text, { kind })` — the
+   *consumer* writes them; litectx ships **no** extraction LLM (mechanism, not policy). They do
+   **not** share code's decay: `fact` = very slow (durable), `episode` = fast (recency) — two rates
+   in the kind-keyed map, no schema change. They carry no edges (no spreading); v1 ranks them by
+   BM25(+embeddings), and their full ACT-R behavior (slow decay + reinforcement-on-retrieval) is the
+   access-log tier (#4), whose need slice 7 makes concrete.
 
 ---
 
-## 15. Status: BUILDING v1 — slices 0–3 shipped
+## 15. Status: read surface + write path + chunk-granular recall shipped (slices 0–8) — `get(id)` → MCP/CLI → access-log tier next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -848,7 +1227,28 @@ weight — not even with decay+churn** (repo-dependent: +aurora / −gitdone at 
 lacks. So base-level activation → **access-log tier** (deferred); **git → passive activity metadata**
 (displayed, not scored); the v1 ranking lift comes from **spreading** (validated on both repos).
 **v1 default ranking = BM25 + spreading.** **SLICE-3-REFINED:** the code-over-md fix is *kind-scoping*
-(kinds never share a ranking), not weights. **Next action:** **slice 4 = edges + spreading +
-git-activity-metadata** (§11.2) — tree-sitter+ripgrep `calls`/`imports` edges → 1-hop spreading fused
-*within a kind*; re-run the multi-repo gate (incl. `aurora-mixed`), adopt the spreading weight only if
-≥ baseline on every repo. This is where recall first moves beyond BM25.
+(kinds never share a ranking), not weights. **Slice 7 (write path) — ✅ SHIPPED (2026-06-09).** `remember`/`forget`, `fact`+`episode` kinds,
+`source`/`provenance`/`occurred_at` on `docs`, the `recall_log` audit table; the reconcile seam is
+structural (written rows never enter `file_index`, which is the sole source of `index()` deletes).
+`reviewCandidates(threshold)` is the built HITL query. 13 integration tests, recall bench
+byte-identical, `tsc` clean. litectx is now a write-capable *memory across kinds*, not just a code/doc
+index.
+
+**Next action — sequenced (8 shipped 2026-06-10; hits carry chunk pointers, gates byte-identical):**
+1. ~~Slice 7b — written-memory stemming~~ **✅ SHIPPED** (§5.1, §11.2).
+2. ~~Slice 8 — chunk-granular recall (`hit.chunk`) + `log: false`~~ **✅ SHIPPED** (§11.2; the
+   recall_log now carries the chunk symbol — the grain the edit-bind joins on).
+3. **`get(id)` / body access** — fetch one item's text by id. Needed before MCP (a recall tool
+   returning fact ids with no way to read their text is useless). Its fetch logging = one more
+   *tagged weak signal*, structurally powerless (§14 #4 — the demoted fetch-toll, not a foundation).
+4. **MCP/CLI parity** (§14 #5) — a separate `litectx-mcp` (stdio, client-spawned, not a daemon)
+   + CLI `remember`/`--embeddings`, exposing `index`/`recall`/`impact`/`remember`/`forget`/`get`.
+5. **Access-log tier** (§4, §14 #4 SETTLED block) — score base-level activation on action-grade
+   signals: the **edit-bind** for code (harvest-at-recall over the log window; file hash = trigger,
+   chunk diff = attribution) and **corrective re-`remember`** for facts; episodes-first (recency).
+   Trust-weighting (human > agent) is durable provenance, separate from decaying activation.
+   Requires building the **action-signal bench** — every signal type earns weight there or ships at
+   zero. Activation re-ranks, never gates. This is litectx's long-running-memory differentiator.
+   (Cold-start is NOT a problem this tier solves — day-one recall is BM25 + spreading and is what
+   the benches already gate; git-seeding was falsified, §14 #1, re-affirmed 2026-06-10: a
+   topic-blind prior lifts the same hot files for every query.)

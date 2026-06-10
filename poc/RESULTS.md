@@ -318,3 +318,68 @@ norm(dual) + w·norm(cosine) over the BM25-gated pool:
 **Build decisions locked:** file-level (matches recall's unit), one float32 BLOB per file from
 head-truncated text; brute-force cosine over the gated pool; weight 1.0 default; embeddings OFF by
 default; transformers.js (Xenova/all-MiniLM-L6-v2) lazy-loaded as an OPTIONAL peer dep.
+
+### Written-memory recall quality + the porter probe (slice-7 follow-through, 2026-06-10)
+
+**Question:** slice 7's tests prove a written fact *survives and surfaces* (boolean) — but is
+fact/episode recall any *good*? Facts are short texts; FTS5 has no stemming; the smoke test had
+already shown `"refund policy"` missing a fact containing only `"refunds"`.
+
+**Harness:** `poc/memory-bench.mjs` + `poc/datasets/memory-facts.mjs` (`npm run bench:memory`) —
+a committed corpus of 24 facts + 5 episodes written via `remember()` (pure-memory mode, no repo,
+no `index()`), 32 labeled queries split **exact / morph / para**, with a mechanical **label audit**
+(morph/para must share ZERO exact keywords with the target's indexed text — body *and* id, since the
+id is indexed; exact must share ≥1). Mislabels fail the run. Mutation-checked three ways (mislabel /
+impossible floor / stale `expected` → each exits 1).
+
+**Result (shipped BM25 core):**
+
+| category | MRR | P@1 | meaning |
+|---|---|---|---|
+| exact | **1.000** | 100% | shared-keyword recall is perfect on this corpus — floored at ≥0.8 |
+| morph | **0.000** | 0% | inflectional variants (refund/refunds, cached/caching) NEVER match — FTS5 has no stemming |
+| para  | **0.000** | 0% | paraphrase never matches — the embeddings-tier case, as designed |
+
+The morph=0 is **total, not partial** — zero-overlap means BM25 *cannot* retrieve the target at any
+rank. For short fact texts this is the dominant real-world failure mode (code recall is shielded by
+repeating identifiers; one-sentence facts are not).
+
+**Porter probe (throwaway, 15 min):** same corpus + ranking through an FTS5 table with
+`tokenize='porter unicode61'` vs shipped `unicode61`:
+
+| tokenizer | exact | morph | para |
+|---|---|---|---|
+| unicode61 (shipped) | 1.000 | 0.000 | 0.000 |
+| **porter unicode61** | **1.000** | **0.722** | 0.000 |
+
+Porter fixes **all inflectional** morph cases (7/9: refunds, caching, throttled, retried,
+pagination, encrypted, migrations — 6 at rank 1, 1 at rank 2) with exact unchanged. The 2 residual
+misses are *derivational* ("deployment"→"deploys") and *compounding* ("rollback"→"rolled back") —
+genuinely beyond a stemmer. Para stays 0 (porter is not semantics — embeddings remain that tier).
+
+**Open design question (NOT decided here):** the FTS5 tokenizer is **per-table**, and the one `docs`
+table holds all kinds — so "porter for facts" is not a one-line flip. Options: (a) porter for
+everything → must re-run the aurora/gitdone code gates (stemming identifiers could move them);
+(b) a second FTS table for written memory only (recall already queries per kind, so routing is
+clean) → no risk to the frozen code gates; (c) query-side expansion. Decide before MCP exposes
+written memory to real consumers; the bench is the gate any choice must move (morph `expected` is
+pinned at 0.000 and fails on silent change).
+
+**Follow-up — option (a) "porter everywhere" MEASURED (same day):** the docs-table tokenizer was
+temporarily flipped to `porter unicode61` and all four recall gates re-run through the real library:
+
+| dataset | baseline MRR | porter MRR | Δ | note |
+|---|---|---|---|---|
+| aurora | 0.552 | 0.530 | **−0.022** | **FAILS the committed floor (0.550)**; P@1 36→32% |
+| gitdone | 0.425 | 0.429 | +0.004 | but **P@1 25→15%** — top-rank precision collapses |
+| aurora-mixed | 0.553 | 0.562 | +0.009 | |
+| multis | 0.457 | 0.431 | **−0.026** | held-out repo regresses |
+| memory-facts morph | 0.000 | 0.722 | +0.722 | the win, confirmed through the real pipeline |
+
+**Verdict: (a) is rejected by the standing rule** ("adopt only if ≥ baseline on EVERY repo" — the
+same rule that rejected git-seeded BLA). Two repos regress, one breaks its committed gate, and the
+mechanism is the predicted one: in code, word-forms are distinct *symbols* (`token`/`tokens`/
+`tokenize`/`tokenizer`), so stemming dilutes identifier distinctiveness — visible as the P@1 drops
+even where MRR holds. In prose, forms are the same meaning — so written memory gets the full win.
+**→ Option (b): stem written memory only** (its own FTS table or per-kind routing), leaving the
+frozen code gates untouched. The schema change rides the next build slice.

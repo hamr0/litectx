@@ -44,7 +44,7 @@ async function main() {
     const ctx = new LiteCtx({ root: opts.root });
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
     /** @param {import("../src/store.js").Hit} h */
-    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtGit(h.git)}`);
+    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtChunk(h.chunk)}${fmtGit(h.git)}`);
     if (opts.kind) {
       // one kind → flat ranked list
       (await ctx.recall(query, { kind: opts.kind, n: opts.n })).forEach(line);
@@ -85,6 +85,16 @@ async function main() {
 }
 
 main().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+
+/**
+ * Render the hit's chunk pointer (chunk-granular recall, slice 8) — the matching function/section
+ * inside the file, 1-based lines for humans. No localization → no column.
+ * @param {import("../src/store.js").ChunkRef | null | undefined} c
+ */
+function fmtChunk(c) {
+  if (!c) return "";
+  return `\t→ ${c.symbol ?? c.nodeType}:${c.startLine + 1}-${c.endLine + 1}`;
+}
 
 /**
  * Render file-level git grounding as a compact trailing column (grounding, never scored — PRD §slice4).
