@@ -327,7 +327,7 @@ per hit — the access log §4 will later score), `fact`+`episode` added to `KIN
 
 ### 3.3 The memory model at a glance — kinds × operations (2026-06-10)
 
-> The whole machine is **four kinds × six operations with two frozen weights**. Everything else in
+> The whole machine is **four kinds × seven operations with two frozen weights**. Everything else in
 > this PRD is either a *weight* inside the rank step or a *future event type* feeding heat — the
 > skeleton below doesn't change.
 
@@ -345,16 +345,16 @@ per hit — the access log §4 will later score), `fact`+`episode` added to `KIN
 One sentence to hold it all: **files are indexed and chunked; knowledge is written whole; each
 kind ranks only against its own kind.**
 
-**Table 2 — the six operations (what you can do)**
+**Table 2 — the seven operations (what you can do)**
 
 | Operation | What it does |
 |---|---|
 | `index()` | Read repo from disk. Skip unchanged files (mtime+size→hash). Changed files: re-chunk, re-FTS, re-edge. |
-| `remember(id, text, {kind, by})` | Write/overwrite one fact/episode/doc by id. `by` = human or agent. |
-| `forget(id)` | Hard delete: row + embedding + its log rows. Gone is gone. Can't touch indexed files. |
+| `remember(id, text, {kind, by})` | Write/overwrite one fact/episode/doc by id (raw text kept verbatim). `by` = human or agent. |
+| `forget(id)` | Hard delete: row + raw text + embedding + its log rows. Gone is gone. Can't touch indexed files. |
 | `recall(query, {log?})` | **Gate** (lexical match, per kind) → **rank** (BM25 + 0.3·neighbor + optional semantics) → attach each hit's best **chunk** pointer → return grouped by kind → **log** one impression per hit (skipped with `log: false` — non-demand consumers must not pollute the signal). |
-| `reviewCandidates(5)` | List agent facts recalled ≥5× → a human promotes (re-remember `by:"human"`) or kills (forget). |
-| `get(id)` *(not built)* | Fetch one item's text by id. Needed before MCP. |
+| `get(id, {log?})` | Fetch one item's body by id — written memory verbatim, files fresh from disk. Logs `action:'fetch'`, a **tagged weak signal** demand readers exclude (the fetch-toll: you fetch what recall returned; counting it doubles demand). |
+| `reviewCandidates(5)` | List agent facts recalled ≥5× (recalls only — fetches don't count) → a human promotes (re-remember `by:"human"`) or kills (forget). |
 
 **The story, once through**
 
@@ -385,9 +385,9 @@ Day 30  "deploy-oidc" has been recalled 6 times → shows up in reviewCandidates
 retrievals, and only if the bench admits it — an item earns its place, it is never gifted it.)
 
 **Open items behind this picture** (full text in §14): build order = ~~chunk-granular recall~~
-(✅ slice 8 — hits carry `chunk` pointers, the log records the symbol) → `get(id)` → MCP/CLI →
-access-log tier; activation calibration is all "run the bench" and that bench doesn't exist yet
-(the biggest IOU).
+(✅ slice 8 — hits carry `chunk` pointers, the log records the symbol) → ~~`get(id)`~~ (✅ slice 9 —
+body access + tagged fetch logging) → MCP/CLI → access-log tier; activation calibration is all
+"run the bench" and that bench doesn't exist yet (the biggest IOU).
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
@@ -903,6 +903,30 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Next + post-v1 tiers:**
+- **Slice 9 — `get(id)` body access + tagged fetch logging — ✅ SHIPPED (2026-06-10).** The read
+  counterpart to recall (pointers → the thing itself) and the MCP prerequisite (§15: a recall tool
+  returning fact ids with no way to read their text is useless). **Any id:** a written-memory id
+  returns the text **verbatim** — a new `mem_text` table stores it raw at `remember()` time, because
+  the FTS body is the processed *searchable surface* (`indexBody` folds path tokens + camel parts)
+  and a written row has no file to re-read; a file path returns the file **fresh from disk** (the
+  index is not a file cache; `text: null` only when the file vanished since the last `index()`).
+  Sync, `null` for unknown ids; on a written-id/file-path collision the written row wins (ids are
+  namespaced by convention). **The fetch-toll lands as designed (§14 #4):** `recall_log` gains an
+  `action` column (`'recall'`|`'fetch'`); `get` logs `'fetch'`, and the demand readers
+  (`recallCount`, `reviewCandidates`) filter to `'recall'` — a fetch is mechanically coupled to the
+  recall that produced the id, so counting it would double-count demand. Tagged weak signal only;
+  earns weight (if any) at the action-signal bench. `{ log: false }` opt-out, same contract as
+  recall. Self-heal extended additively (`ALTER` adds `action`; pre-existing rows are all real
+  recalls so the default is true; a pre-slice-9 written row without `mem_text` degrades to its
+  stored FTS body, never dropped). CLI `litectx get <id>` (metadata → stderr, body → stdout).
+  **Validation round caught a real pre-existing contract violation** (the slice-8 lesson, applied:
+  live-probe the real surface before claiming shipped): `index({ force: true })` called `reset()`
+  and silently destroyed every fact/episode/direct doc + the recall log — violating §3.2's
+  "survives every index() pass" and the store's own "only drop re-indexable data" rule. Fixed:
+  force now calls `clearIndexed()` (drops file-sourced data only; written memory, raw text,
+  written embeddings, and the append-only demand history all survive — regression-tested);
+  `reset()` remains for the ≤0.1.0 self-heal where nothing unrecoverable can exist. All gates
+  **byte-identical**; +11 tests (98 total); `tsc` clean.
 - **Slice 8 — chunk-granular recall + `log: false` — ✅ SHIPPED (2026-06-10).** Every hit carries
   `chunk: { symbol, nodeType, startLine, endLine } | null` — the best-matching chunk *inside* the
   already-ranked file (function pointer > file pointer; §14 #4 quality motivation, NOT capture).
@@ -1212,7 +1236,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall shipped (slices 0–8) — `get(id)` → MCP/CLI → access-log tier next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access shipped (slices 0–9) — MCP/CLI → access-log tier next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1234,13 +1258,13 @@ structural (written rows never enter `file_index`, which is the sole source of `
 byte-identical, `tsc` clean. litectx is now a write-capable *memory across kinds*, not just a code/doc
 index.
 
-**Next action — sequenced (8 shipped 2026-06-10; hits carry chunk pointers, gates byte-identical):**
+**Next action — sequenced (9 shipped 2026-06-10; body access live, gates byte-identical):**
 1. ~~Slice 7b — written-memory stemming~~ **✅ SHIPPED** (§5.1, §11.2).
 2. ~~Slice 8 — chunk-granular recall (`hit.chunk`) + `log: false`~~ **✅ SHIPPED** (§11.2; the
    recall_log now carries the chunk symbol — the grain the edit-bind joins on).
-3. **`get(id)` / body access** — fetch one item's text by id. Needed before MCP (a recall tool
-   returning fact ids with no way to read their text is useless). Its fetch logging = one more
-   *tagged weak signal*, structurally powerless (§14 #4 — the demoted fetch-toll, not a foundation).
+3. ~~Slice 9 — `get(id)` / body access~~ **✅ SHIPPED** (§11.2; written memory verbatim via
+   `mem_text`, files fresh from disk; fetch logging landed as the *tagged weak signal* —
+   `action:'fetch'`, excluded from demand reads — §14 #4's demoted fetch-toll, not a foundation).
 4. **MCP/CLI parity** (§14 #5) — a separate `litectx-mcp` (stdio, client-spawned, not a daemon)
    + CLI `remember`/`--embeddings`, exposing `index`/`recall`/`impact`/`remember`/`forget`/`get`.
 5. **Access-log tier** (§4, §14 #4 SETTLED block) — score base-level activation on action-grade

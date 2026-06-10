@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: v0.1.0 published; write path + chunk-granular recall landed on main** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the surface is **implemented, tested (87 integration tests), and CI-gated**: **recall** (every hit carries a `chunk` pointer — the matching function/section inside the file) and **impact** over one shared graph (TS / JS / Python + Markdown), plus the **write path** (`remember`/`forget` for facts, episodes, and runtime docs — unreleased, next is 0.2.0). The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
+> **Status: v0.1.0 published; write path + chunk-granular recall + `get(id)` body access landed on main** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the surface is **implemented, tested (98 integration tests), and CI-gated**: **recall** (every hit carries a `chunk` pointer — the matching function/section inside the file), **impact**, and **`get(id)`** (the body behind any pointer — written memory verbatim, files fresh from disk) over one shared graph (TS / JS / Python + Markdown), plus the **write path** (`remember`/`forget` for facts, episodes, and runtime docs — unreleased, next is 0.2.0). The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
 
 ## What this is
 
@@ -86,6 +86,7 @@ const blast = await ctx.impact("validateToken");
 // memory that isn't a file — facts/episodes/runtime docs; survives every index() pass
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
 const facts = await ctx.recall("jwt auth", { kind: "fact" });
+ctx.get("fact:auth-uses-jwt")?.text;   // the body behind any pointer (recall returns ranked pointers)
 ctx.forget("fact:auth-uses-jwt");   // by key — or forget({ by: "agent" }) in bulk
 ```
 

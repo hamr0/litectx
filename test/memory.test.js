@@ -117,6 +117,30 @@ test("the reconcile seam: written memory survives index() (scoped and full passe
   rmSync(root, { recursive: true, force: true });
 });
 
+test("written memory survives index({ force: true }) — force rebuilds files, never memory", async () => {
+  const root = fixtureRepo();
+  // embeddings on (stub), so the test also pins that a written row's VECTOR survives force —
+  // the clear is scoped to file_index keys, and written rows are never in file_index.
+  const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings: true, embedder: markerStub() });
+  await ctx.index();
+  await ctx.remember("fact:survivor", "Force reindex must never destroy written memory.", { kind: "fact", by: "human" });
+  await ctx.remember("faq:survivor", "Direct docs have no file behind them either.", { kind: "doc" });
+  await ctx.recall("force reindex", { kind: "fact" }); // one demand row — the log must survive too
+  const r = await ctx.index({ force: true });
+  assert.equal(r.added, 2, "every file was re-read from scratch");
+  assert.equal((await ctx.recall("force reindex destroy", { kind: "fact" }))[0]?.path, "fact:survivor");
+  assert.equal(ctx.get("fact:survivor")?.text, "Force reindex must never destroy written memory.", "raw text survived");
+  assert.equal(ctx.get("faq:survivor")?.source, "direct", "direct doc row survived (only source='file' rows were cleared)");
+  // 2 = the pre-force row SURVIVED plus the post-force recall above (post-force alone would be 1)
+  assert.equal(ctx.store.recallCount("fact:survivor"), 2, "the demand history survived (append-only)");
+  const vecs = /** @type {{ n: number }} */ (
+    ctx.store.db.prepare("SELECT count(*) AS n FROM file_embeddings WHERE path = 'fact:survivor'").get()
+  );
+  assert.equal(vecs.n, 1, "the written row's embedding survived (clear is scoped to file_index keys)");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("remember upserts by id — a second write replaces the first", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });

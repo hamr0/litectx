@@ -89,8 +89,18 @@ const SCHEMA = [
   // crosses the review threshold becomes a human-review candidate. Append-only; many rows per path.
   // `symbol` = the hit's best-matching chunk (chunk-granular recall) so the future edit-bind can
   // join "recalled" and "edited" at the same grain (§14 #4); NULL for written memory / unlocalized.
-  "CREATE TABLE IF NOT EXISTS recall_log(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, symbol TEXT, ts INTEGER NOT NULL)",
+  // `action` tags the row's signal type (slice 9): 'recall' = real demand (ranked retrieval);
+  // 'fetch' = a get(id) body read — mechanically coupled to the recall that produced the id, so
+  // counting it would double-count demand (the fetch-toll, §14 #4). Demand readers (recallCount,
+  // reviewCandidates) filter to 'recall'; 'fetch' is recorded as a tagged weak signal only, and
+  // earns weight (if any) at the action-signal bench — never before.
+  "CREATE TABLE IF NOT EXISTS recall_log(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, symbol TEXT, action TEXT NOT NULL DEFAULT 'recall', ts INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS recall_log_path ON recall_log(path)",
+  // raw text of direct-written memory (slice 9): the FTS body is the *searchable surface*
+  // (indexBody folds path tokens + camel parts), and unlike an indexed file there is no file on
+  // disk to re-read — so `get(id)` needs the original text stored verbatim. One row per written
+  // id, upserted by `writeMemory`, dropped by `forgetMemory`. Indexed files never get a row.
+  "CREATE TABLE IF NOT EXISTS mem_text(path TEXT PRIMARY KEY, text TEXT NOT NULL)",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
   // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
@@ -122,16 +132,40 @@ export class Store {
     // first INSERT would crash). The rule: an upgrade that can preserve data does; one that can't
     // only ever drops re-indexable data. A `docs` table without `source` predates the write path
     // (≤ 0.1.0) — it cannot contain written memory, only files `index()` rebuilds → reset. A
-    // `recall_log` without `symbol` (pre-slice-8) is column-additive → ALTER, log preserved.
+    // `recall_log` without `symbol` (pre-slice-8) or `action` (pre-slice-9) is column-additive →
+    // ALTER, log preserved (pre-existing rows are all real recalls, so 'recall' is the true default).
     const docsCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(docs)"));
     if (!docsCols.some((c) => c.name === "source")) this.reset();
     else {
       const logCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(recall_log)"));
       if (!logCols.some((c) => c.name === "symbol")) this.db.exec("ALTER TABLE recall_log ADD COLUMN symbol TEXT");
+      if (!logCols.some((c) => c.name === "action")) this.db.exec("ALTER TABLE recall_log ADD COLUMN action TEXT NOT NULL DEFAULT 'recall'");
     }
   }
 
-  /** Drop and recreate everything (full reindex; used by `index({ force: true })`). */
+  /**
+   * Clear all FILE-sourced data, preserving written memory and the audit log (slice 9 validation
+   * fix; used by `index({ force: true })`). A force pass re-reads every file from disk — so file
+   * rows, chunks, edges, git metadata, and file embeddings are all re-derivable and dropped. What
+   * is NOT re-derivable is never touched: written memory (`mem`, `mem_text`, direct `docs` rows,
+   * their embeddings — no file behind them) and `recall_log` (append-only demand history). This is
+   * the "survives every index() pass" contract (§3.2) extended to its last gap: `force: true` used
+   * to call `reset()` and silently destroy every fact. Written embeddings survive because the
+   * subquery scopes the delete to `file_index` keys — written rows are never in `file_index`.
+   */
+  clearIndexed() {
+    const tx = this.db.transaction(() => {
+      this.db.exec("DELETE FROM file_embeddings WHERE path IN (SELECT path FROM file_index)"); // before file_index is cleared
+      this.db.exec("DELETE FROM docs WHERE source = 'file'");
+      this.db.exec("DELETE FROM file_index");
+      this.db.exec("DELETE FROM nodes");
+      this.db.exec("DELETE FROM edges");
+      this.db.exec("DELETE FROM git_sig");
+    });
+    tx();
+  }
+
+  /** Drop and recreate everything (the ≤0.1.0 self-heal rebuild — such a db predates the write path, so nothing unrecoverable exists). */
   reset() {
     this.db.exec("DROP TABLE IF EXISTS docs");
     this.db.exec("DROP TABLE IF EXISTS file_index");
@@ -141,6 +175,7 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS file_embeddings");
     this.db.exec("DROP TABLE IF EXISTS recall_log");
     this.db.exec("DROP TABLE IF EXISTS mem");
+    this.db.exec("DROP TABLE IF EXISTS mem_text");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -262,6 +297,12 @@ export class Store {
           )
           .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
       }
+      // raw text alongside the searchable surface (slice 9): the FTS body is processed
+      // (indexBody) and there is no file behind a written row, so this is the only copy
+      // `getItem` can hand back verbatim.
+      this.db
+        .prepare("INSERT INTO mem_text(path, text) VALUES (@path, @text) ON CONFLICT(path) DO UPDATE SET text = excluded.text")
+        .run({ path: m.id, text: m.text });
       if (m.embedding) {
         this.db
           .prepare("INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
@@ -276,7 +317,7 @@ export class Store {
   /**
    * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
    * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
-   * touched. Cleans the row's embedding + recall-log alongside it. Returns rows removed.
+   * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
    * @param {{ id?: string, kind?: string, provenance?: string }} sel
    * @returns {number}
    */
@@ -300,9 +341,10 @@ export class Store {
       const removed =
         this.db.prepare(`DELETE FROM docs WHERE ${docsCond}`).run(params).changes +
         this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
+      const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -310,15 +352,18 @@ export class Store {
 
   /**
    * Append recall hits to the audit log (slice 7, §3.2) — the genuine access log §4's base-level tier
-   * will later score. v1 records, does not rank. One row per hit.
+   * will later score. v1 records, does not rank. One row per hit. `action` tags the signal type:
+   * 'recall' = ranked retrieval (real demand); 'fetch' = a get(id) body read (tagged weak signal —
+   * excluded from demand reads, see the schema comment).
    * @param {{ path: string, kind: string, chunk?: ChunkRef | null }[]} hits
    * @param {number} ts  epoch ms
+   * @param {string} [action='recall']
    */
-  logRecall(hits, ts) {
+  logRecall(hits, ts, action = "recall") {
     if (!hits.length) return;
-    const ins = this.db.prepare("INSERT INTO recall_log(path, kind, symbol, ts) VALUES (@path, @kind, @symbol, @ts)");
+    const ins = this.db.prepare("INSERT INTO recall_log(path, kind, symbol, action, ts) VALUES (@path, @kind, @symbol, @action, @ts)");
     const tx = this.db.transaction(() => {
-      for (const h of hits) ins.run({ path: h.path, kind: h.kind, symbol: h.chunk?.symbol ?? null, ts });
+      for (const h of hits) ins.run({ path: h.path, kind: h.kind, symbol: h.chunk?.symbol ?? null, action, ts });
     });
     tx();
   }
@@ -339,11 +384,14 @@ export class Store {
   /**
    * How many times `path` has been recalled (slice 7 audit log, §3.2). Feeds HITL review: an
    * agent-asserted fact whose count crosses the review threshold is a promotion candidate.
+   * Counts `action='recall'` rows only — a fetch is not demand (the fetch-toll, slice 9).
    * @param {string} path
    * @returns {number}
    */
   recallCount(path) {
-    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM recall_log WHERE path = ?").get(path)).n;
+    return /** @type {{ n: number }} */ (
+      this.db.prepare("SELECT count(*) AS n FROM recall_log WHERE path = ? AND action = 'recall'").get(path)
+    ).n;
   }
 
   /**
@@ -357,15 +405,43 @@ export class Store {
    */
   reviewCandidates(threshold = 5) {
     // facts live in the stemmed `mem` table (§5.1); all mem rows are direct-written by construction.
+    // recall rows only: fetches must not push a fact toward review (the fetch-toll, slice 9).
     return /** @type {{ path: string, hits: number }[]} */ (
       this.db
         .prepare(
           "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
-            "WHERE m.kind = 'fact' AND m.provenance = 'agent' " +
+            "WHERE m.kind = 'fact' AND m.provenance = 'agent' AND r.action = 'recall' " +
             "GROUP BY m.path HAVING hits >= ? ORDER BY hits DESC, m.path"
         )
         .all(threshold)
     );
+  }
+
+  /**
+   * One stored item's full record by id — any id (slice 9): a written-memory id or an indexed
+   * file's repo-relative path. Written rows carry their raw text (`mem_text`); file rows carry
+   * `text: null` here — the caller reads the file from disk (the index is not a file cache).
+   * Lookup order: `mem` (facts/episodes) → direct `docs` rows → file rows, so on the pathological
+   * collision of a written id with a file path the written row wins (it has no other home; ids are
+   * namespaced by convention). A pre-slice-9 written row with no `mem_text` falls back to its
+   * stored FTS body — degraded (path tokens folded in) but preserved.
+   * @param {string} id
+   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null } | null}
+   */
+  getItem(id) {
+    const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
+      this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(id) ??
+        this.db
+          .prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = ? ORDER BY (source = 'direct') DESC LIMIT 1")
+          .get(id)
+    );
+    if (!row) return null;
+    let text = null;
+    if (row.source === "direct") {
+      const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
+      text = raw ? raw.text : row.body;
+    }
+    return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text };
   }
 
   /**

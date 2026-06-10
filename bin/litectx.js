@@ -4,6 +4,7 @@
 //
 //   litectx index [root] [--force]
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]
+//   litectx get <id> [--root <dir>]
 //   litectx impact <symbol> [--root <dir>]
 
 import { LiteCtx, KINDS } from "../src/index.js";
@@ -58,6 +59,26 @@ async function main() {
       }
     }
     ctx.close();
+    return;
+  }
+
+  if (cmd === "get") {
+    const id = opts.words[0];
+    if (!id) fail("get needs an id (a written-memory id or an indexed file path)");
+    const ctx = new LiteCtx({ root: opts.root });
+    const item = ctx.get(id);
+    ctx.close();
+    if (!item) {
+      console.error(`litectx: '${id}' is not in the index`);
+      process.exit(1);
+    }
+    // metadata to stderr, body to stdout — so `litectx get <id>` pipes clean text
+    console.error(`${item.kind}/${item.format}\t${item.source}${item.provenance ? `/${item.provenance}` : ""}\t${item.id}`);
+    if (item.text == null) {
+      console.error("litectx: indexed but missing from disk (stale until the next `litectx index`)");
+      process.exit(1);
+    }
+    process.stdout.write(item.text.endsWith("\n") ? item.text : `${item.text}\n`);
     return;
   }
 
@@ -117,6 +138,8 @@ function relAge(sec) {
 /** @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
-  console.error("usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>] | litectx impact <symbol> [--root <dir>]");
+  console.error(
+    "usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>] | litectx get <id> [--root <dir>] | litectx impact <symbol> [--root <dir>]"
+  );
   process.exit(1);
 }

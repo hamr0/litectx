@@ -7,11 +7,12 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–7: incremental
+> document describes the contract **as actually shipped** (slices 0–9: incremental
 > indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
 > grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, the
-> opt-in **embeddings** tier, and the **write path** — `remember`/`forget` for
-> facts/episodes/direct docs). Where the eventual surface (ACT-R base-level activation
+> opt-in **embeddings** tier, the **write path** — `remember`/`forget` for
+> facts/episodes/direct docs — chunk-granular recall, and `get(id)` body
+> access). Where the eventual surface (ACT-R base-level activation
 > weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
 > **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
 > today and is covered by tests and the multi-repo benchmark.
@@ -69,6 +70,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Embeddings** (semantic tier) | ✅ shipped (slice 6 — opt-in, off by default; `embeddings: true` + the optional peer dep) |
 | **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
+| **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
+| **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
 | Base-level **activation** (recency/frequency decay, trust-weighted ranking) | 🚧 roadmap (access-log tier — scored on the recall log slice 7 now records) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
@@ -95,13 +98,14 @@ const hits = await ctx.recall("where do we validate the auth token?", { kind: "c
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
 const facts = await ctx.recall("jwt auth", { kind: "fact" });
+ctx.get("fact:auth-uses-jwt")?.text;                  // the body itself (recall returns ranked pointers)
 ctx.forget("fact:auth-uses-jwt");                     // by key; or forget({ by: "agent" }) in bulk
 ctx.close();
 ```
 
 `index()`, `recall()`, and `remember()` are **async** (`index` parses with a WASM grammar
-runtime; `recall`/`remember` embed when the tier is on). `forget()`, `reviewCandidates()`,
-`size()`, and `close()` are synchronous.
+runtime; `recall`/`remember` embed when the tier is on). `get()`, `forget()`,
+`reviewCandidates()`, `size()`, and `close()` are synchronous.
 
 ## All options — `LiteCtxConfig`
 
@@ -201,6 +205,40 @@ follows the `kind` argument:
 > 🚧 The richer roadmap shape (`{ id, signals: { bm25, activation, ... } }`)
 > is not shipped yet. Today a hit is the six fields above.
 
+### `ctx.get(id, opts?)` → `Item | null`
+**Body access** (slice 9) — the read counterpart to `recall`: recall returns ranked
+*pointers* (paths/ids), `get` returns the *thing itself*. Synchronous (no embedder
+involved). Any id works:
+
+- a **written-memory id** (`"fact:auth-uses-jwt"`) → the text **verbatim as remembered**
+  (the FTS body is a processed searchable surface, never the deliverable);
+- an **indexed file's repo-relative path** (`"src/auth.js"`) → the file **read fresh from
+  disk** — the index stores the searchable surface, not a copy of your files, so you always
+  see the current content (`text: null` only when the file has vanished since the last
+  `index()`; the next pass sweeps the row).
+
+```ts
+Item = {
+  id: string,                        // the written id, or the repo-relative path
+  kind: string,                      // "code" | "doc" | "fact" | "episode"
+  format: string,                    // "ts" | "js" | "py" | "md" | "text" | ...
+  source: "file" | "direct",         // indexed from disk vs written via remember()
+  provenance: "human"|"agent"|null,  // written memory only; null for files
+  occurredAt: number | null,         // episode timestamp (epoch ms)
+  text: string | null,               // the full body
+}
+```
+
+Unknown id → `null`. On the (pathological) collision of a written id with a real file
+path, the written row wins — namespace your ids (`"fact:…"`) and it never comes up.
+
+- `opts.log?: boolean` (default `true`) — each `get` appends an `action: 'fetch'` row to
+  the audit log. A fetch is a **tagged weak signal, not demand**: you fetch what recall
+  just returned, so counting fetches as demand would double-count every retrieval (the
+  fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
+  scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
+  `log: false` for non-demand consumers, same as `recall`.
+
 ### `await ctx.impact(symbol)` → `Promise<Impact | null>`
 The **impact** view (§7): *if I change this symbol, what's the blast radius and how risky?*
 **Computed on demand, not persisted** — callees by a tree-sitter walk of the symbol's body,
@@ -264,7 +302,10 @@ With the embeddings tier on, `remember` embeds the text at write time (hence asy
 
 Written memory **coexists with the index in one store and survives every `index()`
 pass** — structurally: `index()` reconciles deletions only against files it has itself
-indexed, and written rows are never in that set.
+indexed, and written rows are never in that set. This includes `index({ force: true })`:
+a force pass clears and re-reads **file-sourced data only** — written memory, its raw
+text/embeddings, and the audit log are never touched (nothing about them is re-derivable
+from disk).
 
 ### `ctx.forget(idOrQuery)` → `number`
 Delete directly-written memory. Returns the number of rows removed.
@@ -393,12 +434,18 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   filesystem walk is used instead.
 - **`.tsx` / `.jsx` are best-effort.** v1 grammars are TS, JS, Python; JSX-heavy
   files may fall back to a file-level chunk. They are not in the default `include`.
-- **`recall()` writes — unless you opt out.** Since slice 7, every recall appends its hits
-  to the `recall_log` audit table — so by default recall needs a writable db, and the log
-  grows with use (append-only; small rows, but unbounded — pruning policy is yours until
-  the access-log tier defines one). Pass `{ log: false }` for read-only opens and for any
-  consumer whose queries aren't real demand (dashboards, CI, batch tooling) — the log is a
-  demand signal, and non-demand traffic pollutes it.
+- **`recall()` and `get()` write — unless you opt out.** Since slice 7, every recall appends
+  its hits to the `recall_log` audit table, and since slice 9 every `get` appends a fetch row
+  (tagged `action: 'fetch'`, kept apart from recall's demand signal) — so by default both need
+  a writable db, and the log grows with use (append-only; small rows, but unbounded — pruning
+  policy is yours until the access-log tier defines one). Pass `{ log: false }` for read-only
+  opens and for any consumer whose queries aren't real demand (dashboards, CI, batch tooling)
+  — the log is a demand signal, and non-demand traffic pollutes it.
+- **`get()` on a file reads disk, not the index.** The store keeps a processed *searchable
+  surface*, not a copy of your files — so `get("src/auth.js").text` is the file as it is
+  *now*, even if it changed since the last `index()` (and `null` if it was deleted; the
+  next `index()` sweeps the row). Written memory (`fact`/`episode`/direct `doc`) is the
+  exception: it has no file behind it, so its raw text is stored and returned verbatim.
 - **Facts/episodes recall across word forms; docs and code stay keyword-exact — deliberately.**
   `fact`/`episode` recall is porter-stemmed: *"refund policy"* finds a fact stored as
   *"refunds are honored…"* (inflection — plurals, -ed/-ing — is covered; derivational shifts

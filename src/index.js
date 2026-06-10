@@ -8,7 +8,7 @@
 // changed and drops files that disappeared (§6).
 
 import { join, dirname } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { Store } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
@@ -65,6 +65,18 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {string} [embedModel]         transformers.js model id (default Xenova/all-MiniLM-L6-v2)
  * @property {{ embed(text: string): Promise<Float32Array> }} [embedder]  inject a custom/stub embedder
  *                                         (advanced/testing); overrides the built-in model loading
+ */
+
+/**
+ * @typedef {Object} Item
+ * @property {string} id                 the written-memory id, or the file's repo-relative path
+ * @property {string} kind               "code" | "doc" | "fact" | "episode"
+ * @property {string} format             "ts" | "js" | "py" | "md" | "text" | ...
+ * @property {string} source             "file" (indexed from disk) | "direct" (written via remember)
+ * @property {string|null} provenance    "human" | "agent" for written memory; null for indexed files
+ * @property {number|null} occurredAt    episode timestamp (epoch ms); null otherwise
+ * @property {string|null} text          the full body — written memory verbatim as remembered, files
+ *                                       read fresh from disk; null only when the file is gone
  */
 
 /**
@@ -130,7 +142,9 @@ export class LiteCtx {
    */
   async index(opts = {}) {
     const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs);
-    if (opts.force) this.store.reset();
+    // force = re-read every FILE from disk. Written memory is not re-derivable from any file and
+    // must survive even a force pass (§3.2) — so this clears file-sourced data only, never reset().
+    if (opts.force) this.store.clearIndexed();
     const prev = opts.force ? new Map() : this.store.loadIndex();
 
     const { upserts, touch, unchanged } = diffFiles(this.root, files, prev);
@@ -269,6 +283,40 @@ export class LiteCtx {
    */
   async impact(symbol) {
     return computeImpact(this.store, this.root, this.include, symbol);
+  }
+
+  /**
+   * Fetch one stored item's full record by id — the body-access counterpart to `recall` (slice 9).
+   * Recall returns ranked pointers (paths/ids); `get` returns the thing itself. Any id works:
+   * a written-memory id (`"fact:auth-uses-jwt"`) returns the text exactly as remembered, and an
+   * indexed file's repo-relative path (`"src/auth.js"`) returns the file read fresh from disk —
+   * the index stores the *searchable surface*, not a copy of your files. `text` is `null` only
+   * when an indexed file has vanished from disk since the last `index()` pass.
+   *
+   * Each `get` appends an `action: 'fetch'` row to the audit log — a **tagged weak signal**, kept
+   * apart from recall's demand signal: you fetch what recall just returned, so counting fetches as
+   * demand would double-count every retrieval (the fetch-toll). Nothing reads the tag yet; it earns
+   * weight (if any) at the action-signal bench. `log: false` opts out, same as `recall`.
+   *
+   * Sync (no embedder involved). Returns `null` for an unknown id.
+   *
+   * @param {string} id  a written-memory id, or an indexed file's repo-relative path
+   * @param {{ log?: boolean }} [opts]
+   * @returns {Item | null}
+   */
+  get(id, opts = {}) {
+    const r = this.store.getItem(id);
+    if (!r) return null;
+    let text = r.text;
+    if (r.source === "file") {
+      try {
+        text = readFileSync(join(this.root, r.path), "utf8");
+      } catch {
+        text = null; // indexed but gone from disk — stale until the next index() sweeps it
+      }
+    }
+    if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch");
+    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text };
   }
 
   /**
