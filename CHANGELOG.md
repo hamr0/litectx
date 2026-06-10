@@ -7,6 +7,31 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- **Slice 10 — MCP surface + CLI write parity.** litectx now ships **two thin adapters over the
+  same public API** — the consumption surfaces that make the memory usable without writing a line
+  of integration code, while the library stays cleanly importable (nothing in `src/` knows either
+  surface exists; `import { LiteCtx } from "litectx"` loads zero surface code).
+  - **`litectx-mcp`** (second bin): a **hand-rolled stdio MCP server** — newline-delimited
+    JSON-RPC 2.0, client-spawned, NOT a daemon (the "no service tier" rule holds), **zero new
+    dependencies** (no SDK: the protocol loop is under 100 lines, below the external-dependency
+    bar). Exposes the six public operations: `index` / `recall` / `impact` / `get` /
+    `remember` / `forget` (the core options each — advanced lib options like pathspec-scoped
+    indexing, kind arrays, and `occurredAt` backdating stay lib-only; the surfaces are thin
+    adapters, not option re-exports). Tool failures return `isError` results (in-band, the agent
+    self-corrects), protocol errors are reserved for malformed JSON-RPC, stdout is protocol-pure,
+    and responses may legally return out of order (clients match by id). The audit-log defaults
+    stand over MCP with **no opt-out exposed**: an MCP client is a live agent — exactly the demand
+    the log exists to capture; dashboards and batch tooling should use the lib or CLI instead.
+    POC-validated against a real client (Claude Code via `--mcp-config`) before building; the
+    shipped bin re-verified the same way (full write loop, verbatim round-trip).
+  - **CLI write parity**: `litectx remember <id> [text...] [--kind fact|episode|doc]
+    [--by human|agent]` (body from arguments or piped stdin — `git log -1 | litectx remember
+    ep:release`), `litectx forget <id>` (or bulk via `--kind` / `--by`; exits 1 when nothing
+    matched), `--embeddings` on `index`/`recall`/`remember` (the opt-in semantic tier from the
+    command line), and `--no-log` on `recall`/`get` (the demand-signal opt-out, closing slice 9's
+    known item 2).
+  - 7 integration tests that spawn the real server binary and speak JSON-RPC over stdio
+    (105 total); `tsc` clean; all three bench gates unchanged (no `src/` change this slice).
 - **Slice 9 — `get(id)` body access + tagged fetch logging.** `ctx.get(id)` fetches one stored item's full record by id — the read counterpart to `recall` (recall returns ranked *pointers*; `get` returns the *thing itself*), and the prerequisite for MCP (a recall tool returning fact ids with no way to read their text is useless — PRD §15). **Any id works:** a written-memory id returns the text **verbatim as remembered** — backed by the new `mem_text` table, because the FTS body is a processed *searchable surface* (`indexBody` folds path tokens + camel parts) and a written row has no file behind it to re-read; an indexed file's repo-relative path returns the file **read fresh from disk** (the index is not a file cache; `text: null` only when the file vanished since the last `index()`). Returns `{ id, kind, format, source, provenance, occurredAt, text }`, `null` for unknown ids; sync (no embedder involved). **Fetch logging is a tagged weak signal, never demand** (the demoted fetch-toll, PRD §14 #4): `recall_log` gained an `action` column (`'recall'` | `'fetch'`); each `get` logs `action: 'fetch'`, and the demand readers (`recallCount`, `reviewCandidates`) now filter to `action = 'recall'` — you fetch what recall just returned, so counting fetches as demand would double-count every retrieval. Nothing scores the tag yet; it earns weight (if any) at the action-signal bench. `get(id, { log: false })` opts out, same contract as `recall`. `remember` upserts the raw text alongside the row; `forget` drops it (no orphans). **Schema self-heal extended** (additive, data preserved): a pre-slice-9 db gains the `action` column via `ALTER` (pre-existing rows were all real recalls, so the `'recall'` default is the true value), and a pre-slice-9 written row with no `mem_text` degrades to its stored FTS body — never `null`, never dropped. CLI: `litectx get <id>` (metadata → stderr, body → stdout, so it pipes clean). All gates byte-identical (aurora 0.552 / gitdone 0.425 / memory 1.000·0.722·0.000-pinned / impact 0+0); 98 tests (+10 here, +1 with the fix below), `tsc` clean.
 
 ### Fixed

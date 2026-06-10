@@ -386,8 +386,9 @@ retrievals, and only if the bench admits it — an item earns its place, it is n
 
 **Open items behind this picture** (full text in §14): build order = ~~chunk-granular recall~~
 (✅ slice 8 — hits carry `chunk` pointers, the log records the symbol) → ~~`get(id)`~~ (✅ slice 9 —
-body access + tagged fetch logging) → MCP/CLI → access-log tier; activation calibration is all
-"run the bench" and that bench doesn't exist yet (the biggest IOU).
+body access + tagged fetch logging) → ~~MCP/CLI~~ (✅ slice 10 — `litectx-mcp` second bin + CLI
+write parity) → access-log tier; activation calibration is all "run the bench" and that bench
+doesn't exist yet (the biggest IOU).
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
@@ -903,6 +904,31 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Next + post-v1 tiers:**
+- **Slice 10 — MCP surface + CLI write parity — ✅ SHIPPED (2026-06-10).** The consumption
+  surfaces (§14 #5), with one **decision amendment recorded there**: `litectx-mcp` ships as a
+  **second bin in this package**, not a separate package — the POC removed the premise behind the
+  separate-package call (an SDK dep that turned out unnecessary). **POC-first, evidence in hand:**
+  a 101-line hand-rolled stdio server (newline-delimited JSON-RPC 2.0; no
+  `@modelcontextprotocol/sdk`, **zero new deps**) was validated against a *real* client (headless
+  Claude Code via `--mcp-config`) before the build; the shipped bin (190 lines incl. tool
+  schemas; the protocol loop itself ~50) re-verified the same way (full
+  remember→recall→get-verbatim→forget loop, and again from a packed tarball installed in a clean
+  project — both bins ship and run as installed commands). Architecture: the lib is the core and
+  both surfaces are **thin adapters over the public API** — they import `litectx` exactly as an
+  external consumer would; nothing in `src/` knows they exist, and `import { LiteCtx }` loads
+  zero surface code. The six MCP tools are the six public operations
+  (index/recall/impact/get/remember/forget), each exposing the **core options only** — advanced
+  lib options (pathspec-scoped index, kind arrays, `format`/`occurredAt` on remember) stay
+  lib-only by design (a surface writes an episode as *now*; backdating is ingestion, the lib's
+  job); tool failures are in-band `isError` results (agents
+  read and self-correct), protocol errors only for malformed JSON-RPC; stdout protocol-pure;
+  responses legally out-of-order (matched by id — a sync `get` beats an in-flight `recall`).
+  **Audit-log defaults hold over MCP with no opt-out exposed:** an MCP client is a live agent —
+  exactly the demand the log captures; dashboards/batch belong on the lib/CLI. CLI gains the
+  write path: `remember` (args or piped stdin), `forget` (id or bulk `--kind`/`--by`, exit 1 on
+  no-match), `--embeddings` (index/recall/remember), `--no-log` (recall/get — closes slice 9's
+  known item 2). 7 integration tests spawn the real server binary and speak JSON-RPC over stdio
+  (105 total); `tsc` clean; all three bench gates pass unchanged (no `src/` change this slice).
 - **Slice 9 — `get(id)` body access + tagged fetch logging — ✅ SHIPPED (2026-06-10).** The read
   counterpart to recall (pointers → the thing itself) and the MCP prerequisite (§15: a recall tool
   returning fact ids with no way to read their text is useless). **Any id:** a written-memory id
@@ -1218,14 +1244,22 @@ package** (§7).
    The governing rules stand: score *actions*, never *appearances*; and **activation re-ranks, it
    never gates** — a zero-match item is invisible regardless of activation (stemming fixes the
    gate; activation fixes the rank).
-5. **Consumption surfaces & graph-view packaging** — **RESOLVED.** The core is the **library**
-   (mechanism). A **thin CLI ships in-repo** (`bin/`) from v1 — it serves humans, cron, and
-   shell-out agents at near-zero cost, and matches house style. **MCP and the `codegraph`/
-   `contextgraph` views are separate downstream consumers**, not core: they wrap the same public
-   API and would otherwise break "lite / one prod dep / no service" (scope discipline — mechanism
-   in the lib, policy in the adopter). MCP **stdio** is a client-spawned subprocess, not a daemon,
-   so it stays compatible with the "no service tier" rule — it just lives in its own package
-   (`litectx-mcp` or a bare-suite member) when a consumer needs it.
+5. **Consumption surfaces & graph-view packaging** — **RESOLVED; MCP placement AMENDED
+   (2026-06-10, slice 10, w/ user).** The core is the **library** (mechanism). A **thin CLI ships
+   in-repo** (`bin/`) from v1 — it serves humans, cron, and shell-out agents at near-zero cost,
+   and matches house style. ~~MCP … lives in its own package (`litectx-mcp` or a bare-suite
+   member)~~ → **MCP ships as a second bin in this package** (`bin/litectx-mcp.js`, standard
+   multi-bin `package.json`). The original separate-package rationale was that an MCP server
+   "would break lite / one prod dep / no service" — the slice-10 POC removed that premise: a
+   hand-rolled stdio server (newline-delimited JSON-RPC, 101-line POC, validated against a real
+   client) needs **no SDK and zero new deps**, and stdio client-spawned is not a service. What
+   *survives* of the original call is the coupling rule, now structural rather than packaged:
+   both surfaces are thin adapters that import the public API like any external consumer;
+   nothing in `src/` knows them; importing the lib loads no surface code. (Zero-dep is a push
+   toward simplicity, not a hardline — if MCP spec drift ever makes the hand-rolled loop a
+   maintenance burden, swapping the SDK in is contained inside the one adapter file.) The
+   `codegraph`/`contextgraph` **views** remain separate downstream consumers, not core. MCP
+   **stdio** stays a client-spawned subprocess, not a daemon — the "no service tier" rule holds.
 6. **`fact`/`episode` kinds** — ~~what writes them, and do they share the code decay map or need
    their own?~~ **RESOLVED → slice 7 (§3.2).** Written via `remember(id, text, { kind })` — the
    *consumer* writes them; litectx ships **no** extraction LLM (mechanism, not policy). They do
@@ -1236,7 +1270,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access shipped (slices 0–9) — MCP/CLI → access-log tier next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces shipped (slices 0–10) — access-log tier next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1258,15 +1292,17 @@ structural (written rows never enter `file_index`, which is the sole source of `
 byte-identical, `tsc` clean. litectx is now a write-capable *memory across kinds*, not just a code/doc
 index.
 
-**Next action — sequenced (9 shipped 2026-06-10; body access live, gates byte-identical):**
+**Next action — sequenced (10 shipped 2026-06-10; both consumption surfaces live):**
 1. ~~Slice 7b — written-memory stemming~~ **✅ SHIPPED** (§5.1, §11.2).
 2. ~~Slice 8 — chunk-granular recall (`hit.chunk`) + `log: false`~~ **✅ SHIPPED** (§11.2; the
    recall_log now carries the chunk symbol — the grain the edit-bind joins on).
 3. ~~Slice 9 — `get(id)` / body access~~ **✅ SHIPPED** (§11.2; written memory verbatim via
    `mem_text`, files fresh from disk; fetch logging landed as the *tagged weak signal* —
    `action:'fetch'`, excluded from demand reads — §14 #4's demoted fetch-toll, not a foundation).
-4. **MCP/CLI parity** (§14 #5) — a separate `litectx-mcp` (stdio, client-spawned, not a daemon)
-   + CLI `remember`/`--embeddings`, exposing `index`/`recall`/`impact`/`remember`/`forget`/`get`.
+4. ~~MCP/CLI parity~~ **✅ SHIPPED** (§11.2, §14 #5 AMENDED — `litectx-mcp` is a **second bin
+   in this package** (the POC removed the separate-package premise: hand-rolled stdio server,
+   zero new deps), client-spawned, not a daemon; six tools = the six public operations; CLI
+   gains `remember`/`forget`/`--embeddings`/`--no-log`).
 5. **Access-log tier** (§4, §14 #4 SETTLED block) — score base-level activation on action-grade
    signals: the **edit-bind** for code (harvest-at-recall over the log window; file hash = trigger,
    chunk diff = attribution) and **corrective re-`remember`** for facts; episodes-first (recency).

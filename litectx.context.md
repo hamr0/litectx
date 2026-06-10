@@ -7,12 +7,12 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–9: incremental
+> document describes the contract **as actually shipped** (slices 0–10: incremental
 > indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
 > grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, the
 > opt-in **embeddings** tier, the **write path** — `remember`/`forget` for
-> facts/episodes/direct docs — chunk-granular recall, and `get(id)` body
-> access). Where the eventual surface (ACT-R base-level activation
+> facts/episodes/direct docs — chunk-granular recall, `get(id)` body
+> access, and the two consumption surfaces: the **CLI** and the stdio **MCP server**). Where the eventual surface (ACT-R base-level activation
 > weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
 > **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
 > today and is covered by tests and the multi-repo benchmark.
@@ -72,6 +72,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
+| **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all six operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | Base-level **activation** (recency/frequency decay, trust-weighted ranking) | 🚧 roadmap (access-log tier — scored on the recall log slice 7 now records) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
@@ -348,6 +349,55 @@ Closes the SQLite connection. Call it when done (especially for file-backed DBs)
 > `ctx.store` is reachable but is **not a stability promise** pre-1.0 — the
 > `nodes` schema is the substrate for in-progress slices and may change. Treat
 > `index` / `recall` / `size` / `close` as the stable surface.
+
+## Consumption surfaces — CLI & MCP (slice 10)
+
+The library is the core; two **thin adapters** ship in the same package, both wrapping the
+public API above exactly as an external consumer would (nothing in the library knows they
+exist — importing `litectx` as a lib loads zero surface code). Use whichever fits the caller;
+mixing them over one `.litectx/index.db` is fine.
+
+### `litectx` (CLI)
+
+```
+litectx index [root] [--force] [--embeddings]
+litectx recall <query...> [--kind code|doc|fact|episode] [-n <n>] [--embeddings] [--no-log]
+litectx get <id> [--no-log]                    # metadata → stderr, body → stdout (pipes clean)
+litectx impact <symbol>
+litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--embeddings]
+litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
+```
+All commands take `--root <dir>` (default: cwd). `remember` reads its body from the arguments
+or, when absent, from piped stdin (`git log -1 --format=%s | litectx remember ep:release
+--kind episode`). Exit 1: unknown id (`get`), nothing matched (`forget`), unknown symbol
+(`impact`). `--no-log` is the demand-signal opt-out (see Gotchas) — use it for dashboards,
+CI, and batch scripts.
+
+### `litectx-mcp` (MCP server)
+
+A hand-rolled **stdio** MCP server — newline-delimited JSON-RPC 2.0, spawned and owned by the
+MCP client, **not a daemon** (exits when the client hangs up; the no-service rule holds). Zero
+dependencies beyond litectx itself. Client config:
+
+```json
+{ "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
+```
+
+`--embeddings` opts the spawned instance into the semantic tier. The six tools are the six
+public operations: `index`, `recall`, `impact`, `get`, `remember`, `forget` — recall returns
+scored *pointers*, `get` fetches a body, same contract as the lib. Tool failures come back
+in-band (`isError` results an agent can read and self-correct); protocol errors are reserved
+for malformed JSON-RPC. **No `log: false` is exposed over MCP** — an MCP client is a live
+agent, which is precisely the demand the audit log exists to capture; non-demand consumers
+belong on the lib or the CLI's `--no-log`.
+
+**The surfaces expose the core options, not every lib option — deliberately.** Lib-only
+(use `import { LiteCtx }` if you need them): pathspec-scoped indexing (`index({ paths })`),
+multi-kind recall arrays (`kind: ["code", "doc"]`), `remember`'s `format` override and
+`occurredAt` backdating (a surface writes an episode as happening *now* — backdating is an
+ingestion concern), and the embeddings fusion knobs (`embedWeight`, `embedModel`,
+`embedder`). Both surfaces stay thin adapters; anything beyond their flags/arguments is the
+library's job, not a surface re-export.
 
 ## The `nodes` substrate (slice 2)
 

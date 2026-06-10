@@ -2,23 +2,29 @@
 // Thin CLI over the library — the in-repo consumption surface (PRD §14 #5).
 // `index` builds (incrementally re-indexes) the index; `recall` queries it.
 //
-//   litectx index [root] [--force]
-//   litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>]
-//   litectx get <id> [--root <dir>]
+//   litectx index [root] [--force] [--embeddings]
+//   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--embeddings] [--no-log]
+//   litectx get <id> [--root <dir>] [--no-log]
 //   litectx impact <symbol> [--root <dir>]
+//   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--embeddings]
+//   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
 
+import { readFileSync } from "node:fs";
 import { LiteCtx, KINDS } from "../src/index.js";
 
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, kind: string|undefined, force: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, kind: undefined, force: false, words: [] };
+  /** @type {{root: string, n: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
     else if (rest[i] === "--kind") opts.kind = rest[++i];
+    else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
+    else if (rest[i] === "--embeddings") opts.embeddings = true;
+    else if (rest[i] === "--no-log") opts.log = false;
     else opts.words.push(rest[i]);
   }
   return { cmd, opts };
@@ -29,7 +35,7 @@ async function main() {
 
   if (cmd === "index") {
     const root = opts.words[0] ?? opts.root;
-    const ctx = new LiteCtx({ root });
+    const ctx = new LiteCtx({ root, embeddings: opts.embeddings });
     const t = Date.now();
     const r = await ctx.index({ force: opts.force });
     ctx.close();
@@ -42,16 +48,16 @@ async function main() {
   if (cmd === "recall") {
     const query = opts.words.join(" ");
     if (!query) fail("recall needs a query");
-    const ctx = new LiteCtx({ root: opts.root });
+    const ctx = new LiteCtx({ root: opts.root, embeddings: opts.embeddings });
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
     /** @param {import("../src/store.js").Hit} h */
     const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtChunk(h.chunk)}${fmtGit(h.git)}`);
     if (opts.kind) {
       // one kind → flat ranked list
-      (await ctx.recall(query, { kind: opts.kind, n: opts.n })).forEach(line);
+      (await ctx.recall(query, { kind: opts.kind, n: opts.n, log: opts.log })).forEach(line);
     } else {
       // no kind → grouped over all kinds (top-n each), so prose never buries code
-      const grouped = await ctx.recall(query, { n: opts.n });
+      const grouped = await ctx.recall(query, { n: opts.n, log: opts.log });
       for (const k of KINDS) {
         if (!grouped[k]?.length) continue;
         console.log(`# ${k}`);
@@ -66,7 +72,7 @@ async function main() {
     const id = opts.words[0];
     if (!id) fail("get needs an id (a written-memory id or an indexed file path)");
     const ctx = new LiteCtx({ root: opts.root });
-    const item = ctx.get(id);
+    const item = ctx.get(id, { log: opts.log });
     ctx.close();
     if (!item) {
       console.error(`litectx: '${id}' is not in the index`);
@@ -79,6 +85,34 @@ async function main() {
       process.exit(1);
     }
     process.stdout.write(item.text.endsWith("\n") ? item.text : `${item.text}\n`);
+    return;
+  }
+
+  if (cmd === "remember") {
+    const id = opts.words[0];
+    if (!id) fail("remember needs an id (namespace it, e.g. fact:auth-uses-jwt)");
+    // body = the remaining args, or stdin when piped (`git log -1 | litectx remember ep:release`)
+    let text = opts.words.slice(1).join(" ");
+    if (!text) {
+      if (process.stdin.isTTY) fail("remember needs text (as arguments or piped on stdin)");
+      text = readFileSync(0, "utf8").trim();
+      if (!text) fail("remember: stdin was empty");
+    }
+    const ctx = new LiteCtx({ root: opts.root, embeddings: opts.embeddings });
+    await ctx.remember(id, text, { kind: opts.kind, by: opts.by });
+    ctx.close();
+    console.error(`remembered ${opts.kind ?? "fact"} '${id}' (${text.length} chars, by ${opts.by ?? "agent"})`);
+    return;
+  }
+
+  if (cmd === "forget") {
+    const id = opts.words[0];
+    if (!id && !opts.kind && !opts.by) fail("forget needs an id, or --kind/--by for bulk invalidation");
+    const ctx = new LiteCtx({ root: opts.root });
+    const removed = id ? ctx.forget(id) : ctx.forget({ kind: opts.kind, by: opts.by });
+    ctx.close();
+    console.error(`forgot ${removed} item${removed === 1 ? "" : "s"}`);
+    if (removed === 0) process.exit(1); // nothing matched — same contract as `get` on an unknown id
     return;
   }
 
@@ -139,7 +173,7 @@ function relAge(sec) {
 function fail(msg) {
   console.error(`litectx: ${msg}`);
   console.error(
-    "usage: litectx index [root] | litectx recall <query...> [--root <dir>] [--kind <code|doc>] [-n <n>] | litectx get <id> [--root <dir>] | litectx impact <symbol> [--root <dir>]"
+    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
   );
   process.exit(1);
 }

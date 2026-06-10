@@ -12,7 +12,8 @@
     }
   },
   "bin": {
-    "litectx": "./bin/litectx.js"
+    "litectx": "./bin/litectx.js",
+    "litectx-mcp": "./bin/litectx-mcp.js"
   },
   "files": [
     "src/",

@@ -19,7 +19,7 @@
 ---
 
 > [!NOTE]
-> **Status: v0.1.0 published; write path + chunk-granular recall + `get(id)` body access landed on main** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the surface is **implemented, tested (98 integration tests), and CI-gated**: **recall** (every hit carries a `chunk` pointer — the matching function/section inside the file), **impact**, and **`get(id)`** (the body behind any pointer — written memory verbatim, files fresh from disk) over one shared graph (TS / JS / Python + Markdown), plus the **write path** (`remember`/`forget` for facts, episodes, and runtime docs — unreleased, next is 0.2.0). The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
+> **Status: v0.1.0 published; write path + chunk-granular recall + `get(id)` body access + the MCP/CLI surfaces landed on main** (`npm i litectx`). The POC gate has cleared — graph-aware recall beats plain FTS5/BM25 (PRD §11, `poc/RESULTS.md`) — and the surface is **implemented, tested (105 integration tests), and CI-gated**: **recall** (every hit carries a `chunk` pointer — the matching function/section inside the file), **impact**, and **`get(id)`** (the body behind any pointer — written memory verbatim, files fresh from disk) over one shared graph (TS / JS / Python + Markdown), plus the **write path** (`remember`/`forget` for facts, episodes, and runtime docs) and **two consumption surfaces** — a CLI and a zero-dependency stdio **MCP server** (`litectx-mcp`), both thin adapters over the same public API (all unreleased, next is 0.2.0). The deterministic **BM25 + spreading** core is on by default; an **opt-in embeddings tier** (slice 6) adds semantic ranking when you want it. Still roadmap (🚧): the access-log **base-level activation** tier and ergonomic graph accessors. Pre-1.0 — the surface is stable enough to use, but the API may still evolve (e.g. `recall()` is now async).
 
 ## What this is
 
@@ -91,6 +91,20 @@ ctx.forget("fact:auth-uses-jwt");   // by key — or forget({ by: "agent" }) in 
 ```
 
 **Opt-in semantic tier:** `new LiteCtx({ root, embeddings: true })` fuses embedding cosine into recall (the dual≈85% → tri≈95% step). Off by default — it needs the optional peer dep (`npm i @xenova/transformers`) and loads a small local model on first use; the deterministic BM25 + spreading core never touches it.
+
+**No integration code at all — two surfaces ship in the box**, both thin adapters over the same public API (use the lib, the CLI, the MCP server, or all three against one index):
+
+```sh
+litectx index && litectx recall "auth token validation" --kind code
+echo "Auth is JWT, verified in middleware." | litectx remember fact:auth-uses-jwt
+litectx get fact:auth-uses-jwt        # body → stdout, pipes clean
+```
+
+```jsonc
+// MCP (Claude Code, Cursor, …): stdio, spawned by the client, not a daemon. Zero extra deps.
+{ "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
+// → tools: index · recall · impact · get · remember · forget
+```
 
 The graph substrate is public API; today you query it through the exported `Store` (`symbolDefs`, `nodesForPath`, `allSymbolNames`). Ergonomic accessors (`getNode` / `related`) are 🚧 roadmap.
 
