@@ -503,8 +503,12 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   `code` are **not** stemmed: in code, word-forms are distinct symbols (`token`/`tokens`/
   `tokenize`), and stemming measurably hurt code ranking — so an FAQ written via `remember`
   still needs exact words (or key terms repeated in its `id`, which is indexed). Pure
-  paraphrase ("money back" → "refunds") matches nothing lexically for any kind — that is the
-  embeddings tier's job.
+  paraphrase ("money back" → "refunds") matches nothing lexically for any kind — **and the
+  embeddings tier does not bypass this**: the semantic pool is BM25-gated (cosine *re-ranks*
+  candidates that share at least one term/stem with the query; it never *admits* new ones), so a
+  zero-shared-term paraphrase misses even with embeddings on (E2E-verified against the real
+  model). The tier's value is lifting a true answer ranked *deep* in the lexical pool, not
+  retrieving what the lexical gate never saw. Write facts in the words you'll query.
 - **`forget` only forgets written memory.** It cannot remove an indexed file (delete the
   file + re-`index()` for that), and `remember` cannot overwrite an indexed file's row —
   the two populations share the store but are write-isolated by design.

@@ -400,7 +400,13 @@ doesn't exist yet (the biggest IOU).
   doctrine). The paraphrase hole in the default config is an **accepted, documented gotcha**:
   write facts in the words you'll query (the id is indexed too — "deploy-oidc" hits a "deploy"
   query); stemming covers word-forms. The memory bench's labeled para queries measure the
-  embeddings lift for free whenever the tier is on.
+  embeddings lift for free whenever the tier is on. **Grounded (slice-10 release E2E, real
+  model):** the hole is *narrower but deeper* than "embeddings fix it" — the semantic pool is
+  BM25-gated (`_rankKind`: cosine re-ranks the FTS-matched pool, it never admits to it), so a
+  **zero-shared-term** paraphrase misses even with the tier ON; the tier lifts deep-pool answers
+  (the POC-validated claim), it does not retrieve what the lexical gate never saw. True
+  gate-bypassing semantic recall would be a separate candidate source (vector KNN union) — not
+  built, not promised.
 - **`log: false` on `recall()` — approved.** The recall log is a **demand signal**; anything that
   isn't real demand must not write to it. Agent/human queries log (default `true`); dashboards,
   CI checks, batch tooling, and read-only-db consumers pass `{ log: false }`. One boolean, nothing
