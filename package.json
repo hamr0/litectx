@@ -1,7 +1,7 @@
 {
   "name": "litectx",
-  "version": "0.1.0",
-  "description": "Lite, local-first code+context graph for recall and impact analysis. SQLite + FTS5 + ACT-R activation, ripgrep + tree-sitter edges, embeddings opt-in. Placeholder — under active design (PRD/POC stage).",
+  "version": "0.2.0",
+  "description": "Lite, local-first memory across kinds for AI agents: a code+context graph with ranked recall and impact (blast-radius) views, plus a write path for facts/episodes. SQLite + FTS5, tree-sitter + ripgrep edges, embeddings opt-in. CLI and stdio MCP server included.",
   "type": "module",
   "main": "./src/index.js",
   "types": "./types/index.d.ts",

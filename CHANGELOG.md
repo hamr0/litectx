@@ -6,6 +6,19 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-10
+
+The write release. litectx graduates from a read-only code/doc index to a **write-capable memory
+across kinds with its consumption surfaces in the box**: the `remember`/`forget` write path
+(facts, episodes, direct docs — provenance, audit log, HITL `reviewCandidates`), porter-stemmed
+written-memory recall, **chunk-granular recall** (every hit carries the matching
+function/section pointer), **`get(id)` body access** (written memory verbatim, files fresh from
+disk), the opt-in **embeddings tier**, and two thin adapters over the same public API — the
+**CLI** (now write-capable) and a zero-dependency stdio **MCP server** (`litectx-mcp`). Also
+fixes a 0.1.0-era `index({ force: true })` bug that destroyed written memory (unreachable in
+published 0.1.0, which shipped the read surface only). No new production dependencies —
+the MCP server is hand-rolled stdio JSON-RPC. Pre-1.0: the API may still evolve.
+
 ### Added
 - **Slice 10 — MCP surface + CLI write parity.** litectx now ships **two thin adapters over the
   same public API** — the consumption surfaces that make the memory usable without writing a line
