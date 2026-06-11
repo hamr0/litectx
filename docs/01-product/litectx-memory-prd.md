@@ -1456,7 +1456,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE + **v0.4.0 cut** (access-log tier as a release) with an optional Claude Code integration (`integrations/claude/`: LSP-free pre-edit `impact()` hook + SessionStart index-warmer; generic MCP server documented for any client)
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1592,3 +1592,38 @@ codegraph / codegraph-rust). None is due before the access-log tier; full ground
 - **No-LSP citation (§7) — ✅ done in this edit.** arXiv:2603.27277's own eval (graph agent 0.83
   vs plain grep+read 0.92 answer quality) is the standing answer to "why no LSP / no precise
   graph" — cite it, don't re-argue.
+
+**Build-vs-bloat verdict on the four trigger-gated remainders (2026-06-11, claims validated
+against `src/` at HEAD `7aa77d2`).** None clears the "build now" bar — that is the point of the
+trigger gates, and none of their triggers has fired. Ranked, with the evidence each call rests on:
+
+- **Persist call edges — ⊘ BLOAT to build now (clearest "don't").** Validated: `impact()` is
+  on-demand and persists nothing (`src/impact.js:3` "Computed ON DEMAND (§7.1), never persisted";
+  `src/index.js:318` calls `computeImpact` live; no `calls`/edge-row table in `src/store.js`). The
+  trigger is *measured* `impact()` latency pain, and there is none. Building persistence buys
+  nothing today and *adds* a staleness-invalidation burden to a structure that is currently free
+  and always-correct. Revisit only with a profiler trace in hand. Stays gated.
+- **Edge-confidence field — ◐ real signal, never its own slice.** Validated: no `confidence` field
+  exists (`src/store.js`), and `impact()` ships a risk *bucket* deliberately tolerant of
+  over-counting — so confidence has no consumer today. Genuinely useful metadata, near-free to fold
+  in *when a slice already opens the schema*; not worth opening the schema *for*. Keep as a rider.
+- **`jina-embeddings-v2-base-code` swap — ◐ cheap eval, likely mis-aimed; not a build.** Validated:
+  the embeddings tier's KNN *nomination* serves `fact`/`episode` only — prose memory — while
+  `code`/`doc` stay strictly gate-then-rerank (`src/index.js` `_rankKind` doc + `src/embedder.js:10`
+  `all-MiniLM-L6-v2`). A code-specialized embedder is tuned for the one path the tier deliberately
+  doesn't lean on it for; the measured win (para 0.000→0.574) is on prose, where a code model is
+  unlikely to help and may regress, while adding model weight. Worth a one-shot `bench:memory
+  --embeddings` eval if curious; expected value low. Low priority.
+- **Ergonomic graph accessors — ▲ the only real latent product value; build when a consumer
+  shapes it.** Validated: the substrate exists and is public (`Store` exported, `KINDS`, the
+  `edges`/`nodes` tables) but there are no traversal/view accessors on `LiteCtx` (exports are
+  recall/impact/get/remember/forget/reviewCandidates/promotionCandidates/recentActivity/size). This
+  is the one item that adds a *capability* rather than optimizing or annotating one, and it is
+  doctrine-core (graph is substrate; codegraph/contextgraph are views, not re-extractions). But
+  built blind, with no real consumer driving the query shape, the accessor surface calcifies wrong.
+  Build it when a real adopter (the bare suite) presents a concrete query pattern — that same
+  adoption is also what would generate the `impact()`-latency number the first item waits on.
+
+**Net:** don't dev any of the four cold. Three (calls-CTE, confidence, jina) should arrive as
+riders on other work or a cheap eval, never as dedicated slices; the fourth (graph accessors) waits
+on a consumer. The highest-leverage next move is adoption, not more speculative substrate.

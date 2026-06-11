@@ -80,6 +80,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
 | **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
 | Trust/stability as a recall *tie-breaker* (use/churn/provenance → search order) | ⊘ dropped (POC-falsified — no-ops on exact ties, pollutes on any band, and buries fresh/better matches; trust ships as columns, ranking stays pure relevance — slice 5c) |
+| **Claude Code integration** (optional, `integrations/claude/`) — LSP-free pre-edit `impact()` hook + SessionStart index-warmer; generic MCP server documented for any client | ✅ shipped (v0.4.0; opt-in, nothing in the library depends on it) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
 > importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for

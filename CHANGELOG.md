@@ -4,9 +4,25 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-06-11
+
+The access-log tier release. `recentActivity()`, `promotionCandidates()`, and trust columns ship as
+a version, and an **optional Claude Code integration** lands in-repo (`integrations/claude/`): an
+LSP-free pre-edit `impact()` hook and a SessionStart index-warmer, with the generic stdio MCP server
+documented for any client. Library ranking is byte-identical to v0.3.0 — these are read views and
+tooling, not new scoring.
 
 ### Added
+- **Claude Code integration (optional, `integrations/claude/`).** Opt-in, Claude-Code-specific hooks
+  plus a note on the generic MCP server. `pre-edit-impact.mjs` is a `PreToolUse:Edit` hook that, for
+  the enclosing symbol of an edit, surfaces litectx `impact()` — callers, reference count, low/med/high
+  risk bucket — as `additionalContext`: the LSP-free replacement for a language-server pre-edit check.
+  It resolves the enclosing symbol by indentation/block scope (a one-line local can't shadow the real
+  function; a method isn't lost to its class), is best-effort, and **never blocks the edit**.
+  `warm-index.sh` is a `SessionStart` hook that incrementally re-indexes the current repo so recall
+  stays fresh (silent, non-fatal). The `README.md` documents registering the **generic** stdio MCP
+  server (`bin/litectx-mcp.js`, any MCP client) globally so it auto-scopes to the working repo.
+  Nothing in the library depends on any of this; it ships in `files` so adopters can wire it up.
 - **Slice 5c — trust columns on written-memory recall hits (access-log tier, view #2).** Fact/episode
   hits now carry `provenance` (`human`/`agent`), `use` (`'recall'` demand count, fetches excluded), and
   `occurredAt` (episode timestamp) — the written-memory analog of the `git` grounding field:
