@@ -374,7 +374,9 @@ Day 2   recall("token refresh")
 Day 3   recall("session expiry")
         └─ harvest: refresh.js mtime moved → re-hash → re-parse → diff chunks
                     → only the refresh function changed → edit event for THAT chunk
-                    (access-log tier: that chunk now carries heat, decaying over weeks)
+                    (access-log tier: heat is CAPTURED, decaying over weeks — but it does NOT
+                     re-rank code recall: that use was falsified as topic-blind, §14 #4 2026-06-11;
+                     the captured signal feeds next-use prediction, not recall ranking)
 
 Day 30  "deploy-oidc" has been recalled 6 times → shows up in reviewCandidates(5)
         → human re-remembers it by:"human" → durable trust. (Or forget() → gone.)
@@ -954,6 +956,19 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Next + post-v1 tiers:**
+- **Slice 5a (access-log tier) — `recentActivity()`: "what was I working on" — ✅ SHIPPED
+  (2026-06-11).** The first access-log-tier slice, and the legitimate home of the witnessed-edit
+  signal the bench POCs validated for *next-use* (AUC 0.79–0.97) but falsified for *recall re-ranking*
+  (repo-dependent, ships at zero — §14 #4). A new isolated read over a new `chunk_edits` table
+  (incremental `index()` diffs new chunk bodies vs the stored `nodes`; cold/`force` records nothing):
+  returns the recently-witnessed-edited chunks, newest first, windowed (`days=7` default), one row per
+  chunk with `edits` = distinct sessions that touched it. **Cannot regress search** — it never reads
+  the ranking path and writes nothing to the recall log. Scoped to the **code+md chunk-edit spine**
+  (episodes deferred to 5b, where they're explicitly written, not derived). All three surfaces
+  (`recentActivity()` / `litectx recent` / MCP `recent`). Eyeballed on three real repos
+  (`poc/recent-activity-eyeball.mjs`); 9 tests (121 total); `tsc` clean; recall/impact gates
+  untouched. One contract refinement the eyeball forced: `edits` counts distinct index passes, not
+  chunk rows, so a file's anonymous (null-symbol) chunks collapse to one honest per-file count.
 - **Slice 11 — KNN union: written-kind paraphrase recall — ✅ SHIPPED (2026-06-11,
   user-ordered ahead of the access-log tier).** Closes the hole the 0.2.0 release E2E grounded
   (§14 above): with the embeddings tier on, cosine **nominates** for `fact`/`episode` instead of
@@ -1033,7 +1048,8 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
   **the winner may not strictly contain another scoring chunk** (ties: named > anonymous > smaller
   span; anonymous winners labeled by nearest named container). `null` for written memory (the row
   IS the unit) and filename-only matches (honest). `recall_log` gains the hit's chunk `symbol` →
-  recalled-and-edited now join at the **same grain** when the access-log tier's edit-bind lands.
+  recalled-and-edited now join at the **same grain** when the access-log tier's edit-bind capture
+  lands — for next-use prediction / the action-signal bench, **not** code-recall re-ranking (§14 #4).
   `recall(q, { log: false })` ships the demand-signal opt-out (dashboards/CI/read-only opens must
   not pollute the log). CLI prints the pointer (`→ symbol:start-end`). Bonus hardening from
   validation: the Store **self-heals pre-release schemas on open** (≤0.1.0 docs table → rebuild,
@@ -1088,9 +1104,13 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
   `recall()` became **async** as a consequence (uniform with index/impact). 9 hermetic tests (stub
   embedder); recall/impact gates byte-identical (embeddings off ⇒ core untouched).
 - **Access log + base-level activation** (§4, §14 #4) — litectx's long-running-memory
-  differentiator. Once real accesses accumulate in the reserved `activations` table, BLA +
-  decay+churn become a *validated* scored signal (on real usage, not git proxy). Git activity
-  metadata (slice 4) is the v1 grounding that stands in for it.
+  differentiator. **Re-scoped by the 2026-06-11 POC (§14 #4 POC-VALIDATED block):** BLA scored into
+  **code recall** is falsified — it is **topic-blind** and repo-dependent (both flat and
+  query-conditioned forms fail the every-corpus rule), so **edit→recall re-ranking ships at zero**.
+  What the differentiator actually is, then: (a) the **non-topic-blind written-memory action signals**
+  (corrective re-`remember`, episode→fact-distil HITL), and (b) optionally a **next-use surface** that
+  exposes the (robust) edit-*prediction* signal as its own answer — never as a recall prior. Git
+  activity metadata (slice 4) remains the displayed grounding; it was never a scored term.
 
 **Impact-view timing:** sequenced *after* recall because it depends on accurate edges
 (slice 4). If edges slip, recall ships as v1 and impact lands v1.1 — the graph substrate
@@ -1116,6 +1136,7 @@ view-appropriate metric.** Same machine, different labels:
 | **impact (TS false-isolation)** | committed `poc/fixtures/ts-barrel` (#1) | symbol reached *only* via renamed barrel + path alias → `isolated:false` | **ISOLATION-accuracy** `(refCount===0)===isolated` + caller-recall | ✅ shipped 5b (`npm run bench:impact impact-ts`) — default-rename red→green, decoy excluded |
 | **write (memory)** | `:memory:` + tmp keys | `remember(id,…)` for `fact`/`episode`/direct-`doc` → `recall` | **round-trip recall** — written item surfaces for its query *and* survives a re-`index()` (not swept as a vanished file) | ✅ shipped (`test/memory.test.js`) — integration, not an MRR bench: the metric is round-trip *survival* (boolean), not ranking quality |
 | **written-memory recall quality** | committed corpus **in the dataset** (24 facts + 5 episodes, `memory-facts.mjs` — no local checkout; pure-memory mode, no `index()`) | `{ q → target id }`, every query labeled **exact / morph / para** + a mechanical **label audit** (exact must share ≥1 keyword with the target's indexed text; morph/para must share 0 — mislabels fail the run) | **per-category MRR**: `exact` floored ≥0.8 (shipped 1.000); `morph` floored ≥0.7 (graduated with 7b: 0.000→**0.722**; its pre-7b `expected` pin tripped on the move exactly as designed); `para` **pinned at 0.000** (the embeddings-tier case — moves fail until consciously updated) | ✅ shipped (`npm run bench:memory`) — exact **1.000** / morph **0.722** / para **0.000**; mutation-checked (mislabel → audit fails; floor above 1.0 → fails; stale `expected` → fails) |
+| **action-signal (access-log tier)** | aurora (Py) + gitdone (JS) + litectx self-set; **git-replay** = the temporal oracle | `{ q → target chunk }` (committed recall labels) + per-file real **edit history** | **relevance-lift** — does edit-activation, folded into recall, raise the known-correct chunk vs the BM25+spreading baseline, **holding the recall floor on every corpus** (pollution = MRR falls; the §7.2-style asymmetry — repo-dependent lift must not ship) | 🔬 POC done (`poc/edit-bind-poc.mjs` next-edit AUC 0.79–0.97, full BLA > half-formula; `poc/access-bench.mjs` relevance-lift) — **flat global weight is repo-dependent → ships at zero**; a query-conditioned/bounded form must pass this gate before it earns weight |
 | compress/select/isolate/… | tbd | tbd | tbd | post-v1 |
 
 > **Status (shipped):** `poc/impact-bench.mjs` + audited label sets (`impact-aurora` Py,
@@ -1313,6 +1334,88 @@ package** (§7).
    The governing rules stand: score *actions*, never *appearances*; and **activation re-ranks, it
    never gates** — a zero-match item is invisible regardless of activation (stemming fixes the
    gate; activation fixes the rank).
+   - **POC-VALIDATED + REFINED (2026-06-11; `poc/edit-bind-poc.mjs`, `poc/access-bench.mjs`).**
+     **The one-line distinction:** the *same* activation score is trustworthy for one job —
+     **predicting what gets used/edited next** — and untrustworthy for a *different* job — **judging
+     whether a search hit is relevant to the query.** BLA correctly measures "how hot/recently-used is
+     this," which is the right answer to "what was I just working on" and the *wrong* answer to "what
+     matches these query words." The math and the prediction result are sound; only the recall-reranking
+     use of them fails. Two persistent findings follow. **(a) The edit-bind signal is real for its own
+     claim** (the prediction job). Replaying real
+     commit history as the edit stream, base-level activation predicts the *next* edit far above
+     chance on aurora/gitdone/litectx (AUC 0.79–0.97), and the **full ACT-R BLA** (`ln(Σ age^−d)`)
+     beats the recency-only **half-formula** that produced the original §4.1 falsification — so decay
+     earns its keep, and "real past use predicts future use" holds (non-circular: edit stream and
+     target both from git, no relevance label). **(b) But folding that activation into recall as a
+     flat global re-rank weight is repo-dependent** — it lifts aurora, is ~neutral on gitdone, and
+     pollutes litectx (a relevant-but-stable chunk is buried under freshly-edited unrelated files).
+     This **reproduces the §4.1 git-seeding falsification on real edits**: base-level activation is
+     **topic-blind** (it floats the same hot chunks for *every* query), so whether it helps depends on
+     whether a repo's hot files happen to be its relevant ones — and **a repo-dependent prior is the
+     one thing recall must not ship.** A **query-conditioned** form (activation amplifying *only*
+     already-relevant hits, `recall + w·norm(recall)·norm(bla)`) was tested too — it **reduces but
+     does not remove** the pollution (still net-negative on gitdone/litectx while lifting aurora),
+     because "hot == relevant" is itself the repo-dependent premise. **Settled consequence:** the
+     edit→recall re-ranking term **ships at zero — both the flat and the conditioned forms fail the
+     every-corpus rule** (`poc/access-bench.mjs` is the standing gate; reopen only if a fundamentally
+     different conditioning passes on all three). The edit signal's value is **next-use prediction**
+     (an action-grade base-level term — robust and universal) and the **non-topic-blind fact/episode
+     action signals** below, **not** topic-blind recall re-ranking of code.
+   - **The access-log tier — SETTLED design (2026-06-11, discussion w/ user). The governing line:**
+     **use can make a memory more *trusted / stable* (a property of the item); it must NEVER make it
+     rank higher across the board (a global search boost).** The first is safe and valuable; the
+     second is the rich-get-richer / topic-blind trap the POC above falsified. All four parts below
+     stay on the safe side of that line.
+
+     **(1) Search ranking is untouched.** BM25 + stemming (+ the slice-11 KNN union for facts) stays
+     exactly as shipped. **No activation term enters recall ranking** — not for code (falsified
+     above), and not for facts/episodes (recall-count-as-rank is the same topic-blind trap). The only
+     ranking touch *use* is ever allowed is a **bounded tie-breaker between two already-relevant
+     results** (prefer the human-validated / stable one when relevance is ~equal) — never a global
+     lift. Episode results may **recency-sort within the `episode` kind only** (recency is intrinsic
+     to a dated event, and kind-scoping means it cannot bleed into code/fact ranking).
+
+     **(2) Trust / stability layer (a property, not a rank).** "More use + less edit + human
+     validation = more stable/trusted." Captured as a confidence property on the item, **displayed
+     and usable as the (1) tie-breaker, never as a global booster.** Code **volatility** is computed
+     **per chunk** (a function edited constantly = volatile = trusted less — aurora's churn idea, now
+     on real edit history); facts/episodes have no chunks, so their stability is whole-row (often
+     recalled, never corrected, human-validated = solid). **Recall count drives review / promotion,
+     not rank** — it is the honest indicator (if a memory matched and entered context, that is the
+     event that matters; whether the agent *then leaned on it* is the harness's concern, caught by
+     other primitives — litectx does not try to detect "use").
+
+     **(3) "What was I working on" — a separate, isolated view.** A first-class query distinct from
+     recall: over **recent episodes + recent chunk-edits**, across all code/md. Because it is its own
+     question it may use recency/edits **freely with zero pollution risk** (it never touches search
+     ranking). This is the legitimate home of the (robust) next-use/edit-prediction signal — exposed
+     as its own answer, never as a recall prior.
+
+     **(4) Episode life-cycle — the agent's scratchpad that graduates upward.** Episodes = the agent's
+     own observations/realizations (insights a human may have missed). They promote by **use**, which
+     changes **kind and trust, never rank**. litectx **flags, never summarizes** (no extraction LLM
+     ships — mechanism, not policy): it provides the trigger + surface; the consumer's agent writes any
+     summary and calls `remember()`. The ladder, two stages both consumer-acted:
+     - **`promotionCandidates(threshold = 10)`** (NEW, mirrors `reviewCandidates`): agent-`episode`s
+       recalled **> 10** → flagged "consider distilling into a fact." The agent reads them, writes a
+       distilled `fact` (`by: agent`) via `remember()`.
+     - that agent-fact then rides the **existing `reviewCandidates(5)`** path: recalled **> 5** more →
+       a human validates the agent's conclusion → `by: human`, durable (or `forget`s it).
+     - **Ephemerality:** an episode older than **30 days soft-decays** — drops out of the active set
+       (no longer counts toward promotion, drops from the "what was I working on" view); hard-GC at a
+       longer cap so a late promotion is still possible while the store stays lean. Per-episode (whole
+       row, no chunks), time-based.
+
+     **Chunk-edit detection (capability kept, ranking use dropped):** litectx **can** tell which
+     *chunk* changed, not just the file — it stores each chunk's text in `nodes` and diffs old-vs-new
+     per chunk on re-index (slice 8 already records the chunk symbol on each recall, so recall and edit
+     align at the same grain). That capability feeds **(2) volatility** and **(3) the activity view** —
+     **not** recall ranking. For facts/episodes there are no chunks: an "edit" is a **corrective
+     re-`remember`** (the whole row overwritten — an explicit API action, trivially observed).
+
+     **Through-line:** lean on action-derived or already-built mechanisms (`reviewCandidates` is the
+     template); refuse new hand-tuned ranking weights; *use* feeds trust/promotion/a-separate-view,
+     **never** a global recall boost.
 5. **Consumption surfaces & graph-view packaging** — **RESOLVED; MCP placement AMENDED
    (2026-06-10, slice 10, w/ user).** The core is the **library** (mechanism). A **thin CLI ships
    in-repo** (`bin/`) from v1 — it serves humans, cron, and shell-out agents at near-zero cost,
@@ -1334,12 +1437,15 @@ package** (§7).
    *consumer* writes them; litectx ships **no** extraction LLM (mechanism, not policy). They do
    **not** share code's decay: `fact` = very slow (durable), `episode` = fast (recency) — two rates
    in the kind-keyed map, no schema change. They carry no edges (no spreading); v1 ranks them by
-   BM25(+embeddings), and their full ACT-R behavior (slow decay + reinforcement-on-retrieval) is the
-   access-log tier (#4), whose need slice 7 makes concrete.
+   BM25(+embeddings). **Their access-log behavior is the §14 #4 SETTLED design, NOT
+   reinforcement-on-retrieval** (recall-count-as-rank is the falsified topic-blind trap): recall-count
+   feeds **review/promotion** (the episode→fact→durable ladder), *use + low-edit + validation* is a
+   **trust/stability property** (a tie-breaker among already-relevant, never a global lift), and the
+   corrective re-`remember` is the only fact "edit" signal — see §14 #4 (4).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union shipped (slices 0–11, v0.3.0 published) — access-log tier next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) shipped — 5b/5c next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1375,15 +1481,40 @@ index.
 4b. ~~KNN union~~ **✅ SHIPPED** (slice 11, user-ordered in ahead of the tier below — §11.2;
    written-kind paraphrase recall via cosine nomination; para 0.000 → 0.574, exact/morph held,
    `--embeddings` bench pass now gated when it runs).
-5. **Access-log tier** (§4, §14 #4 SETTLED block) — score base-level activation on action-grade
-   signals: the **edit-bind** for code (harvest-at-recall over the log window; file hash = trigger,
-   chunk diff = attribution) and **corrective re-`remember`** for facts; episodes-first (recency).
-   Trust-weighting (human > agent) is durable provenance, separate from decaying activation.
-   Requires building the **action-signal bench** — every signal type earns weight there or ships at
-   zero. Activation re-ranks, never gates. This is litectx's long-running-memory differentiator.
-   (Cold-start is NOT a problem this tier solves — day-one recall is BM25 + spreading and is what
-   the benches already gate; git-seeding was falsified, §14 #1, re-affirmed 2026-06-10: a
-   topic-blind prior lifts the same hot files for every query.)
+5. **Access-log tier — SETTLED design (§14 #4 "the access-log tier" block, 2026-06-11).** The bench
+   POC (AUC 0.79–0.97 next-use, but recall re-ranking repo-dependent on both flat and conditioned
+   forms — `poc/access-bench.mjs`) **falsified activation-into-recall**, so the tier is re-scoped to
+   four parts, all on the safe side of "use → trust/stability/a-separate-view, never a global rank
+   boost": **(1)** search ranking **untouched** (BM25 + stemming + KNN); **(2)** a **trust/stability**
+   property (use + low chunk-edit + human validation; recall-count → review/promotion, at most a
+   tie-breaker among already-relevant, never a global lift); **(3)** a separate **"what was I working
+   on"** view over recent episodes + chunk-edits (the legitimate home of the next-use signal — its own
+   answer, never a recall prior); **(4)** the **episode life-cycle** — `promotionCandidates(10)` (NEW,
+   mirrors `reviewCandidates`) flags hot agent-episodes → the consumer's agent distils a `fact` →
+   existing `reviewCandidates(5)` → human validates → durable; episodes soft-decay at 30 days, GC
+   later. litectx **flags, never summarizes** (no extraction LLM). Build order below (#1 first —
+   highest value, zero pollution risk, an isolated new surface).
+   - **5a — "what was I working on" view — ✅ SHIPPED (2026-06-11).** `recentActivity({ days=7,
+     since?, limit=20 })` — the chunks litectx **witnessed** edited, newest first, within a recency
+     window; one row per chunk `{ id (path), symbol, kind, lastEditedAt, edits }` where `edits` =
+     distinct index passes that changed it (anonymous chunks collapse per-file). The edit stream is
+     built at index time: each incremental `index()` diffs new chunk bodies vs the stored `nodes`
+     into a new `chunk_edits` table — a **cold/`force` build records nothing** (loading isn't
+     editing). **Isolated by construction:** reads `chunk_edits`, never the ranking path, and writes
+     nothing to the recall log (not a demand signal) — so it cannot regress search. Scoped to the
+     spine (**code+md chunk-edits**); episodes deferred to 5b where they're explicitly written/
+     promoted, not derived. On all three surfaces (`recentActivity()` · `litectx recent` · MCP
+     `recent`). Eyeballed on aurora/gitdone/litectx (`poc/recent-activity-eyeball.mjs` — clean
+     tree-sitter symbol-grain, fixing the git-funcContext bluntness the build POC surfaced); 9 tests
+     (store-level windowing/order/grouping + end-to-end cold/edit/new-chunk/force/isolation/window),
+     121 total; `tsc` clean; all prior gates untouched (no recall-path change).
+   - **5b — episode promotion ladder.** `promotionCandidates(threshold)` + the 30-day decay/GC; reuses
+     the `reviewCandidates` template and the existing kind/provenance model. Needs a hand-scripted
+     fact/episode action-signal scenario bench (no git oracle for "a fact was corrected").
+   - **5c — trust/stability property.** Per-chunk volatility (churn on real edit history) + the
+     validated/used tie-breaker among already-relevant results; bench-gated so it never becomes a
+     global prior. (Cold-start is NOT what this tier solves — day-one recall is BM25 + spreading,
+     already gated; git-seeding falsified, §14 #1.)
 
 **Competitor borrows (2026-06-11 survey of the "code-graph MCP" wave — codebase-memory-mcp /
 codegraph / codegraph-rust). None is due before the access-log tier; full grounding in §7, §7.2,

@@ -4,6 +4,27 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Slice 5a — `recentActivity()`: the "what was I working on" view (access-log tier).** A new
+  isolated read returning the code/doc chunks litectx most recently *witnessed* edited, newest
+  first, within a recency window (`days` default 7, or an explicit `since`; `limit` default 20).
+  Each row is a chunk — `{ id (file path), symbol, kind, lastEditedAt, edits }` — where `edits`
+  counts the distinct index passes (sessions) that changed it; a file's anonymous chunks collapse
+  to one per-file row. The edit stream is built **at index time**: each incremental `index()` diffs
+  every new chunk body against the stored `nodes` and logs the new/modified ones to a new
+  `chunk_edits` table. A **cold first build or `force` rebuild records nothing** (mass-loading isn't
+  editing), so the view reflects only what litectx watched. Exposed on all three surfaces:
+  `ctx.recentActivity(opts)`, `litectx recent [--since <days>] [-n <n>]`, and the MCP `recent` tool.
+- **The witnessed-edit signal ships here, and *only* here.** Folding edit-activation into recall as
+  a re-rank weight was **POC-falsified as repo-dependent** (`poc/access-bench.mjs`: lifts aurora,
+  pollutes litectx — base-level activation is topic-blind, floating the same hot chunks for every
+  query), so the edit→recall re-rank ships at zero. `recentActivity` reads the `chunk_edits` log and
+  never the ranking path, and writes nothing to the recall audit log (it is not a demand signal).
+  Validated end-to-end on three real repos (`poc/recent-activity-eyeball.mjs`): clean tree-sitter
+  symbol-grain rows, distinct from git's coarse hunk-context.
+
 ## [0.3.0] — 2026-06-11
 
 The paraphrase release. A single, focused recall improvement on the opt-in **embeddings tier**:

@@ -5,6 +5,7 @@
 //   litectx index [root] [--force] [--embeddings]
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--embeddings] [--no-log]
 //   litectx get <id> [--root <dir>] [--no-log]
+//   litectx recent [--root <dir>] [--since <days>] [-n <n>]
 //   litectx impact <symbol> [--root <dir>]
 //   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--embeddings]
 //   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
@@ -15,11 +16,12 @@ import { LiteCtx, KINDS } from "../src/index.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
+    else if (rest[i] === "--since") opts.since = Number(rest[++i]);
     else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
@@ -116,6 +118,19 @@ async function main() {
     return;
   }
 
+  if (cmd === "recent") {
+    const ctx = new LiteCtx({ root: opts.root });
+    const rows = ctx.recentActivity({ days: opts.since, limit: opts.n });
+    ctx.close();
+    if (!rows.length) {
+      console.error("litectx: no recent activity — chunk-edits are recorded on incremental `index` passes (not the first/forced build), within the window");
+      return;
+    }
+    // age \t edits \t kind \t path \t › symbol  — recency-ordered "what was I working on"
+    for (const r of rows) console.log(`${relAge(r.lastEditedAt / 1000)}\t${r.edits}×\t${r.kind}\t${r.id}${r.symbol ? `\t› ${r.symbol}` : ""}`);
+    return;
+  }
+
   if (cmd === "impact") {
     const symbol = opts.words[0];
     if (!symbol) fail("impact needs a symbol name");
@@ -173,7 +188,7 @@ function relAge(sec) {
 function fail(msg) {
   console.error(`litectx: ${msg}`);
   console.error(
-    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
+    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
   );
   process.exit(1);
 }

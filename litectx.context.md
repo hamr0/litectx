@@ -73,9 +73,11 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
-| **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all six operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
+| **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
-| Base-level **activation** (recency/frequency decay, trust-weighted ranking) | 🚧 roadmap (access-log tier — scored on the recall log slice 7 now records) |
+| **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
+| Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
+| Episode promotion ladder · per-chunk trust/stability tie-breaker | 🚧 roadmap (access-log tier 5b/5c) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
 > importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for
@@ -335,6 +337,26 @@ whose recall-hit count has crossed `threshold`, most-recalled first. The intende
 frequently-recalled facts do not rank higher (that would be a feedback loop; ranking
 weight is the 🚧 access-log tier, validated separately).
 
+### `ctx.recentActivity(opts?)` → `{ id, symbol, kind, lastEditedAt, edits }[]`
+**"What was I working on"** — the code/doc chunks litectx most recently *witnessed* being
+edited, newest first, within a recency window. `opts`: `days` (lookback, default 7),
+`since` (epoch-ms window floor, overrides `days`), `limit` (default 20). Each row is a chunk:
+`id` is its file path (feed it to `get`), `symbol` localizes within the file (`null` for a
+file's anonymous chunks, which collapse to a single per-file row), `lastEditedAt` is the most
+recent observed edit (epoch ms), and `edits` is how many index passes (sessions) changed it
+in the window.
+
+The edit stream is built **at index time**: each incremental `index()` diffs every new chunk
+body against the stored `nodes` and logs the new/modified ones. A **cold first build or
+`force` rebuild records nothing** (mass-loading isn't editing), so this stays empty until real
+edits are observed — it reflects what litectx watched, not history before it was watching.
+
+This is a **deliberately isolated read**: it never touches recall ranking. The witnessed-edit
+signal's home is here (next-use / "where was I"), *not* in search scores — folding edit
+activation into recall was POC-falsified as repo-dependent (it floats the same hot chunks for
+every query), so the edit→recall re-rank ships at zero. `recentActivity` also writes nothing
+to the recall audit log — it is not a demand signal.
+
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).
 
@@ -369,6 +391,7 @@ mixing them over one `.litectx/index.db` is fine.
 litectx index [root] [--force] [--embeddings]
 litectx recall <query...> [--kind code|doc|fact|episode] [-n <n>] [--embeddings] [--no-log]
 litectx get <id> [--no-log]                    # metadata → stderr, body → stdout (pipes clean)
+litectx recent [--since <days>] [-n <n>]       # "what was I working on" — recent chunk-edits
 litectx impact <symbol>
 litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
@@ -389,9 +412,10 @@ dependencies beyond litectx itself. Client config:
 { "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
 ```
 
-`--embeddings` opts the spawned instance into the semantic tier. The six tools are the six
-public operations: `index`, `recall`, `impact`, `get`, `remember`, `forget` — recall returns
-scored *pointers*, `get` fetches a body, same contract as the lib. Tool failures come back
+`--embeddings` opts the spawned instance into the semantic tier. The tools are the public
+operations: `index`, `recall`, `impact`, `get`, `recent`, `remember`, `forget` — recall returns
+scored *pointers*, `get` fetches a body, `recent` lists witnessed chunk-edits, same contract as
+the lib. Tool failures come back
 in-band (`isError` results an agent can read and self-correct); protocol errors are reserved
 for malformed JSON-RPC. **No `log: false` is exposed over MCP** — an MCP client is a live
 agent, which is precisely the demand the audit log exists to capture; non-demand consumers

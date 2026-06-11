@@ -1,7 +1,7 @@
 // Slice 10 integration tests — the MCP surface (bin/litectx-mcp.js). Behavior, not implementation:
 // a REAL server process spawned per test, spoken to over stdio in newline-delimited JSON-RPC,
 // exactly as an MCP client would. The load-bearing invariants: the handshake is spec-shaped; the
-// six tools are the six public operations (parity); tool failures are `isError` results, never
+// tools are the public operations (parity); tool failures are `isError` results, never
 // protocol errors; responses are matched by id (they may legally return out of order); and the
 // audit-log defaults hold over MCP — an MCP client is live agent demand, so recall logs demand
 // and get logs a tagged fetch, with no opt-out exposed on this surface.
@@ -88,7 +88,7 @@ function toolText(res, label = "") {
   return res.result.content[0].text;
 }
 
-test("handshake is spec-shaped and tools/list exposes the six public operations", async (t) => {
+test("handshake is spec-shaped and tools/list exposes the public operations", async (t) => {
   const root = fixtureRepo();
   const c = client(root, t);
   const init = await c.init();
@@ -98,7 +98,7 @@ test("handshake is spec-shaped and tools/list exposes the six public operations"
   const list = await c.request("tools/list");
   assert.deepEqual(
     list.result.tools.map((/** @type {{name: string}} */ t) => t.name).sort(),
-    ["forget", "get", "impact", "index", "recall", "remember"],
+    ["forget", "get", "impact", "index", "recall", "recent", "remember"],
     "MCP surface = library surface, nothing more"
   );
   for (const t of list.result.tools) assert.ok(t.description && t.inputSchema, `${t.name} is self-describing`);

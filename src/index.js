@@ -185,7 +185,10 @@ export class LiteCtx {
       for (const u of upserts) u.embedding = await this.embedder.embed(u.body);
     }
 
-    this.store.applyChanges({ upserts, touch, deletes }, Date.now());
+    // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
+    // first build or a `force` rebuild mass-inserts every chunk, which is loading, not editing. `prev`
+    // is empty in both those cases (force clears it above), so its size is the cold-build test.
+    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0);
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
     return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged };
@@ -390,6 +393,29 @@ export class LiteCtx {
    */
   reviewCandidates(threshold = 5) {
     return this.store.reviewCandidates(threshold);
+  }
+
+  /**
+   * "What was I working on" (§14 #4 view #3, slice 5a): the code/doc chunks litectx witnessed edited
+   * most recently — newest first — inside a recency window. Each `index()` pass that sees a chunk's
+   * body change (added or modified vs the stored node) logs an edit; a cold first/`force` build logs
+   * nothing (loading isn't editing), so this stays empty until real edits are observed.
+   *
+   * An **isolated** read by design: it reads the witnessed edit log and never the ranking path, so it
+   * cannot regress recall — the edit→recall re-rank ships at zero (falsified repo-dependent, §14 #4).
+   * The edit signal's home is here (next-use / "where was I"), not in search scores.
+   *
+   * @param {{ days?: number, since?: number, limit?: number }} [opts]
+   *   `since` (epoch ms) sets the window floor explicitly; otherwise `days` back from now (default 7).
+   *   `limit` caps rows (default 20).
+   * @returns {{ id: string, symbol: string|null, kind: string, lastEditedAt: number, edits: number }[]}
+   *   `id` is the chunk's file path (feed it to `get`); `symbol` localizes within the file (null for a
+   *   file's anonymous chunks, collapsed to one row); `edits` is how many index passes (sessions)
+   *   changed it in the window; sorted by `lastEditedAt` desc.
+   */
+  recentActivity(opts = {}) {
+    const since = opts.since ?? Date.now() - (opts.days ?? 7) * 86_400_000;
+    return this.store.recentActivity({ since, limit: opts.limit ?? 20 });
   }
 
   /** @returns {number} total stored items — indexed documents + written memory */

@@ -33,7 +33,7 @@ const flagValue = (flag) => {
 const root = flagValue("--root") ?? process.cwd();
 const ctx = new LiteCtx({ root, embeddings: process.argv.includes("--embeddings") });
 
-// The six public operations, verbatim — the MCP surface IS the library surface (parity).
+// The public operations, verbatim — the MCP surface IS the library surface (parity).
 const TOOLS = [
   {
     name: "index",
@@ -66,6 +66,18 @@ const TOOLS = [
       type: "object",
       properties: { id: { type: "string", description: "written-memory id or indexed file path" } },
       required: ["id"],
+    },
+  },
+  {
+    name: "recent",
+    description:
+      "\"What was I working on\" — the code/doc chunks litectx most recently saw edited (newest first), within a recency window. Isolated from recall: it reads the witnessed edit log, never search ranking. Returns {id, symbol, kind, lastEditedAt, edits}; `id` is a path you can `get`. Empty until edits are observed on an incremental index pass (the first/forced build records nothing).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        days: { type: "number", description: "lookback window in days (default 7)" },
+        limit: { type: "number", description: "max rows (default 20)" },
+      },
     },
   },
   {
@@ -122,6 +134,7 @@ async function callTool(name, a) {
     if (item.text == null) throw new Error(`'${a.id}' is indexed but missing from disk (stale until the next index)`);
     return JSON.stringify(item, null, 1);
   }
+  if (name === "recent") return JSON.stringify(ctx.recentActivity({ days: a.days, limit: a.limit }), null, 1);
   if (name === "impact") {
     const r = await ctx.impact(a.symbol);
     if (!r) throw new Error(`'${a.symbol}' is not defined in the index — run the index tool, or check the name`);

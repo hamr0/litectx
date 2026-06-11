@@ -110,6 +110,15 @@ const SCHEMA = [
   // a kind routes to exactly one table and BM25 scores never merge across the two. Direct-written
   // `doc` rows stay in `docs` (one kind = one ranking domain).
   "CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body, tokenize='porter unicode61')",
+  // chunk-level edit history (slice 5a, §14 #4 view #3): one row each time index() OBSERVES a chunk's
+  // body change — added or modified vs the previously-stored `nodes.body`. This is litectx's own
+  // witnessed edit stream (the edit-bind POC validated next-use prediction off it, AUC 0.75–0.98).
+  // It powers recentActivity() — "what was I working on" — and NOTHING else: the edit→recall re-rank
+  // ships at zero (falsified repo-dependent, §14 #4 view #1), so this never touches search ranking.
+  // A cold build records nothing (a first/`force` index is not editing). Append-only, many rows per
+  // chunk; read recency-windowed. `symbol` nullable (same chunk identity as `nodes`).
+  "CREATE TABLE IF NOT EXISTS chunk_edits(id INTEGER PRIMARY KEY, path TEXT NOT NULL, symbol TEXT, kind TEXT NOT NULL, ts INTEGER NOT NULL)",
+  "CREATE INDEX IF NOT EXISTS chunk_edits_ts ON chunk_edits(ts)",
 ];
 
 /** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
@@ -199,8 +208,10 @@ export class Store {
    * ones, and refresh mtimes for files whose content was unchanged.
    * @param {Changes} changes
    * @param {number} indexedAt  epoch millis to stamp on touched rows
+   * @param {boolean} [recordEdits=false]  log per-chunk body changes to `chunk_edits` (slice 5a). Off
+   *   for a cold/`force` build (mass insert isn't editing); on for incremental passes — see index().
    */
-  applyChanges({ upserts, touch, deletes }, indexedAt) {
+  applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false) {
     const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ?");
     const delIdx = this.db.prepare("DELETE FROM file_index WHERE path = ?");
     // indexed files are always source='file' with no provenance/occurred_at (those are write-path
@@ -219,6 +230,12 @@ export class Store {
       "INSERT INTO nodes(path, kind, format, symbol, node_type, start_line, end_line, body) " +
         "VALUES (@path, @kind, @format, @symbol, @node_type, @start_line, @end_line, @body)"
     );
+    // slice 5a: a chunk is "edited" when its (symbol, body) is not among the file's prior nodes —
+    // covers both a modified body and a newly-added chunk. `prevNodes` is read BEFORE delNodes drops
+    // them (below). `chunkKey` collapses null symbols to "" so identity matches the stored row.
+    const prevNodes = this.db.prepare("SELECT symbol, body FROM nodes WHERE path = ?");
+    const insEdit = this.db.prepare("INSERT INTO chunk_edits(path, symbol, kind, ts) VALUES (@path, @symbol, @kind, @ts)");
+    const chunkKey = (/** @type {string|null} */ symbol, /** @type {string} */ body) => `${symbol ?? ""} ${body}`;
     // import edges are owned by their source file: refreshed when the importer is re-indexed,
     // and on delete dropped from BOTH ends so no edge dangles to a removed file.
     const delEdgesOf = this.db.prepare("DELETE FROM edges WHERE src_path = ? OR dst_path = ?");
@@ -245,6 +262,13 @@ export class Store {
         delEmb.run(p);
       }
       for (const u of upserts) {
+        // slice 5a: snapshot prior chunk identities before they're dropped, so the node insert below
+        // can tell which chunks are new/modified this pass. Only when recording (incremental passes).
+        const prevKeys = recordEdits
+          ? new Set(
+              /** @type {{ symbol: string|null, body: string }[]} */ (prevNodes.all(u.path)).map((r) => chunkKey(r.symbol, r.body))
+            )
+          : null;
         delDoc.run(u.path); // replace any prior row for this path
         delNodes.run(u.path);
         delEdgesSrc.run(u.path); // this file's outgoing import edges are about to be re-derived
@@ -256,6 +280,10 @@ export class Store {
         upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
         for (const c of u.nodes ?? []) {
           insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text });
+          // slice 5a: a chunk whose (symbol, body) wasn't in the prior set is new or modified — record it.
+          if (prevKeys && !prevKeys.has(chunkKey(c.symbol, c.text))) {
+            insEdit.run({ path: u.path, symbol: c.symbol, kind: u.kind, ts: indexedAt });
+          }
         }
         for (const dst of u.edges ?? []) insEdge.run({ src: u.path, dst });
         // git activity grounding (gitsig.js). Store a row only when the file has commit history;
@@ -415,6 +443,29 @@ export class Store {
             "GROUP BY m.path HAVING hits >= ? ORDER BY hits DESC, m.path"
         )
         .all(threshold)
+    );
+  }
+
+  /**
+   * "What was I working on" (slice 5a, §14 #4 view #3): the chunks litectx witnessed edited most
+   * recently, newest first, within `[since, now]`. Grouped per chunk (path + symbol): `lastEditedAt`
+   * is the most recent edit, `edits` the number of distinct index passes (sessions) that changed it.
+   * `edits` counts DISTINCT timestamps, not rows: a file's anonymous chunks (null symbol) collapse to
+   * one per-file row, and counting passes — not chunks — keeps that row's count honest (one busy pass
+   * = 1, not "however many nameless chunks moved"). Pure recency order (`edits` only breaks ties) — NO
+   * activation, NO recall coupling: reads `chunk_edits`, never the ranking path (edit→recall re-rank
+   * ships at zero, §14 #4).
+   * @param {{ since: number, limit: number }} opts  `since` epoch ms (window floor); `limit` row cap
+   * @returns {{ id: string, symbol: string|null, kind: string, lastEditedAt: number, edits: number }[]}
+   */
+  recentActivity({ since, limit }) {
+    return /** @type {{ id: string, symbol: string|null, kind: string, lastEditedAt: number, edits: number }[]} */ (
+      this.db
+        .prepare(
+          "SELECT path AS id, symbol, kind, max(ts) AS lastEditedAt, count(DISTINCT ts) AS edits FROM chunk_edits " +
+            "WHERE ts >= ? GROUP BY path, symbol ORDER BY lastEditedAt DESC, edits DESC, path LIMIT ?"
+        )
+        .all(since, limit)
     );
   }
 
