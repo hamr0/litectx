@@ -4,7 +4,11 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-06-11
+
+The restorable-compression release. Adds `stash()` — a keyed agent-context store separate from the
+searchable memory core — plus security hardening and review-driven cleanups. No new dependencies; the
+deterministic BM25 core and every quality gate are unchanged.
 
 ### Added
 - **`stash(id, text)` — a keyed agent-context store (R-C4 restorable compression).** Park a large
