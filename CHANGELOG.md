@@ -4,9 +4,24 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] — 2026-06-11
+
+The semantic-by-default release. Embeddings now ship **ON by default on the CLI and MCP surfaces**
+(the ways agents actually use litectx), with graceful BM25 fallback when the model dep is absent.
+Validated by `poc/recall-litmus*` across litectx/aurora/gitdone: embeddings lift natural-language
+code recall ~+0.2 MRR and are near-essential for memory (paraphrase 0.000→0.574). The deterministic
+BM25 + spreading core is unchanged — every quality gate is byte-identical.
 
 ### Added
+- **Embeddings ON by default on the CLI and MCP** (`bin/litectx.js`, `bin/litectx-mcp.js`); pass
+  `--no-embeddings` for the BM25-only base. The **library `LiteCtx` default stays `false`** (explicit
+  opt-in for embedders), so lib consumers, tests, and the BM25 gates are unchanged. `@xenova/transformers`
+  moved `peerDependency` → `optionalDependency` so `npm i litectx` auto-installs it best-effort (that's
+  what makes default-on real) without failing the install if the native build can't.
+- **Graceful embeddings fallback.** If `@xenova/transformers` can't load (absent / build failure), litectx
+  disables the tier for that instance, warns once to stderr, and continues on BM25 — so neither a bare
+  install nor CI (which runs without the optional dep) ever crashes. Covers all three embed sites
+  (index, recall query, `remember`).
 - **CLI `help` / `--help` / `-h` and a bare `litectx`** now print usage to **stdout and exit 0**
   (previously the only way to see usage was to trigger an error, which printed to stderr and exited
   1). Bad invocations still print usage to stderr and exit 1.
@@ -14,6 +29,18 @@ All notable changes to this project are documented here, following
   (`score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age`, etc.); the legend explains
   them without touching the data rows, so `| awk`/`cut` pipelines stay clean. Documentation only — no
   table rendering or dependency (presentation for the agent surface stays at the agent, not the tool).
+
+### Changed (docs)
+- **Corrected the embeddings cost figures and reframed the default.** The "15–19s cold latency" in
+  CLAUDE.md / PRD §3.3 + §8 was aurora's **torch** cold-start, mis-borrowed — measured transformers.js/ONNX
+  is **~2.1s first-ever download · ~0.72s cached load · ~6ms warm**, and the model is **~23 MB** (not 90 MB).
+  Embeddings is now framed as **off-by-default only for a lean/offline base install, but strongly
+  recommended — and near-essential for the memory primitive** (paraphrase recall 0.000→0.574); the real
+  opt-in cost is the dependency + index-time embedding, not query latency. Validated by `poc/recall-litmus*`
+  on litectx/aurora/gitdone (embeddings +~0.2 MRR on natural-language code queries; free LLM query-expansion
+  recovers ~90–95% and erases misses). Added embedding-model candidates to the aurora borrow-ledger
+  (`jina-embeddings-v2-base-code` realistic; `nomic-embed-code` not adoptable for a JS lib — too large,
+  the competitor only ships it by compiling into a static binary).
 
 ## [0.4.0] — 2026-06-11
 

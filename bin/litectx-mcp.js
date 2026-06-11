@@ -7,7 +7,7 @@
 // which is below the external-dependency bar. POC-validated against a real client
 // (Claude Code via --mcp-config) before this was built.
 //
-//   litectx-mcp [--root <dir>] [--embeddings]
+//   litectx-mcp [--root <dir>] [--no-embeddings]   # embeddings (semantic recall) ON by default
 //
 // Client config (claude code, cursor, etc.):
 //   { "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
@@ -31,7 +31,7 @@ const flagValue = (flag) => {
   return i === -1 ? undefined : process.argv[i + 1];
 };
 const root = flagValue("--root") ?? process.cwd();
-const ctx = new LiteCtx({ root, embeddings: process.argv.includes("--embeddings") });
+const ctx = new LiteCtx({ root, embeddings: !process.argv.includes("--no-embeddings") });
 
 // The public operations, verbatim — the MCP surface IS the library surface (parity).
 const TOOLS = [

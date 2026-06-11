@@ -68,7 +68,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors | 🚧 roadmap |
-| **Embeddings** (semantic tier) | ✅ shipped (slice 6 — opt-in, off by default; `embeddings: true` + the optional peer dep) |
+| **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@xenova/transformers` is an *optional* dep (auto-installed; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
 | **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
@@ -426,13 +426,14 @@ mixing them over one `.litectx/index.db` is fine.
 ### `litectx` (CLI)
 
 ```
-litectx index [root] [--force] [--embeddings]
-litectx recall <query...> [--kind code|doc|fact|episode] [-n <n>] [--embeddings] [--no-log]
+# embeddings (semantic recall) are ON by default; pass --no-embeddings for the BM25-only base
+litectx index [root] [--force] [--no-embeddings]
+litectx recall <query...> [--kind code|doc|fact|episode] [-n <n>] [--no-embeddings] [--no-log]
 litectx get <id> [--no-log]                    # metadata → stderr, body → stdout (pipes clean)
 litectx recent [--since <days>] [-n <n>]       # "what was I working on" — recent chunk-edits
 litectx promotions [--threshold <n>]           # hot agent episodes to distil into facts (default 10)
 litectx impact <symbol>
-litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--embeddings]
+litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--no-embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
 litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare
 ```
@@ -457,7 +458,7 @@ dependencies beyond litectx itself. Client config:
 { "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
 ```
 
-`--embeddings` opts the spawned instance into the semantic tier. The tools are the public
+The spawned instance runs the **semantic tier ON by default**; pass `--no-embeddings` for BM25-only. The tools are the public
 operations: `index`, `recall`, `impact`, `get`, `recent`, `promotions`, `remember`, `forget` — recall
 returns scored *pointers*, `get` fetches a body, `recent` lists witnessed chunk-edits, `promotions`
 lists hot episodes to distil, same contract as the lib. Tool failures come back

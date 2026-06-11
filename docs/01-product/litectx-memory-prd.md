@@ -394,10 +394,12 @@ doesn't exist yet (the biggest IOU).
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
-  default, which is structurally blocked twice over: the embedder is an **optional peer dep**
+  default, which is blocked by the embedder being an **optional peer dep**
   (`@xenova/transformers` — defaults can't depend on it; requiring it doubles prod deps for a
-  corpus of dozens) and the model cold-loads in 15–19s (opt-in pays it knowingly; a default makes
-  every adopter's first recall hang). **Facts ride the single existing tier switch** — already the
+  corpus of dozens). *(The latency objection does NOT apply: the ONNX model load is ~0.7s cached /
+  ~2s first-download, warm ~6ms — not the 15–19s of aurora's torch stack, a mis-borrow corrected
+  2026-06-11. The real opt-in cost is the dependency + index-time embedding, not first-recall lag.)*
+  **Facts ride the single existing tier switch** — already the
   implemented behavior (`writeMemory` embeds when the tier is on). No second knob (one-config
   doctrine). The paraphrase hole in the default config is an **accepted, documented gotcha**:
   write facts in the words you'll query (the id is indexed too — "deploy-oidc" hits a "deploy"
@@ -760,7 +762,7 @@ schema-touching slice (§15 borrows block); never a blocker.
 | BM25 + ACT-R recall | **on** | — | the lite core; zero ML |
 | Block-level git signals | **on** | — | cheap, high-value |
 | tree-sitter + ripgrep edges | **on** | — | zero external binaries; sole edge resolver |
-| Embeddings (semantic) + MMR | **off** | `@xenova/transformers` (ONNX); vectors = float32 BLOB in the one file (§9 — `sqlite-vec` rejected, slice 6) | +10% quality but +ML dep and 15–19s cold latency |
+| Embeddings (semantic) + MMR | **off** | `@xenova/transformers` (ONNX); vectors = float32 BLOB in the one file (§9 — `sqlite-vec` rejected, slice 6) | +10% quality; cost is +ML dep + index-time embedding (model load ~0.7s cached / ~2s first-download / ~6ms warm — *not* aurora's 15–19s torch figure) |
 
 Embeddings are the **only** tier. There is no LSP tier (§7).
 
@@ -1458,7 +1460,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE + **v0.4.0 cut** (access-log tier as a release) with an optional Claude Code integration (`integrations/claude/`: LSP-free pre-edit `impact()` hook + SessionStart index-warmer; generic MCP server documented for any client)
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE + **v0.4.0 cut** (access-log tier as a release) with an optional Claude Code integration (`integrations/claude/`: LSP-free pre-edit `impact()` hook + SessionStart index-warmer; generic MCP server documented for any client) + **v0.5.0 cut** (semantic-by-default: embeddings ON by default on the CLI + MCP surfaces with `--no-embeddings` opt-out and graceful BM25 fallback; `@xenova` → optionalDependency; library `LiteCtx` default stays opt-in so all BM25 gates are byte-identical. Driven by `poc/recall-litmus*`: embeddings +~0.2 MRR on natural-language code recall across aurora/gitdone, near-essential for memory; LLM query-expansion recovers ~90–95% but is non-binding, so embeddings is the reliable floor)
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,

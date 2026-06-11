@@ -9,7 +9,11 @@
 set -e
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 LITECTX="$SCRIPT_DIR/../../bin/litectx.js"
+# --embeddings keeps vectors fresh for changed chunks so semantic recall doesn't silently degrade
+# (embeddings is a two-sided switch: vectors must be written at index time to be used at recall).
+# Drop the flag if you run the BM25-only base. First build of a repo embeds all chunks (seconds to
+# ~1 min for large repos); incremental passes only re-embed changed chunks.
 if [ -d .git ] && [ -f "$LITECTX" ] && command -v node >/dev/null 2>&1; then
-  timeout 60 node "$LITECTX" index >/dev/null 2>&1 || true
+  timeout 180 node "$LITECTX" index --embeddings >/dev/null 2>&1 || true
 fi
 exit 0

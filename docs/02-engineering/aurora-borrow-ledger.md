@@ -366,8 +366,33 @@ Aurora hit a real indexing-speed wall; the fixes are documented and worth borrow
 
 - Cold start **15–19s** (model download + torch import), warm 2–3s; aurora **lazy-loads** +
   **background-preloads** the model and **batches** encode at `batch_size=32`
+  - ⚠️ **litectx does NOT inherit this number.** That 15–19s is aurora's **torch** cold-start.
+    litectx's transformers.js/ONNX embedder measured **~2.1s first-ever download · ~0.72s cached
+    load · ~6ms warm** (2026-06-11). The "15–19s cold latency" had been mis-borrowed into
+    CLAUDE.md + PRD §8/§3.3 and is now corrected there — litectx's embeddings cost is the **dep +
+    index-time embedding**, not query latency.
   (`embedding_provider.py`). Carry all three **only in the embeddings tier** — never on the
   default path (this is precisely why embeddings are off by default).
+
+- **Embedding model — candidates (2026-06-11).** Current: `Xenova/all-MiniLM-L6-v2` —
+  general-purpose, **384-dim, ~23 MB** quantized ONNX, downloaded on first use. Serves litectx's
+  *integral memory* use (facts/episodes are prose) well, decent on code, light + offline-after-first.
+  Candidates if code recall becomes the priority:
+  - `jina-embeddings-v2-base-code` — **DEPRIORITIZED, not a planned upgrade.** It's the only
+    transformers.js-viable code model (768-dim, ~160 MB), but there's **no measured gap to close**:
+    the *general* MiniLM already delivered the code lift (+~0.2 MRR on aurora/gitdone), and litectx's
+    structural machinery (camelCase BM25 + import-spreading + chunk locators + the impact graph +
+    recall→impact disambiguation) does the "find the right code" work — embeddings is a supplementary
+    rerank, not the primary signal (unlike vector-first tools). A code model would also risk the
+    *prose-memory* half (the integral use). Revisit ONLY if the litmus ever shows MiniLM + the
+    structure leaving a measurable code gap. Bigger ≠ better; fit-to-workload wins.
+  - `nomic-embed-code` (DeusData/codebase-memory-mcp ships it int8, 768-dim, **compiled into a
+    static binary**) — **NOT directly adoptable**: the full model is ~7B params, far too heavy for an
+    in-process transformers.js library. It's a precedent (code-specific, bundled) that only works
+    *because* that tool is a compiled binary; a JS lib can't bundle it. Inspiration, not a swap.
+  - **Which one:** keep MiniLM as default (general model fits the prose-memory primary use + stays
+    light/offline). A code-specific model helps code recall but risks the memory half — so any swap is
+    a *per-workload* call, gated by the litmus, not a clear win. Bigger ≠ better here; fit-to-workload wins.
 
 ---
 

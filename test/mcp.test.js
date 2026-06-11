@@ -34,7 +34,9 @@ function fixtureRepo() {
  * @param {string} root @param {import("node:test").TestContext} t
  */
 function client(root, t) {
-  const proc = spawn(process.execPath, [SERVER, "--root", root], { stdio: ["pipe", "pipe", "pipe"] });
+  // --no-embeddings: these tests assert protocol + BM25 mechanics, not semantic quality, so keep
+  // them deterministic and independent of the optional model dep (embeddings are ON by default now).
+  const proc = spawn(process.execPath, [SERVER, "--root", root, "--no-embeddings"], { stdio: ["pipe", "pipe", "pipe"] });
   t.after(() => proc.kill()); // no-op when the test already closed it cleanly
   /** @type {Map<number, (msg: any) => void>} */
   const pending = new Map();

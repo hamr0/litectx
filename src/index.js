@@ -132,6 +132,27 @@ export class LiteCtx {
     return this._embedder;
   }
 
+  /**
+   * Embed text, degrading gracefully when the optional model dependency (`@xenova/transformers`)
+   * can't load: disable the tier for this instance, warn once to stderr, and return `null` so
+   * callers fall back to BM25. An injected embedder (tests) or a present dep never trips this.
+   * @param {string} text @returns {Promise<Float32Array|null>}
+   */
+  async _embedSafe(text) {
+    try {
+      return await this.embedder.embed(text);
+    } catch (e) {
+      if (this.embeddings) {
+        this.embeddings = false; // one-shot: subsequent calls skip the tier entirely
+        console.error(
+          `litectx: embeddings unavailable (${e instanceof Error ? e.message : e}) — falling back to BM25. ` +
+            "Run `npm i @xenova/transformers` to enable semantic recall."
+        );
+      }
+      return null;
+    }
+  }
+
   /** Embed a query with a small LRU cache (repeated queries skip the model). @param {string} q */
   async _embedQuery(q) {
     const hit = this._qcache.get(q);
@@ -140,7 +161,8 @@ export class LiteCtx {
       this._qcache.set(q, hit);
       return hit;
     }
-    const v = await this.embedder.embed(q);
+    const v = await this._embedSafe(q);
+    if (v === null) return null; // tier unavailable → BM25 path
     this._qcache.set(q, v);
     if (this._qcache.size > QUERY_CACHE_CAP) this._qcache.delete(this._qcache.keys().next().value);
     return v;
@@ -192,7 +214,11 @@ export class LiteCtx {
     // their stored vector). File-level, head-truncated text (POC-validated). The vector rides on the
     // upsert into `applyChanges`, written as a BLOB. Sequential by design (batching deferred).
     if (this.embeddings) {
-      for (const u of upserts) u.embedding = await this.embedder.embed(u.body);
+      for (const u of upserts) {
+        const v = await this._embedSafe(u.body);
+        if (v === null) break; // tier unavailable — index BM25-only from here
+        u.embedding = v;
+      }
     }
 
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
@@ -377,7 +403,7 @@ export class LiteCtx {
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
     const format = opts.format ?? (kind === "doc" ? "md" : "text");
     const occurredAt = kind === "episode" ? opts.occurredAt ?? Date.now() : null;
-    const embedding = this.embeddings ? await this.embedder.embed(text) : undefined;
+    const embedding = this.embeddings ? ((await this._embedSafe(text)) ?? undefined) : undefined;
     // slice 5b ephemerality: an episode write trims the scratchpad of PREVIOUSLY-accumulated episodes
     // past the rolling active window (anything that mattered was distilled into a durable fact, which
     // never prunes). Bounds the store with no cron; only episode writes grow the set, so that is where

@@ -2,13 +2,14 @@
 // Thin CLI over the library — the in-repo consumption surface (PRD §14 #5).
 // `index` builds (incrementally re-indexes) the index; `recall` queries it.
 //
-//   litectx index [root] [--force] [--embeddings]
-//   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--embeddings] [--no-log]
+//   Embeddings (semantic recall) are ON by default; pass --no-embeddings for the BM25-only base.
+//   litectx index [root] [--force] [--no-embeddings]
+//   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--no-embeddings] [--no-log]
 //   litectx get <id> [--root <dir>] [--no-log]
 //   litectx recent [--root <dir>] [--since <days>] [-n <n>]
 //   litectx promotions [--root <dir>] [--threshold <n>]   # episodes to consider distilling into facts
 //   litectx impact <symbol> [--root <dir>]
-//   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--embeddings]
+//   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--no-embeddings]
 //   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
 
 import { readFileSync } from "node:fs";
@@ -18,7 +19,7 @@ import { LiteCtx, KINDS } from "../src/index.js";
 function parse(argv) {
   const [cmd, ...rest] = argv;
   /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, force: false, embeddings: true, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
@@ -27,7 +28,8 @@ function parse(argv) {
     else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
-    else if (rest[i] === "--embeddings") opts.embeddings = true;
+    else if (rest[i] === "--embeddings") opts.embeddings = true; // default; kept for back-compat
+    else if (rest[i] === "--no-embeddings") opts.embeddings = false;
     else if (rest[i] === "--no-log") opts.log = false;
     else opts.words.push(rest[i]);
   }
@@ -220,7 +222,7 @@ function relAge(sec) {
 // invoked above this point in source order — a `const` here would be in its TDZ at that call.
 function usage() {
   return (
-    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)\n" +
+    "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by   (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
     "\noutput columns (tab-separated):\n" +
     "  recall  score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)   (memory hits also: provenance use:N)\n" +
     "  recent  age(m|h|d)  edits×  kind  path  › symbol"
