@@ -27,6 +27,12 @@ const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 const SEMANTIC_POOL = 400;
 const DEFAULT_EMBED_WEIGHT = 1.0;
 const QUERY_CACHE_CAP = 128; // LRU of query→vector so repeated queries skip re-embedding (aurora-borrowed)
+// KNN union (slice 11): written kinds (fact/episode) also get up to K semantic NOMINEES — stored
+// vectors nearest the query by cosine — unioned into the lexical pool, so a zero-shared-term
+// paraphrase can reach a fact at all (the gate alone returns nothing for it). K=8 swept on the
+// memory bench (poc/knn-union-poc.mjs): para 0.000→0.574, morph 0.722→0.889, exact holds 1.000;
+// an admission threshold only hurt (true-paraphrase cosines run low), so there is none.
+const KNN_K = 8;
 
 /** Min–max normalise to [0,1] so BM25-spread scores and cosine compose on one scale. @param {number[]} a */
 function minmax(a) {
@@ -249,7 +255,15 @@ export class LiteCtx {
   /**
    * Rank one kind. Dual path (BM25 + spreading) when `qvec` is null; tri-hybrid when it's the query
    * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)`, then sliced to
-   * `n`. The pool is the only place cosine runs (gated, ~hundreds), so it's O(pool), not O(corpus).
+   * `n`. Cosine runs on the pool plus at most {@link KNN_K} nominees, so it stays O(pool), never
+   * O(corpus) for files.
+   *
+   * **Written kinds (slice 11): cosine also NOMINATES, not just re-ranks.** For `fact`/`episode`,
+   * up to {@link KNN_K} stored vectors nearest the query are unioned into the pool before fusion —
+   * so a zero-shared-term paraphrase ("money back" → a refunds fact) is reachable at all. Nominees
+   * enter at the pool's score floor and compete on semantics alone; lexical hits keep their head
+   * start. `code`/`doc` stay strictly gate-then-rerank (their queries share identifiers with their
+   * answers, and their corpora are where a full scan would cost).
    * @param {string|null} match  FTS expression, or null when the query has no usable terms
    * @param {string} kind
    * @param {number} n
@@ -257,14 +271,17 @@ export class LiteCtx {
    * @returns {import("./store.js").Hit[]}
    */
   _rankKind(match, kind, n, qvec) {
-    if (!match) return [];
-    if (!qvec) return this.store.search(match, kind, n, SPREAD_WEIGHT); // dual path (unchanged contract)
-    const pool = this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT);
-    if (pool.length < 2) return pool.slice(0, n);
-    const vecs = this.store.getEmbeddings(pool.map((h) => h.path));
-    const sN = minmax(pool.map((h) => h.score));
-    const cN = minmax(pool.map((h) => cosine(qvec, vecs.get(h.path))));
-    return pool
+    if (!qvec) return match ? this.store.search(match, kind, n, SPREAD_WEIGHT) : []; // dual path (unchanged contract)
+    const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT) : [];
+    const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)));
+    const cand = pool.concat(knn);
+    if (cand.length < 2) return cand.slice(0, n);
+    const vecs = this.store.getEmbeddings(cand.map((h) => h.path));
+    // nominees carry no lexical score — they enter at the pool floor and rank on cosine alone
+    const floor = pool.length ? Math.min(...pool.map((h) => h.score)) : 0;
+    const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
+    const cN = minmax(cand.map((h) => cosine(qvec, vecs.get(h.path))));
+    return cand
       .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
       .sort((a, b) => b.f - a.f)
       .slice(0, n)

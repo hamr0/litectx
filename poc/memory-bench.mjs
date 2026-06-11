@@ -110,11 +110,24 @@ for (const cat of Object.keys(ds.expected ?? {})) {
 console.log(`  failures (MUST be 0): ${failures}`);
 process.exitCode = failures === 0 ? 0 : 1;
 
-// ---- optional embeddings pass (informative, never gated — the tier is opt-in) ----
+// ---- optional embeddings pass — GATED WHEN IT RUNS (slice 11: the KNN union earns floors).
+// Like the repo corpora: an absent model dep is skipped, never failed (local gate discipline);
+// but when the pass runs, `ds.embFloors` assert hold-or-beat — para is no longer free to regress
+// to its pre-union 0.000.
 if (WANT_EMB) {
   try {
     await import("@xenova/transformers");
-    report("BM25 + embeddings (informative, not gated)", await run(true));
+    const erows = report("BM25 + embeddings (KNN-union tier)", await run(true));
+    let efail = 0;
+    console.log(`\nGATE SUMMARY (embeddings tier — enforced only when this pass runs):`);
+    for (const cat of Object.keys(ds.embFloors ?? {})) {
+      const mrr = agg(erows.filter((r) => r.cat === cat)).mrr;
+      const pass = mrr >= ds.embFloors[cat];
+      if (!pass) efail++;
+      console.log(`  ${cat.toUpperCase().padEnd(7)} MRR ${mrr.toFixed(3)} ${pass ? "≥" : "<"} floor ${ds.embFloors[cat].toFixed(3)}  →  ${pass ? "PASS" : "FAIL"}`);
+    }
+    console.log(`  failures (MUST be 0): ${efail}`);
+    if (efail) process.exitCode = 1;
   } catch {
     console.log(`\n[memory-facts] --embeddings requested but @xenova/transformers is not installed — skipped (npm i @xenova/transformers)`);
   }

@@ -4,7 +4,42 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-06-11
+
+The paraphrase release. A single, focused recall improvement on the opt-in **embeddings tier**:
+for written memory (`fact`/`episode`), cosine similarity now **nominates** candidates instead of
+only re-ranking what the lexical gate already found — so a zero-shared-term paraphrase ("money
+back" → a refunds fact) is reachable at all. This closes the documented hole the 0.2.0 release E2E
+grounded (the tier could re-rank the FTS pool but never reach outside it). The default deterministic
+**BM25 + spreading** core is byte-for-byte unchanged — all three code gates are identical to the
+0.2.0 baseline, and `code`/`doc` recall is untouched (the union is written-kinds-only). No new
+production dependencies. Pre-1.0: the API may still evolve.
+
+### Added
+- **Slice 11 — KNN union: paraphrase recall for written memory (embeddings tier).** For
+  `fact`/`episode` with the tier on, cosine now **nominates** candidates instead of only
+  re-ranking what the lexical gate found: up to 8 stored vectors nearest the query
+  (`Store.knnCandidates`) are unioned into the BM25 pool before fusion, entering at the pool's
+  score floor so lexical hits keep their head start. This closes the documented hole the 0.2.0
+  release E2E grounded — a zero-shared-term paraphrase ("money back" → a refunds fact) was
+  unreachable even with embeddings on, because cosine could only re-rank the FTS-matched pool.
+  **POC-swept before building** (`poc/knn-union-poc.mjs`, real model, K × threshold grid):
+  K=8 with **no admission threshold** is the data's pick — true-paraphrase cosines run low, so
+  any threshold only kills true answers (T=0.25 already halves para MRR), while the k-cap +
+  fusion keep weak nominees down; the one boundary kept is *strictly positive* cosine (zero or
+  negative similarity is no evidence — verified live: off-topic queries score negative against
+  unrelated facts and return empty). **Bench (memory-facts, tier on): para MRR 0.000 → 0.574
+  (top-3 83%), morph 0.722 → 0.889 (the two stemmer-resistant morphs now nominate
+  semantically), exact holds 1.000.** The bench's `--embeddings` pass graduates from
+  informative to **gated when it runs** (`embFloors`: exact 0.8 / morph 0.85 / para 0.55,
+  mutation-checked; still skipped when the optional model dep is absent, same discipline as the
+  repo corpora). `code`/`doc` stay strictly gate-then-rerank — their recall path is unchanged
+  (all three code gates byte-identical) and the scan cost stays bounded to written memory
+  (linear by design at lite scale; `sqlite-vec` remains the named escalation). Limits,
+  documented: nomination requires the vector to exist (a fact written with the tier off never
+  nominates until re-remembered with it on), and an off-topic query may surface weakly-similar
+  facts ranked low. 8 integration tests (synonym-stub embedder; 113 total — 1 pre-existing
+  missing-dep test now self-skips where the model is locally installed); `tsc` clean.
 
 ## [0.2.0] — 2026-06-10
 

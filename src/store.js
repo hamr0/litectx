@@ -5,6 +5,7 @@
 
 import Database from "better-sqlite3";
 import { indexBody, splitIdent } from "./tokenize.js";
+import { cosine } from "./embedder.js"; // pure math — the ML dep stays lazy inside Embedder
 
 /**
  * @typedef {Object} DocRow
@@ -667,6 +668,44 @@ export class Store {
   /** @returns {number} number of stored file embeddings (slice 6 — for tests/introspection) */
   embeddingCount() {
     return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM file_embeddings").get()).n;
+  }
+
+  /**
+   * Semantic nominees for written-kind recall — the KNN side of the slice-11 union. Every stored
+   * vector for `kind` (mem-table rows that have one) is scored by cosine against the query vector;
+   * the top `k` not already in the lexical pool come back as Hit-shaped rows with `score: 0` (they
+   * have no lexical score — the caller's fusion ranks them on semantics alone). Written kinds only:
+   * non-mem kinds return `[]` (code/doc queries virtually always share an identifier with their
+   * answer, and their corpora are where a full scan would start to cost). **No admission
+   * threshold by design** — POC-swept (poc/knn-union-poc.mjs): true-paraphrase cosines run low
+   * (T=0.25 already halves para MRR), and the k-cap + fusion keep weak nominees down. The one
+   * exception is exactly zero: no measured similarity is no evidence, so orthogonal vectors never
+   * nominate (real model vectors are dense — this excludes nothing in practice). Linear scan
+   * by design: written memory is dozens-to-hundreds at lite scale (`sqlite-vec` is the named
+   * escalation if a corpus ever justifies it). Rows written while the tier was off have no vector
+   * and simply never nominate.
+   * @param {string} kind  the memory kind ("fact" | "episode"); anything else → []
+   * @param {Float32Array} qvec  the embedded query
+   * @param {number} k  max nominees
+   * @param {Set<string>} exclude  paths already in the lexical pool (never nominated twice)
+   * @returns {Hit[]}
+   */
+  knnCandidates(kind, qvec, k, exclude) {
+    if (!MEM_KINDS.has(kind)) return [];
+    const rows = /** @type {{ path: string, kind: string, format: string }[]} */ (
+      this.db
+        .prepare("SELECT m.path, m.kind, m.format FROM mem m JOIN file_embeddings e ON e.path = m.path WHERE m.kind = ?")
+        .all(kind)
+    );
+    const cands = rows.filter((r) => !exclude.has(r.path));
+    if (!cands.length) return [];
+    const vecs = this.getEmbeddings(cands.map((r) => r.path));
+    return cands
+      .map((r) => ({ r, cos: cosine(qvec, vecs.get(r.path)) }))
+      .filter((c) => c.cos > 0)
+      .sort((a, b) => b.cos - a.cos)
+      .slice(0, k)
+      .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, git: null }));
   }
 
   close() {

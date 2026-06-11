@@ -23,6 +23,12 @@ export default {
   // embeddings default lifts para), the bench fails until this line is consciously updated — the
   // same hold-or-beat discipline, pointed at honesty instead of quality.
   expected: { para: 0.0 },
+  // Embeddings-tier floors (slice 11 — KNN union), asserted only when the --embeddings pass runs.
+  // Epsilon below shipped (exact 1.000 / morph 0.889 / para 0.574; production == POC sweep at
+  // K=8, no threshold): para GRADUATED 0.000 → 0.574 — cosine now NOMINATES written-kind
+  // candidates instead of only re-ranking the lexical pool. The residual para misses are short
+  // facts whose model neighborhood is genuinely ambiguous — a corpus property, not a rank bug.
+  embFloors: { exact: 0.8, morph: 0.85, para: 0.55 },
   facts: [
     { id: "fact:auth-tokens", text: "Authentication uses JWT bearer tokens verified in the gateway middleware before any handler runs." },
     { id: "fact:session-expiry", text: "User sessions expire after thirty minutes of inactivity and then require a fresh login." },

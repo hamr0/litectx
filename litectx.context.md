@@ -7,11 +7,12 @@ the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
-> document describes the contract **as actually shipped** (slices 0–10: incremental
+> document describes the contract **as actually shipped** (slices 0–11: incremental
 > indexing, symbol chunking, kind-scoped recall, import edges + spreading, git
 > grounding, the `impact` view incl. the slice-5b barrel/alias mitigation, the
-> opt-in **embeddings** tier, the **write path** — `remember`/`forget` for
-> facts/episodes/direct docs — chunk-granular recall, `get(id)` body
+> opt-in **embeddings** tier incl. written-kind **KNN union** (paraphrase recall),
+> the **write path** — `remember`/`forget` for facts/episodes/direct docs —
+> chunk-granular recall, `get(id)` body
 > access, and the two consumption surfaces: the **CLI** and the stdio **MCP server**). Where the eventual surface (ACT-R base-level activation
 > weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
 > **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
@@ -73,6 +74,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all six operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
+| **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | Base-level **activation** (recency/frequency decay, trust-weighted ranking) | 🚧 roadmap (access-log tier — scored on the recall log slice 7 now records) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
@@ -118,7 +120,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
 | `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
-| `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `recall()` fuses cosine into the ranking. Requires the optional peer dep `@xenova/transformers` (`npm i @xenova/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
+| `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@xenova/transformers` (`npm i @xenova/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
 | `embedModel` | `string` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id for the tier. |
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
@@ -161,8 +163,12 @@ penalty). Within a kind, ranking is **BM25 + 1-hop additive import-spreading** (
 adjacent to a strong hit in the import graph is lifted; spreading never crosses kinds and
 is a no-op for kinds without edges, e.g. `doc`). With the **embeddings tier on**, a wider
 BM25-gated pool is additionally re-ranked by semantic cosine (`norm(dual) + embedWeight·norm(cosine)`)
-— the gate bounds the cosine work to the candidate pool, never the corpus. The return shape
-follows the `kind` argument:
+— the gate bounds the cosine work to the candidate pool, never the corpus. For the **written
+kinds** (`fact`/`episode`) the tier goes one step further (slice 11): up to 8 stored vectors
+nearest the query are **unioned into the pool as nominees**, so a paraphrase sharing *no* words
+with a fact can still reach it — nominees enter at the pool's score floor and rank on cosine
+alone, so lexical hits keep their head start. `code`/`doc` stay strictly gate-then-rerank. The
+return shape follows the `kind` argument:
 
 | call | mode | returns | default `n` |
 |---|---|---|---|
@@ -503,12 +509,16 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   `code` are **not** stemmed: in code, word-forms are distinct symbols (`token`/`tokens`/
   `tokenize`), and stemming measurably hurt code ranking — so an FAQ written via `remember`
   still needs exact words (or key terms repeated in its `id`, which is indexed). Pure
-  paraphrase ("money back" → "refunds") matches nothing lexically for any kind — **and the
-  embeddings tier does not bypass this**: the semantic pool is BM25-gated (cosine *re-ranks*
-  candidates that share at least one term/stem with the query; it never *admits* new ones), so a
-  zero-shared-term paraphrase misses even with embeddings on (E2E-verified against the real
-  model). The tier's value is lifting a true answer ranked *deep* in the lexical pool, not
-  retrieving what the lexical gate never saw. Write facts in the words you'll query.
+  paraphrase ("money back" → "refunds") matches nothing lexically for any kind. **With the
+  embeddings tier on, `fact`/`episode` close that hole (slice 11 — KNN union):** cosine
+  *nominates* up to 8 stored vectors nearest the query into the pool, so "money back" reaches
+  the refunds fact with zero shared words (bench: para MRR 0.000 → 0.574, top-3 83%, with exact
+  and morph held). Two honest limits: it needs the tier **on at write time** (a fact written with
+  the tier off has no vector and never nominates — re-`remember` it to embed it), and an
+  off-topic query may still surface weakly-similar facts ranked low (only zero/negative
+  similarity is never nominated). `doc`/`code` remain strictly BM25-gated — there the tier only
+  re-ranks the lexical pool, so with the tier **off** (the default), *write facts in the words
+  you'll query* is still the rule.
 - **`forget` only forgets written memory.** It cannot remove an indexed file (delete the
   file + re-`index()` for that), and `remember` cannot overwrite an indexed file's row —
   the two populations share the store but are write-isolated by design.

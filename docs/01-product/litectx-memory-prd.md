@@ -401,12 +401,17 @@ doesn't exist yet (the biggest IOU).
   write facts in the words you'll query (the id is indexed too — "deploy-oidc" hits a "deploy"
   query); stemming covers word-forms. The memory bench's labeled para queries measure the
   embeddings lift for free whenever the tier is on. **Grounded (slice-10 release E2E, real
-  model):** the hole is *narrower but deeper* than "embeddings fix it" — the semantic pool is
+  model):** the hole was *narrower but deeper* than "embeddings fix it" — the semantic pool is
   BM25-gated (`_rankKind`: cosine re-ranks the FTS-matched pool, it never admits to it), so a
-  **zero-shared-term** paraphrase misses even with the tier ON; the tier lifts deep-pool answers
-  (the POC-validated claim), it does not retrieve what the lexical gate never saw. True
+  **zero-shared-term** paraphrase missed even with the tier ON; the tier lifted deep-pool answers
+  (the POC-validated claim), it did not retrieve what the lexical gate never saw. ~~True
   gate-bypassing semantic recall would be a separate candidate source (vector KNN union) — not
-  built, not promised.
+  built, not promised.~~ → **BUILT (slice 11, 2026-06-11, user-ordered):** the KNN union closes
+  the hole for **written kinds only** — see §11.2. With the tier on, fact/episode recall unions
+  up to 8 cosine-nearest stored vectors into the pool as nominees (pool-floor score, rank on
+  semantics; strictly-positive cosine only). Bench: para 0.000 → 0.574 with exact/morph held;
+  the `--embeddings` bench pass is now gated when it runs. The DEFAULT config keeps the hole —
+  "write facts in the words you'll query" stands wherever the tier is off.
 - **`log: false` on `recall()` — approved.** The recall log is a **demand signal**; anything that
   isn't real demand must not write to it. Agent/human queries log (default `true`); dashboards,
   CI checks, batch tooling, and read-only-db consumers pass `{ log: false }`. One boolean, nothing
@@ -627,7 +632,8 @@ Grounding: `MEM_INDEXING.md`.
 > walk of the symbol body, callers via `rg -w` confirmed with tree-sitter, risk = `max(confirmed,
 > mentions)` bucketed at the aurora thresholds (≤2/3–10/11+), plus complexity and the §7.2 hedges.
 > **Computed on demand, not persisted** (§7.1's mechanisms are query-time; the `type='call'` edge
-> row stays reserved for a future persist-if-slow optimization). Validated on aurora: hubs bucket
+> row stays reserved for a future persist-if-slow optimization — externally confirmed viable and
+> now specified with its trigger in the §15 borrows block). Validated on aurora: hubs bucket
 > `high` with correct fan-in (`SQLiteStore` 235 refs/109 callers, `BaseLevelActivation` 47/36),
 > ~0.1–0.9s/symbol.
 >
@@ -648,6 +654,23 @@ no multilspy and hand-driving servers over `vscode-jsonrpc` is fragile — rejec
 `LSP.md`, ledger §11. Accuracy comes from the **language definition** (`function_def_types`,
 `call_node_type`, `skip_names`, entry/callback lists), not a server — that is the knowledge that
 makes ripgrep edges accurate. Per-language config is the bulk of "adding a language" (~1–2 days/lang).
+
+**External corroboration (2026-06-11 competitor survey).** The 2026 wave of "code-graph MCP" tools
+re-derives this decision. Of the three closest claimants (DeusData `codebase-memory-mcp`, suatkocar
+`codegraph`, Jakedismo `codegraph-rust`), two refuse to run language servers at all — the "Hybrid
+LSP" in codebase-memory-mcp is a clean-room *reimplementation* of type resolution (for 8 of its 159
+languages; "no language server process, no per-project setup"), and the one true-LSP tool gates it
+behind optional tiers requiring pre-installed servers — the exact fragility documented above. More
+important, codebase-memory-mcp's own published evaluation (**arXiv:2603.27277**) measures the
+ceiling: its graph-backed agent scores **0.83 answer quality vs 0.92 for a plain grep+read
+file-exploration agent** (0.58 on macro-heavy C), winning only on tokens (10×) and tool calls
+(2.1×); the authors' own conclusion is a hybrid — graph for structural queries, file exploration
+for source-level tasks. That is §7.1's carve-out measured independently: precision-grade resolution
+(real LSP or reimplemented type inference) bought **no agent-level quality** over approximate
+structure + reading code. Cite this instead of re-arguing §7 from first principles. Their "159
+languages" is the same lesson inverted — vendored grammars + a generic walk, with real import
+parsing/type resolution for only 8; breadth without the per-language calibration this section makes
+load-bearing.
 
 ### 7.1 The carve-out — what litectx answers vs. what only an LSP can (DECIDED)
 
@@ -704,6 +727,19 @@ unresolvable import — is recorded as **`unresolved`, never `absent`**. That si
 "couldn't fully resolve," not "siloed." Truly unresolvable reflection then gets the explicit caveat
 *"dynamic usage not statically visible — review candidate,"* never a clean isolation verdict.
 
+**Planned refinement — graded resolution confidence (borrowed 2026-06-11; field-level, no new
+mechanism).** codebase-memory-mcp resolves every call through a confidence cascade (exact
+import-map match 0.95 → same-module 0.90 → unique-name-project-wide 0.75 → suffix 0.55 → fuzzy
+0.3–0.4). The borrowable idea is **not** the cascade — it exists to *reduce* over-count, i.e.
+precision, our §7.1 non-goal — but the **graded edge**: "unresolved, never absent" becomes a
+per-reference confidence instead of a binary. What it buys: `impact()` reports "N confirmed + M
+low-confidence callers" instead of one merged count, and the isolation/dead-code hedge can demand
+*high-confidence absence* before making even the hedged claim. v1 already computes the grain
+implicitly (tree-sitter-confirmed > rg-mention > unresolved); this names it as an explicit field on
+impact output — and on the reserved `type='call'` edge row if it is ever persisted. No migration,
+no ranking change: record the grade we already compute, never drop it. Rides along with the next
+schema-touching slice (§15 borrows block); never a blocker.
+
 ### 7.3 Edge types & the two non-conflatable signals
 
 - **Two edge types, both required (ledger §11):** `calls` (symbol→symbol) powers called-by/calling
@@ -722,9 +758,17 @@ unresolvable import — is recorded as **`unresolved`, never `absent`**. That si
 | BM25 + ACT-R recall | **on** | — | the lite core; zero ML |
 | Block-level git signals | **on** | — | cheap, high-value |
 | tree-sitter + ripgrep edges | **on** | — | zero external binaries; sole edge resolver |
-| Embeddings (semantic) + MMR | **off** | `@xenova/transformers` (ONNX) and/or `sqlite-vec` | +10% quality but +ML dep and 15–19s cold latency |
+| Embeddings (semantic) + MMR | **off** | `@xenova/transformers` (ONNX); vectors = float32 BLOB in the one file (§9 — `sqlite-vec` rejected, slice 6) | +10% quality but +ML dep and 15–19s cold latency |
 
 Embeddings are the **only** tier. There is no LSP tier (§7).
+
+**Model:** default `Xenova/all-MiniLM-L6-v2` (384-dim, ~90 MB; aurora's choice, POC-proven),
+swappable via `embedModel`. **Bench candidate (2026-06-11):** `jina-embeddings-v2-base-code`
+(768-dim ONNX, code-specific — the model an independent same-stack tool, suatkocar `codegraph`
+[Rust + SQLite/FTS5 + hybrid fusion], shipped for code search). It is a pure config swap, so it
+earns the default the only way anything does here: beat MiniLM on the §11.3 recall bench (incl.
+the paraphrase set) by enough to justify the several-× larger model download. No code change
+either way.
 
 ---
 
@@ -910,6 +954,25 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Next + post-v1 tiers:**
+- **Slice 11 — KNN union: written-kind paraphrase recall — ✅ SHIPPED (2026-06-11,
+  user-ordered ahead of the access-log tier).** Closes the hole the 0.2.0 release E2E grounded
+  (§14 above): with the embeddings tier on, cosine **nominates** for `fact`/`episode` instead of
+  only re-ranking — `Store.knnCandidates` unions up to `KNN_K = 8` cosine-nearest stored vectors
+  into the BM25 pool before fusion; nominees enter at the pool's score floor and rank on
+  semantics alone, so lexical hits keep their head start. **POC-first:** `poc/knn-union-poc.mjs`
+  swept K × admission-threshold on the memory bench with the real model — K=8/T=0 is the data's
+  pick (any threshold kills true paraphrases: their cosines run low; T=0.25 already halves para
+  MRR), with one boundary kept: zero/negative cosine never nominates (no measured similarity is
+  no evidence — live-probed: off-topic queries score negative vs unrelated facts → empty result,
+  not noise). **Bench: para 0.000 → 0.574 (P@3 83%) · morph 0.722 → 0.889 (stemmer-resistant
+  morphs nominate semantically) · exact holds 1.000**; the bench's `--embeddings` pass graduated
+  informative → **gated when it runs** (`embFloors` 0.8/0.85/0.55, mutation-checked, skipped
+  when the model dep is absent — corpora discipline). Scope guard: `code`/`doc` stay strictly
+  gate-then-rerank (their queries share identifiers with their answers; their corpora are where
+  a full scan would cost) — all three code gates byte-identical; the scan is linear over written
+  memory by design (`sqlite-vec` = named escalation). Honest limits, documented: vectors must
+  exist (tier-off writes never nominate until re-remembered) and weakly-positive off-topic
+  nominees can surface, ranked low. 8 stub-embedder integration tests (113 total); `tsc` clean.
 - **Slice 10 — MCP surface + CLI write parity — ✅ SHIPPED (2026-06-10).** The consumption
   surfaces (§14 #5), with one **decision amendment recorded there**: `litectx-mcp` ships as a
   **second bin in this package**, not a separate package — the POC removed the premise behind the
@@ -1276,7 +1339,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces shipped (slices 0–10) — access-log tier next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union shipped (slices 0–11, v0.3.0 published) — access-log tier next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1298,7 +1361,7 @@ structural (written rows never enter `file_index`, which is the sole source of `
 byte-identical, `tsc` clean. litectx is now a write-capable *memory across kinds*, not just a code/doc
 index.
 
-**Next action — sequenced (10 shipped 2026-06-10; both consumption surfaces live):**
+**Next action — sequenced (slice 11 shipped + published as v0.3.0 2026-06-11; v0.2.0 published 2026-06-10):**
 1. ~~Slice 7b — written-memory stemming~~ **✅ SHIPPED** (§5.1, §11.2).
 2. ~~Slice 8 — chunk-granular recall (`hit.chunk`) + `log: false`~~ **✅ SHIPPED** (§11.2; the
    recall_log now carries the chunk symbol — the grain the edit-bind joins on).
@@ -1309,6 +1372,9 @@ index.
    in this package** (the POC removed the separate-package premise: hand-rolled stdio server,
    zero new deps), client-spawned, not a daemon; six tools = the six public operations; CLI
    gains `remember`/`forget`/`--embeddings`/`--no-log`).
+4b. ~~KNN union~~ **✅ SHIPPED** (slice 11, user-ordered in ahead of the tier below — §11.2;
+   written-kind paraphrase recall via cosine nomination; para 0.000 → 0.574, exact/morph held,
+   `--embeddings` bench pass now gated when it runs).
 5. **Access-log tier** (§4, §14 #4 SETTLED block) — score base-level activation on action-grade
    signals: the **edit-bind** for code (harvest-at-recall over the log window; file hash = trigger,
    chunk diff = attribution) and **corrective re-`remember`** for facts; episodes-first (recency).
@@ -1318,3 +1384,28 @@ index.
    (Cold-start is NOT a problem this tier solves — day-one recall is BM25 + spreading and is what
    the benches already gate; git-seeding was falsified, §14 #1, re-affirmed 2026-06-10: a
    topic-blind prior lifts the same hot files for every query.)
+
+**Competitor borrows (2026-06-11 survey of the "code-graph MCP" wave — codebase-memory-mcp /
+codegraph / codegraph-rust). None is due before the access-log tier; full grounding in §7, §7.2,
+§8. In plain terms:**
+
+- **Persist-if-slow call edges — trigger-based, now externally confirmed.** Today `impact()`
+  resolves callers *live* (~0.1–0.9s/symbol) and persists nothing — live means always-fresh, zero
+  staleness machinery. The competitor tools do the opposite: resolve calls **once at index time**,
+  store them as edge rows, and answer callers/callees with a recursive SQL CTE in **<1ms**. Both
+  designs work; theirs proves the cached one does. Our escape hatch is already reserved (the
+  `type='call'` row in `relationships`, §7/§9). **Trigger:** a real agent workload where repeated
+  `impact()` latency actually hurts. **Mechanism when triggered:** persist confirmed call edges at
+  index time, traverse with a recursive CTE (plain SQL, no new dep), keep the live path for
+  freshness-critical verdicts. Do **not** build ahead of the trigger.
+- **Edge confidence field (§7.2).** `impact()` already knows *how* it found each caller
+  (tree-sitter-confirmed > rg-mention > unresolved) but flattens that into one count. Surface it as
+  an explicit per-reference confidence so isolation claims can demand high-confidence absence.
+  Field-level only; rides along with the next schema-touching slice (the access-log tier adds
+  tables anyway); never a blocker.
+- **Embeddings model candidate (§8).** `jina-embeddings-v2-base-code` vs the MiniLM default —
+  code-specific model an independent same-stack tool ships. Pure `embedModel` config swap, gated by
+  the §11.3 bench; evaluate whenever the bench next runs with `--embeddings`.
+- **No-LSP citation (§7) — ✅ done in this edit.** arXiv:2603.27277's own eval (graph agent 0.83
+  vs plain grep+read 0.92 answer quality) is the standing answer to "why no LSP / no precise
+  graph" — cite it, don't re-argue.
