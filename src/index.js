@@ -76,7 +76,7 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {string} [dbPath]             SQLite file path (default: <root>/.litectx/index.db)
  * @property {boolean} [embeddings]        enable the opt-in semantic tier (default false). When on,
  *                                         `index()` embeds each file and `recall()` fuses cosine into
- *                                         the ranking. Requires the optional peer dep `@xenova/transformers`.
+ *                                         the ranking. Requires the optional peer dep `@huggingface/transformers`.
  * @property {number} [embedWeight]        semantic fusion weight (default 1.0); higher = more semantic
  * @property {string} [embedModel]         transformers.js model id (default Xenova/all-MiniLM-L6-v2)
  * @property {{ embed(text: string): Promise<Float32Array> }} [embedder]  inject a custom/stub embedder
@@ -133,7 +133,7 @@ export class LiteCtx {
   }
 
   /**
-   * Embed text, degrading gracefully when the optional model dependency (`@xenova/transformers`)
+   * Embed text, degrading gracefully when the optional model dependency (`@huggingface/transformers`)
    * can't load: disable the tier for this instance, warn once to stderr, and return `null` so
    * callers fall back to BM25. An injected embedder (tests) or a present dep never trips this.
    * @param {string} text @returns {Promise<Float32Array|null>}
@@ -146,7 +146,7 @@ export class LiteCtx {
         this.embeddings = false; // one-shot: subsequent calls skip the tier entirely
         console.error(
           `litectx: embeddings unavailable (${e instanceof Error ? e.message : e}) — falling back to BM25. ` +
-            "Run `npm i @xenova/transformers` to enable semantic recall."
+            "Run `npm i @huggingface/transformers` to enable semantic recall."
         );
       }
       return null;

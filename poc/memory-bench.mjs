@@ -14,7 +14,7 @@
 // does too. So a wording drift in the dataset can't silently turn the metric into noise.
 //
 // Pure-memory mode: no repo, no index() — the corpus is written via remember(). Runs anywhere.
-// Optional: `--embeddings` re-runs with the semantic tier when @xenova/transformers is installed
+// Optional: `--embeddings` re-runs with the semantic tier when @huggingface/transformers is installed
 // (skipped with a notice otherwise — never failed).
 //
 // Usage: node poc/memory-bench.mjs [--embeddings]
@@ -116,7 +116,7 @@ process.exitCode = failures === 0 ? 0 : 1;
 // to its pre-union 0.000.
 if (WANT_EMB) {
   try {
-    await import("@xenova/transformers");
+    await import("@huggingface/transformers");
     const erows = report("BM25 + embeddings (KNN-union tier)", await run(true));
     let efail = 0;
     console.log(`\nGATE SUMMARY (embeddings tier — enforced only when this pass runs):`);
@@ -129,7 +129,7 @@ if (WANT_EMB) {
     console.log(`  failures (MUST be 0): ${efail}`);
     if (efail) process.exitCode = 1;
   } catch {
-    console.log(`\n[memory-facts] --embeddings requested but @xenova/transformers is not installed — skipped (npm i @xenova/transformers)`);
+    console.log(`\n[memory-facts] --embeddings requested but @huggingface/transformers is not installed — skipped (npm i @huggingface/transformers)`);
   }
 }
 console.log();

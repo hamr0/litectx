@@ -135,20 +135,20 @@ test("the query embedding is cached (a repeated query is not re-embedded)", asyn
 });
 
 test("the real Embedder fails loudly when the optional peer dep is absent", async (t) => {
-  // @xenova/transformers is NOT a dependency of the core (optional peer dep) — so importing it from
-  // the lib root fails, and the tier must say so clearly rather than silently producing no vectors.
-  // The contract only exists where the dep is absent: a dev box with the model installed for local
-  // bench runs (`poc/memory-bench.mjs --embeddings`) skips, same discipline as the bench corpora.
+  // @huggingface/transformers is NOT a dependency of the core (optional peer dep) — so importing it
+  // from the lib root fails, and the tier must say so clearly rather than silently producing no
+  // vectors. The contract only exists where the dep is absent: a dev box with the model installed for
+  // local bench runs (`poc/memory-bench.mjs --embeddings`) skips, same discipline as the bench corpora.
   try {
-    await import("@xenova/transformers");
-    t.skip("@xenova/transformers is installed here — the missing-dep contract is untestable");
+    await import("@huggingface/transformers");
+    t.skip("@huggingface/transformers is installed here — the missing-dep contract is untestable");
     return;
   } catch {
     /* absent — the contract under test applies */
   }
   await assert.rejects(
     () => new Embedder().embed("anything"),
-    /@xenova\/transformers/,
+    /@huggingface\/transformers/,
     "a missing model dependency is a clear, actionable error"
   );
 });

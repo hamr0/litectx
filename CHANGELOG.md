@@ -4,6 +4,23 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-06-11
+
+Clears the optional-tier CVE chain flagged in 0.6.0's known issues. No change to the deterministic
+BM25 core, the public API, or any quality gate — embeddings recall is byte-identical (the model is
+pinned to the same int8 quantization the tier was calibrated against).
+
+### Changed
+- **Optional embeddings dependency migrated `@xenova/transformers` → `@huggingface/transformers`
+  (v4).** The successor package's `onnxruntime` drops the abandoned `onnx-proto` pin, and its
+  `protobufjs` floats to a patched release — **`npm audit` is now clean (was 1 critical + 3 high, all
+  in the optional tier)**. The embed call pins `dtype: "q8"`: transformers.js v3+ changed its default
+  from int8-quantized to fp32, which silently regressed paraphrase recall (bench para MRR 0.574→0.532,
+  under the floor) and quadrupled the model download; `q8` reproduces the calibrated model exactly
+  (para **0.574** held, morph 0.889, exact 1.000 — 0 gate failures) and the documented ~23 MB
+  footprint. Install string is now `npm i @huggingface/transformers`; the `pipeline("feature-extraction")`
+  API is otherwise unchanged.
+
 ## [0.6.0] — 2026-06-11
 
 The restorable-compression release. Adds `stash()` — a keyed agent-context store separate from the

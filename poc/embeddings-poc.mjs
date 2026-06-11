@@ -17,7 +17,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { performance } from "node:perf_hooks";
-import { pipeline } from "@xenova/transformers";
+import { pipeline } from "@huggingface/transformers";
 import { LiteCtx } from "../src/index.js";
 
 const TUNING = ["aurora", "gitdone"];
@@ -33,7 +33,7 @@ const norm = (arr) => { const lo = Math.min(...arr), hi = Math.max(...arr); retu
 const mrrOf = (ranks) => ranks.reduce((s, r) => s + rr(r), 0) / ranks.length;
 
 console.log("loading embedding model (Xenova/all-MiniLM-L6-v2)…");
-const embed = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2");
+const embed = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", { dtype: "q8" });
 const vec = async (text) => Array.from((await embed((text || " ").slice(0, MAXCHARS), { pooling: "mean", normalize: true })).data);
 
 // distilled signal for a file: filename stem + each node's symbol + its signature/heading source line.

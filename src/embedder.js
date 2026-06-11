@@ -29,18 +29,22 @@ export class Embedder {
     let transformers;
     try {
       // Non-literal specifier on purpose: this is an OPTIONAL peer dep, not installed for the core.
-      // A literal `import("@xenova/transformers")` would make `tsc` demand the package at typecheck
-      // (and CI would have to install its heavy native deps). The variable keeps the boundary `any`
-      // without `@ts-ignore`; the runtime resolves the real module all the same.
-      const pkg = "@xenova/transformers";
+      // A literal `import("@huggingface/transformers")` would make `tsc` demand the package at
+      // typecheck (and CI would have to install its heavy native deps). The variable keeps the
+      // boundary `any` without `@ts-ignore`; the runtime resolves the real module all the same.
+      const pkg = "@huggingface/transformers";
       transformers = await import(pkg);
     } catch {
       throw new Error(
-        "litectx: the embeddings tier needs the optional peer dependency '@xenova/transformers'. " +
-          "Install it (`npm i @xenova/transformers`) or leave `embeddings` off (the default)."
+        "litectx: the embeddings tier needs the optional peer dependency '@huggingface/transformers'. " +
+          "Install it (`npm i @huggingface/transformers`) or leave `embeddings` off (the default)."
       );
     }
-    this._pipe = await transformers.pipeline("feature-extraction", this.model);
+    // Pin int8 quantization. transformers.js v2 loaded the quantized model by default; v3+ defaults
+    // to fp32 — a silent change that regresses paraphrase recall here (bench para MRR 0.574→0.532,
+    // under the floor) and quadruples the download. `q8` reproduces the model the tier is calibrated
+    // against (poc/memory-bench.mjs --embeddings) and holds the documented ~23 MB footprint.
+    this._pipe = await transformers.pipeline("feature-extraction", this.model, { dtype: "q8" });
     return this._pipe;
   }
 

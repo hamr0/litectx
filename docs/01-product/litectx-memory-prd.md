@@ -1470,10 +1470,13 @@ key, never a filesystem path), and the MCP server is a local stdio subprocess (n
 Tenant-isolation / rate-limiting / IDOR are **N/A** (single-user local library, no service). One
 **hardening shipped**: `Store.forgetMemory` now refuses an empty selector (the `WHERE 1=1`
 mass-delete was unreachable via the public `forget()` guard, now also blocked at the store layer —
-regression test added). One **known issue, follow-up**: the optional `@xenova/transformers` chain
-carries `protobufjs` advisories (1 critical + 3 high) reachable only when parsing an ONNX model file
-— planned fix is the `@huggingface/transformers` (v4) swap (newer `onnxruntime`, drops the chain) +
-a pinned model revision; the deterministic BM25 core is unaffected. A follow-on **code review of the
+regression test added). One **former known issue, now RESOLVED (v0.6.1)**: the optional
+`@xenova/transformers` chain carried `protobufjs` advisories (1 critical + 3 high) reachable only when
+parsing an ONNX model file — fixed by migrating the optional dep to `@huggingface/transformers` (v4),
+whose `onnxruntime` drops the `onnx-proto`/`protobufjs` chain (`npm audit` clean). The embed call pins
+`dtype: "q8"` to reproduce the int8-quantized model the tier is calibrated on — transformers.js v3+
+defaults to fp32, which regressed paraphrase recall (bench para 0.574→0.532) and quadrupled the
+download; q8 holds para 0.574. The deterministic BM25 core was unaffected throughout. A follow-on **code review of the
 memory surface** (same date) found no correctness bugs; two minor cleanups shipped — dead `Embedder`
 members removed, and a redundant vector fetch in `knnCandidates` de-duplicated (behavior byte-identical).
 

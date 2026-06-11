@@ -68,7 +68,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors | 🚧 roadmap |
-| **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@xenova/transformers` is an *optional* dep (auto-installed; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
+| **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@huggingface/transformers` is an *optional* dep (auto-installed; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
 | **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
@@ -126,7 +126,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
 | `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
-| `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@xenova/transformers` (`npm i @xenova/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
+| `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@huggingface/transformers` (`npm i @huggingface/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
 | `embedModel` | `string` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id for the tier. |
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
@@ -539,7 +539,7 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 - **No embeddings by default.** The semantic tier ships (slice 6) but is the single
   **opt-in**, off by default: dual-hybrid (BM25 + spreading) ≈ 85% vs tri-hybrid ≈ 95%,
   and embeddings add cold-start model-load latency + an ML dependency not worth
-  defaulting on. Turn it on with `embeddings: true` + `npm i @xenova/transformers`.
+  defaulting on. Turn it on with `embeddings: true` + `npm i @huggingface/transformers`.
 - **No service / daemon / network / telemetry.** It runs in your process against a
   file on disk.
 - **No alternative store.** SQLite + FTS5, single file. BM25 is native in SQL;
@@ -606,13 +606,13 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 - **`forget` only forgets written memory.** It cannot remove an indexed file (delete the
   file + re-`index()` for that), and `remember` cannot overwrite an indexed file's row —
   the two populations share the store but are write-isolated by design.
-- **The embeddings tier carries known-vulnerable transitive deps (optional dep only).** Turning it
-  on pulls `@xenova/transformers` → `onnxruntime-web` → `onnx-proto` → `protobufjs`, which has open
-  advisories (1 critical + 3 high, all `protobufjs`) reachable when an ONNX **model file** is parsed
-  — so only load models from a source you trust (the default `Xenova/all-MiniLM-L6-v2` is fetched
-  once from the HuggingFace Hub on first use). The deterministic BM25 core — the library default —
-  pulls none of this and runs fully offline. A migration to `@huggingface/transformers` (newer
-  `onnxruntime`, drops the chain) is planned.
+- **The embeddings tier loads a remote model file (optional dep only).** Turning it on pulls
+  `@huggingface/transformers`, which fetches the default `Xenova/all-MiniLM-L6-v2` model once from
+  the HuggingFace Hub on first use and parses an ONNX **model file** — so only load models from a
+  source you trust. (The optional dep's transitive chain is `npm audit`-clean as of the
+  `@huggingface/transformers` v4 migration; the older `@xenova/transformers` chain carried
+  `protobufjs` advisories.) The deterministic BM25 core — the library default — pulls none of this
+  and runs fully offline.
 - **Upgrading over an old index db is safe — the store self-heals on open.** A db created
   by ≤ 0.1.0 (its `docs` table predates the write-path columns) is detected and rebuilt on
   the next open — it can only contain re-indexable files, never written memory, so nothing

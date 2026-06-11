@@ -5,7 +5,7 @@
   "type": "module",
   "description": "THROWAWAY validation harness for the PRD §11 gate. Not shipped. Never imported by the lib.",
   "dependencies": {
-    "@xenova/transformers": "^2.17.2",
+    "@huggingface/transformers": "^4.2.0",
     "better-sqlite3": "^11.8.1",
     "tree-sitter": "^0.25.0",
     "tree-sitter-javascript": "^0.25.0",
