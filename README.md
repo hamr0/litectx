@@ -98,6 +98,7 @@ ctx.forget("fact:auth-uses-jwt");   // by key — or forget({ by: "agent" }) in 
 litectx index && litectx recall "auth token validation" --kind code
 echo "Auth is JWT, verified in middleware." | litectx remember fact:auth-uses-jwt
 litectx get fact:auth-uses-jwt        # body → stdout, pipes clean
+litectx help                          # all commands + the output-column legend
 ```
 
 ```jsonc

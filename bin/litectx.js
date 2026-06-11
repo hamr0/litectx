@@ -37,6 +37,8 @@ function parse(argv) {
 async function main() {
   const { cmd, opts } = parse(process.argv.slice(2));
 
+  if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") help();
+
   if (cmd === "index") {
     const root = opts.words[0] ?? opts.root;
     const ctx = new LiteCtx({ root, embeddings: opts.embeddings });
@@ -214,11 +216,26 @@ function relAge(sec) {
   return `${Math.floor(s / 86400)}d`;
 }
 
+// A hoisted function (not a `const`) so `help()`/`fail()` can use it even though `main()` is
+// invoked above this point in source order — a `const` here would be in its TDZ at that call.
+function usage() {
+  return (
+    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)\n" +
+    "\noutput columns (tab-separated):\n" +
+    "  recall  score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)   (memory hits also: provenance use:N)\n" +
+    "  recent  age(m|h|d)  edits×  kind  path  › symbol"
+  );
+}
+
+/** `litectx`, `litectx help`, `-h`, `--help` → usage on stdout, exit 0 (not an error). */
+function help() {
+  console.log(usage());
+  process.exit(0);
+}
+
 /** @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
-  console.error(
-    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
-  );
+  console.error(usage());
   process.exit(1);
 }

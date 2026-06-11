@@ -4,6 +4,17 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **CLI `help` / `--help` / `-h` and a bare `litectx`** now print usage to **stdout and exit 0**
+  (previously the only way to see usage was to trigger an error, which printed to stderr and exited
+  1). Bad invocations still print usage to stderr and exit 1.
+- **Output-column legend in the usage text.** `recall`/`recent` rows are terse tab-separated columns
+  (`score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age`, etc.); the legend explains
+  them without touching the data rows, so `| awk`/`cut` pipelines stay clean. Documentation only — no
+  table rendering or dependency (presentation for the agent surface stays at the agent, not the tool).
+
 ## [0.4.0] — 2026-06-11
 
 The access-log tier release. `recentActivity()`, `promotionCandidates()`, and trust columns ship as

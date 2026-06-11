@@ -1022,7 +1022,9 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
   exactly the demand the log captures; dashboards/batch belong on the lib/CLI. CLI gains the
   write path: `remember` (args or piped stdin), `forget` (id or bulk `--kind`/`--by`, exit 1 on
   no-match), `--embeddings` (index/recall/remember), `--no-log` (recall/get — closes slice 9's
-  known item 2). 7 integration tests spawn the real server binary and speak JSON-RPC over stdio
+  known item 2). *(Post-v0.4.0 CLI refinement: `help`/`--help`/`-h`/no command print usage — now
+  with an output-column legend — to stdout and exit 0; bad invocations still print to stderr, exit
+  1.)* 7 integration tests spawn the real server binary and speak JSON-RPC over stdio
   (105 total); `tsc` clean; all three bench gates pass unchanged (no `src/` change this slice).
 - **Slice 9 — `get(id)` body access + tagged fetch logging — ✅ SHIPPED (2026-06-10).** The read
   counterpart to recall (pointers → the thing itself) and the MCP prerequisite (§15: a recall tool

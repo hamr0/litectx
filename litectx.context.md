@@ -434,12 +434,18 @@ litectx promotions [--threshold <n>]           # hot agent episodes to distil in
 litectx impact <symbol>
 litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
+litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare
 ```
 All commands take `--root <dir>` (default: cwd). `remember` reads its body from the arguments
 or, when absent, from piped stdin (`git log -1 --format=%s | litectx remember ep:release
 --kind episode`). Exit 1: unknown id (`get`), nothing matched (`forget`), unknown symbol
-(`impact`). `--no-log` is the demand-signal opt-out (see Gotchas) — use it for dashboards,
-CI, and batch scripts.
+(`impact`), and any bad invocation (prints usage to stderr); `help`/`--help`/`-h`/no command
+print usage to stdout and exit 0. `--no-log` is the demand-signal opt-out (see Gotchas) — use
+it for dashboards, CI, and batch scripts.
+
+Output is **tab-separated** (composable with `awk`/`cut`; `help` prints this legend):
+`recall` → `score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)` (memory
+hits append `provenance use:N`); `recent` → `age(m|h|d)  edits×  kind  path  › symbol`.
 
 ### `litectx-mcp` (MCP server)
 
