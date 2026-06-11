@@ -337,7 +337,8 @@ Delete directly-written memory. Returns the number of rows removed.
 
 - `forget("fact:auth-uses-jwt")` — drop one item by key.
 - `forget({ kind: "fact", by: "agent" })` — **bulk invalidation** by query: every
-  agent-asserted fact. At least one of `kind` / `by` is required (`forget({})` throws).
+  agent-asserted fact. At least one of `kind` / `by` is required — `forget({})` throws, enforced
+  at both the public wrapper and the store layer, so an empty selector can never wipe all memory.
 
 **`forget` can never touch indexed files** — it operates only on written
 (`remember`-created) rows. To remove an indexed file from the store, delete the file and
@@ -592,6 +593,13 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 - **`forget` only forgets written memory.** It cannot remove an indexed file (delete the
   file + re-`index()` for that), and `remember` cannot overwrite an indexed file's row —
   the two populations share the store but are write-isolated by design.
+- **The embeddings tier carries known-vulnerable transitive deps (optional dep only).** Turning it
+  on pulls `@xenova/transformers` → `onnxruntime-web` → `onnx-proto` → `protobufjs`, which has open
+  advisories (1 critical + 3 high, all `protobufjs`) reachable when an ONNX **model file** is parsed
+  — so only load models from a source you trust (the default `Xenova/all-MiniLM-L6-v2` is fetched
+  once from the HuggingFace Hub on first use). The deterministic BM25 core — the library default —
+  pulls none of this and runs fully offline. A migration to `@huggingface/transformers` (newer
+  `onnxruntime`, drops the chain) is planned.
 - **Upgrading over an old index db is safe — the store self-heals on open.** A db created
   by ≤ 0.1.0 (its `docs` table predates the write-path columns) is detected and rebuilt on
   the next open — it can only contain re-indexable files, never written memory, so nothing

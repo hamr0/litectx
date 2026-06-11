@@ -1462,6 +1462,19 @@ package** (§7).
 
 ## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE + **v0.4.0 cut** (access-log tier as a release) with an optional Claude Code integration (`integrations/claude/`: LSP-free pre-edit `impact()` hook + SessionStart index-warmer; generic MCP server documented for any client) + **v0.5.0 cut** (semantic-by-default: embeddings ON by default on the CLI + MCP surfaces with `--no-embeddings` opt-out and graceful BM25 fallback; `@xenova` → optionalDependency; library `LiteCtx` default stays opt-in so all BM25 gates are byte-identical. Driven by `poc/recall-litmus*`: embeddings +~0.2 MRR on natural-language code recall across aurora/gitdone, near-essential for memory; LLM query-expansion recovers ~90–95% but is non-binding, so embeddings is the reliable floor)
 
+**Security audit (2026-06-11).** The memory surface was audited (SQL/command/FTS injection, path
+traversal, MCP trust boundary, secrets, destructive ops, dependencies). Clean across the board —
+SQL is fully parameterized, all subprocesses use `execFileSync` array-args (no shell), FTS keywords
+are alnum-stripped before quoting (`splitIdent`), `get(id)` reads only indexed paths (the id is a DB
+key, never a filesystem path), and the MCP server is a local stdio subprocess (no listener/eval).
+Tenant-isolation / rate-limiting / IDOR are **N/A** (single-user local library, no service). One
+**hardening shipped**: `Store.forgetMemory` now refuses an empty selector (the `WHERE 1=1`
+mass-delete was unreachable via the public `forget()` guard, now also blocked at the store layer —
+regression test added). One **known issue, follow-up**: the optional `@xenova/transformers` chain
+carries `protobufjs` advisories (1 critical + 3 high) reachable only when parsing an ONNX model file
+— planned fix is the `@huggingface/transformers` (v4) swap (newer `onnxruntime`, drops the chain) +
+a pinned model revision; the deterministic BM25 core is unaffected.
+
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
 **slices 0–3 shipped** (walking skeleton · incremental git-aware indexing / hardened `kind`/`format`

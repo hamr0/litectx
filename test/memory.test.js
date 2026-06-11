@@ -100,6 +100,20 @@ test("forget never touches indexed files (only source='direct' rows)", async () 
   rmSync(root, { recursive: true, force: true });
 });
 
+test("forget refuses an empty selector — no path wipes all memory", async () => {
+  const root = fixtureRepo();
+  const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+  await ctx.remember("fact:keep1", "A durable fact that must not be wiped by an empty forget.", { kind: "fact" });
+  await ctx.remember("fact:keep2", "Another fact that must survive a selector-less forget call.", { kind: "fact" });
+  // the public wrapper guards the empty query...
+  assert.throws(() => ctx.forget({}), /needs at least/);
+  // ...and the store layer refuses it too (defense in depth — the `1=1` mass-delete is unexpressible).
+  assert.throws(() => ctx.store.forgetMemory({}), /refusing to delete all memory/);
+  assert.equal((await ctx.recall("fact that must survive", { kind: "fact", n: 10 })).length, 2, "both facts intact");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("the reconcile seam: written memory survives index() (scoped and full passes)", async () => {
   const root = fixtureRepo();
   const ctx = new LiteCtx({ root, dbPath: ":memory:" });

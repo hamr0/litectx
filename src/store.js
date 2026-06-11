@@ -367,10 +367,18 @@ export class Store {
     if (sel.id != null) (clauses.push("path = @id"), (params.id = sel.id));
     if (sel.kind != null) (clauses.push("kind = @kind"), (params.kind = sel.kind));
     if (sel.provenance != null) (clauses.push("provenance = @provenance"), (params.provenance = sel.provenance));
+    // Refuse an empty selector. With no clause the `mem` condition would degrade to `1=1` and wipe
+    // ALL written memory — a destructive default no caller should be able to ask for by omission.
+    // The public `forget()` wrapper already guards this; enforcing it here too means a bare selector
+    // is unexpressible at the store layer (defense in depth — the only "delete everything" is the
+    // explicit `reset()`).
+    if (clauses.length === 0) {
+      throw new Error("forgetMemory: a selector is required (id, kind, and/or provenance) — refusing to delete all memory");
+    }
     // both written-memory homes (§5.1): the stemmed `mem` table (facts/episodes — all direct by
     // construction) and `docs` rows guarded by source='direct' (directly-written docs only).
     const docsCond = ["source = 'direct'", ...clauses].join(" AND ");
-    const memCond = clauses.length ? clauses.join(" AND ") : "1=1";
+    const memCond = clauses.join(" AND ");
     const tx = this.db.transaction(() => {
       const paths = [
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM docs WHERE ${docsCond}`).all(params)),

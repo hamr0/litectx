@@ -4,6 +4,24 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **`Store.forgetMemory` now refuses an empty selector** (defense in depth). A selector-less bulk
+  forget degraded to `DELETE … WHERE 1=1` and wiped **all** written memory; the public `forget()`
+  wrapper already guarded this, and the store layer now enforces it too, so the destructive default
+  is unexpressible regardless of caller (the only "delete everything" is the explicit `reset()`).
+  Regression test added. Found in a security audit of the memory surface (2026-06-11); the path was
+  unreachable via the public API, so this hardens the lower layer rather than closing a live hole.
+
+### Known issues
+- The **optional** embeddings dependency `@xenova/transformers` pulls a transitive chain
+  (`onnxruntime-web` → `onnx-proto` → `protobufjs`) carrying known advisories (1 critical + 3 high,
+  all `protobufjs`), reachable only when the tier parses an ONNX **model file**. The deterministic
+  BM25 core — the library default, with graceful fallback everywhere — pulls none of it. Planned
+  fix: migrate the optional dep to the maintained `@huggingface/transformers` (v4), whose newer
+  `onnxruntime` drops that chain, and pin the model revision.
+
 ## [0.5.0] — 2026-06-11
 
 The semantic-by-default release. Embeddings now ship **ON by default on the CLI and MCP surfaces**
