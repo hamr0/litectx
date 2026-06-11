@@ -98,7 +98,7 @@ test("handshake is spec-shaped and tools/list exposes the public operations", as
   const list = await c.request("tools/list");
   assert.deepEqual(
     list.result.tools.map((/** @type {{name: string}} */ t) => t.name).sort(),
-    ["forget", "get", "impact", "index", "recall", "recent", "remember"],
+    ["forget", "get", "impact", "index", "promotions", "recall", "recent", "remember"],
     "MCP surface = library surface, nothing more"
   );
   for (const t of list.result.tools) assert.ok(t.description && t.inputSchema, `${t.name} is self-describing`);

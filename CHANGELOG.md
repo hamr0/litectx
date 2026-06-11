@@ -7,6 +7,23 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- **Slice 5b — `promotionCandidates()`: the episode promotion ladder (access-log tier).** Episodes
+  are the agent's ephemeral scratchpad (its own synthesized gotchas); they graduate by **use** into
+  durable facts. `promotionCandidates(threshold = 10)` returns agent-written `episode`s recalled at
+  least `threshold` times within a **30-day rolling window**, most-recalled first — the agent-side
+  first rung. The consumer's agent reads each (`get`), distils a `fact` via `remember(kind:'fact')`,
+  which then rides the existing `reviewCandidates(5)` → human-validate path (litectx **flags, never
+  summarizes** — no extraction LLM). The count gates **distillation, never ranking** (a hot episode
+  never rank-boosts — the §4 feedback loop stays forbidden; mirrors `reviewCandidates`, with a higher
+  default threshold since episodes are noisier). Two ephemerality rules keep the scratchpad bounded:
+  episodes >30 days **soft-decay** out of the candidate set, and each new episode `remember()`
+  **auto-prunes** (hard-deletes, cascading text/embedding/recall-log) episodes past the window —
+  self-bounding, no cron. Anything that mattered became a fact, and facts never prune, so nothing
+  earned is lost. Pruning runs *before* the write so an explicitly-authored (even backdated) episode
+  is always honored. Exposed on all three surfaces: `ctx.promotionCandidates()`, `litectx promotions
+  [--threshold <n>]`, and the MCP `promotions` tool. POC-first validated the ladder composes through
+  the real API (`poc/promotion-ladder-poc.mjs`); 5 integration tests (gate + 3 exclusions, threshold
+  asymmetry, self-prune cascade, full ladder, ranking isolation).
 - **Slice 5a — `recentActivity()`: the "what was I working on" view (access-log tier).** A new
   isolated read returning the code/doc chunks litectx most recently *witnessed* edited, newest
   first, within a recency window (`days` default 7, or an explicit `since`; `limit` default 20).

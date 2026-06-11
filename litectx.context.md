@@ -76,8 +76,9 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
+| **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
-| Episode promotion ladder · per-chunk trust/stability tie-breaker | 🚧 roadmap (access-log tier 5b/5c) |
+| Per-chunk trust/stability tie-breaker | 🚧 roadmap (access-log tier 5c) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
 > importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for
@@ -337,6 +338,28 @@ whose recall-hit count has crossed `threshold`, most-recalled first. The intende
 frequently-recalled facts do not rank higher (that would be a feedback loop; ranking
 weight is the 🚧 access-log tier, validated separately).
 
+### `ctx.promotionCandidates(threshold = 10)` → `{ path, hits }[]`
+The **episode promotion query** — the agent-side first rung of the ladder (`reviewCandidates`
+is the human-side second rung). Returns **agent-written `episode`s** recalled at least
+`threshold` times within the **30-day rolling active window**, most-recalled first. Episodes are
+the agent's *ephemeral scratchpad* (its own synthesized gotchas); they graduate by **use** into
+durable facts. The intended loop is **yours**: read each candidate (`get(id)`), then write a
+distilled `fact` — `remember(id, text, { kind: "fact", by: "agent" })` — which then rides the
+`reviewCandidates(5)` → human-validate path above. **litectx flags, never summarizes** (no
+extraction LLM): it gives the trigger; your agent writes the fact.
+
+The count gates **distillation, never ranking** — a hot episode does not rank higher (the
+feedback loop §4 forbids). Threshold defaults higher than facts' review (**10 vs 5**) because
+episodes are noisier and more numerous. Two ephemerality rules keep the scratchpad bounded:
+- **Soft-decay:** an episode older than 30 days drops out of this candidate set (the window gate).
+- **Auto-prune:** each new episode `remember()` hard-deletes episodes past the 30-day window
+  (cascading their text/embedding/recall-log) — self-bounding, no cron. Anything that mattered was
+  already distilled into a fact, and **facts never prune**, so nothing earned is lost.
+
+Unlike `reviewCandidates`, distilling does **not** remove the episode (there's no provenance to
+flip) — it ages out of the window, or you `forget(id)` it after distilling. Re-distilling is
+harmless: your fact `id` is a stable handle, so a second pass upserts the same fact.
+
 ### `ctx.recentActivity(opts?)` → `{ id, symbol, kind, lastEditedAt, edits }[]`
 **"What was I working on"** — the code/doc chunks litectx most recently *witnessed* being
 edited, newest first, within a recency window. `opts`: `days` (lookback, default 7),
@@ -392,6 +415,7 @@ litectx index [root] [--force] [--embeddings]
 litectx recall <query...> [--kind code|doc|fact|episode] [-n <n>] [--embeddings] [--no-log]
 litectx get <id> [--no-log]                    # metadata → stderr, body → stdout (pipes clean)
 litectx recent [--since <days>] [-n <n>]       # "what was I working on" — recent chunk-edits
+litectx promotions [--threshold <n>]           # hot agent episodes to distil into facts (default 10)
 litectx impact <symbol>
 litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
@@ -413,9 +437,9 @@ dependencies beyond litectx itself. Client config:
 ```
 
 `--embeddings` opts the spawned instance into the semantic tier. The tools are the public
-operations: `index`, `recall`, `impact`, `get`, `recent`, `remember`, `forget` — recall returns
-scored *pointers*, `get` fetches a body, `recent` lists witnessed chunk-edits, same contract as
-the lib. Tool failures come back
+operations: `index`, `recall`, `impact`, `get`, `recent`, `promotions`, `remember`, `forget` — recall
+returns scored *pointers*, `get` fetches a body, `recent` lists witnessed chunk-edits, `promotions`
+lists hot episodes to distil, same contract as the lib. Tool failures come back
 in-band (`isError` results an agent can read and self-correct); protocol errors are reserved
 for malformed JSON-RPC. **No `log: false` is exposed over MCP** — an MCP client is a live
 agent, which is precisely the demand the audit log exists to capture; non-demand consumers

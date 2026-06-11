@@ -956,6 +956,17 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
      green after; decoy-exclusion mutation-checked. 6 tests; recall bench byte-identical.
 
 **Next + post-v1 tiers:**
+- **Slice 5b (access-log tier) — `promotionCandidates()`: episode promotion ladder — ✅ SHIPPED
+  (2026-06-11).** Episodes (the agent's ephemeral scratchpad / synthesized gotchas) graduate by USE
+  into durable facts. `promotionCandidates(threshold=10)` = agent episodes recalled ≥ threshold within
+  a 30-day rolling window → the agent distils a fact → existing `reviewCandidates(5)` → human. Mirrors
+  `reviewCandidates` (kind='episode' + `occurred_at` window gate); flags, never summarizes; gates
+  distillation, never rank. Option A ephemerality (user-chosen): soft-decay at 30d + auto-prune on
+  episode write (hard-delete cascade, pruned before the write so explicit/backdated episodes are
+  honored), one knob, no count cap. All 3 surfaces. Key reframe: no ranking touch → no falsification
+  gate (a synthetic promotion oracle = the circularity trap), so the "scenario bench" is a scenario
+  integration test scripting the ladder, not a floored MRR bench; POC-first
+  (`poc/promotion-ladder-poc.mjs`) proved composition. 5 tests (126 total); tsc clean; gates untouched.
 - **Slice 5a (access-log tier) — `recentActivity()`: "what was I working on" — ✅ SHIPPED
   (2026-06-11).** The first access-log-tier slice, and the legitimate home of the witnessed-edit
   signal the bench POCs validated for *next-use* (AUC 0.79–0.97) but falsified for *recall re-ranking*
@@ -1445,7 +1456,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) shipped — 5b/5c next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) shipped — 5c next
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1508,9 +1519,25 @@ index.
      tree-sitter symbol-grain, fixing the git-funcContext bluntness the build POC surfaced); 9 tests
      (store-level windowing/order/grouping + end-to-end cold/edit/new-chunk/force/isolation/window),
      121 total; `tsc` clean; all prior gates untouched (no recall-path change).
-   - **5b — episode promotion ladder.** `promotionCandidates(threshold)` + the 30-day decay/GC; reuses
-     the `reviewCandidates` template and the existing kind/provenance model. Needs a hand-scripted
-     fact/episode action-signal scenario bench (no git oracle for "a fact was corrected").
+   - **5b — episode promotion ladder — ✅ SHIPPED (2026-06-11).** `promotionCandidates(threshold = 10)`
+     — agent-written `episode`s recalled ≥ threshold within a **30-day rolling window**, most-recalled
+     first. Mirrors `reviewCandidates` (same `recall_log` demand join, `'recall'`-only, `{path,hits}`)
+     with two deltas: `kind='episode'` + an `occurred_at >= now−30d` window gate. The ladder: agent
+     reads each candidate (`get`) → distils a `fact` (`by:agent`) via `remember` → rides the existing
+     `reviewCandidates(5)` → human-validate path. litectx **flags, never summarizes** (no extraction
+     LLM); the count gates **distillation, never ranking** (no feedback loop). **Ephemerality (Option A,
+     user-chosen over a 90-day + count-cap variant — "30 days is long enough to promote and prove,
+     one knob"):** episodes >30d soft-decay out of the candidate set, and each episode `remember()`
+     **auto-prunes** (hard-delete cascading text/embedding/recall-log) episodes past the window —
+     self-bounding, no cron; pruned *before* the write so an explicit/backdated episode is honored.
+     Anything that mattered became a durable fact (facts never prune). All 3 surfaces
+     (`promotionCandidates()` / `litectx promotions [--threshold]` / MCP `promotions`). **Reframing the
+     "scenario bench":** 5b touches no ranking, so there is no falsification gate (synthesising a
+     "deserved promotion" oracle would be the circularity trap §14 #4 warns of) — the honest validation
+     is a scenario **integration test** that scripts the ladder end-to-end, not a floored MRR bench.
+     POC-first proved the ladder composes through the real API (`poc/promotion-ladder-poc.mjs`); 5 tests
+     (gate + 3 exclusions, 10-vs-5 threshold asymmetry, self-prune cascade, full ladder, ranking
+     isolation), 126 total; `tsc` clean; recall/impact gates untouched.
    - **5c — trust/stability property.** Per-chunk volatility (churn on real edit history) + the
      validated/used tie-breaker among already-relevant results; bench-gated so it never becomes a
      global prior. (Cold-start is NOT what this tier solves — day-one recall is BM25 + spreading,

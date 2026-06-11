@@ -447,6 +447,57 @@ export class Store {
   }
 
   /**
+   * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s recalled at
+   * least `threshold` times whose `occurred_at` falls in the rolling active window `[since, now]`
+   * (older episodes have decayed out of the active set). Mirrors {@link reviewCandidates} exactly —
+   * same `recall_log` demand join, `'recall'`-only, same `{ path, hits }` shape — with two deltas:
+   * `kind='episode'` (not `'fact'`) and the `occurred_at >= since` window gate. The count gates
+   * DISTILLATION, never ranking (promotion changes an episode's downstream kind/trust, never its
+   * recall score — §14 #4). Threshold runs higher than facts' review (10 vs 5): episodes are noisier
+   * and more numerous.
+   * @param {{ threshold: number, since: number }} opts  `threshold` = min recall hits; `since` =
+   *   `occurred_at` floor (epoch ms) — the rolling-window cutoff.
+   * @returns {{ path: string, hits: number }[]}
+   */
+  promotionCandidates({ threshold, since }) {
+    return /** @type {{ path: string, hits: number }[]} */ (
+      this.db
+        .prepare(
+          "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
+            "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since AND r.action = 'recall' " +
+            "GROUP BY m.path HAVING hits >= @threshold ORDER BY hits DESC, m.path"
+        )
+        .all({ since, threshold })
+    );
+  }
+
+  /**
+   * Drop episodes older than `before` (slice 5b ephemerality, §14 #4 view #4) — the agent scratchpad
+   * is bounded by a rolling window: an episode that mattered was distilled into a durable `fact`
+   * (never pruned), so deleting the raw episode past the window loses nothing earned. Cascades to
+   * `mem_text` / embeddings / `recall_log` like {@link forgetMemory}. Called on each episode write
+   * (self-bounding — only episode writes grow the set, so that is where it's trimmed; no cron). Only
+   * ever touches `kind='episode'` rows. Returns rows removed.
+   * @param {number} before  `occurred_at` floor (epoch ms); episodes strictly older are deleted
+   * @returns {number}
+   */
+  pruneStaleEpisodes(before) {
+    const tx = this.db.transaction(() => {
+      const paths = /** @type {{ path: string }[]} */ (
+        this.db.prepare("SELECT path FROM mem WHERE kind = 'episode' AND occurred_at < ?").all(before)
+      ).map((r) => r.path);
+      if (!paths.length) return 0;
+      const removed = this.db.prepare("DELETE FROM mem WHERE kind = 'episode' AND occurred_at < ?").run(before).changes;
+      const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
+      for (const p of paths) (delText.run(p), delEmb.run(p), delLog.run(p));
+      return removed;
+    });
+    return tx();
+  }
+
+  /**
    * "What was I working on" (slice 5a, §14 #4 view #3): the chunks litectx witnessed edited most
    * recently, newest first, within `[since, now]`. Grouped per chunk (path + symbol): `lastEditedAt`
    * is the most recent edit, `edits` the number of distinct index passes (sessions) that changed it.

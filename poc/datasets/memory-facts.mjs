@@ -55,12 +55,17 @@ export default {
     { id: "fact:code-style", text: "The codebase is pure ESM JavaScript with JSDoc types; TypeScript is dev-only." },
     { id: "fact:testing-framework", text: "Tests run on node:test with integration tests against in-memory SQLite." },
   ],
+  // occurredAt is RELATIVE-to-now (a few days back, ordered), not a fixed date: since slice 5b,
+  // `remember(episode)` prunes episodes past the 30-day active window, so fixed past dates would
+  // silently age out and break the episode-exact queries below once the wall clock passed them.
+  // Recall never ranks on occurredAt, so the MRR/label gates are unaffected — this only keeps the
+  // corpus inside the active window, which is what "episodes an agent recently wrote" means anyway.
   episodes: [
-    { id: "ep:2026-06-04-poc-pass", text: "The recall POC passed on both repos; graph spreading beat plain BM25.", occurredAt: 1780531200000 },
-    { id: "ep:2026-06-05-slice4", text: "Shipped import edges and spreading; additive weight zero point three won on four repos.", occurredAt: 1780617600000 },
-    { id: "ep:2026-06-09-embeddings", text: "Shipped the embeddings tier; recall became async as a consequence.", occurredAt: 1780963200000 },
-    { id: "ep:2026-06-09-v010", text: "Published version zero one zero to npm through the OIDC trusted publishing workflow.", occurredAt: 1780963200000 },
-    { id: "ep:2026-06-10-write-path", text: "Shipped the write path; facts and episodes are now first class memory kinds.", occurredAt: 1781049600000 },
+    { id: "ep:2026-06-04-poc-pass", text: "The recall POC passed on both repos; graph spreading beat plain BM25.", occurredAt: Date.now() - 7 * 86_400_000 },
+    { id: "ep:2026-06-05-slice4", text: "Shipped import edges and spreading; additive weight zero point three won on four repos.", occurredAt: Date.now() - 6 * 86_400_000 },
+    { id: "ep:2026-06-09-embeddings", text: "Shipped the embeddings tier; recall became async as a consequence.", occurredAt: Date.now() - 3 * 86_400_000 },
+    { id: "ep:2026-06-09-v010", text: "Published version zero one zero to npm through the OIDC trusted publishing workflow.", occurredAt: Date.now() - 3 * 86_400_000 },
+    { id: "ep:2026-06-10-write-path", text: "Shipped the write path; facts and episodes are now first class memory kinds.", occurredAt: Date.now() - 2 * 86_400_000 },
   ],
   queries: [
     // ---- exact (shared content keywords; BM25 must deliver — the floored category) ----

@@ -81,6 +81,15 @@ const TOOLS = [
     },
   },
   {
+    name: "promotions",
+    description:
+      "Episode promotion candidates — agent-written episodes recalled past a threshold (default 10) within the last 30 days, i.e. the scratchpad notes worth distilling into durable facts. The intended loop is YOURS: read each (get its id), then write a distilled fact with remember(kind:'fact', by:'agent'). litectx only flags; it never summarizes. Returns { path, hits }; hits gates distillation, never ranking.",
+    inputSchema: {
+      type: "object",
+      properties: { threshold: { type: "number", description: "min recall hits to flag an episode (default 10)" } },
+    },
+  },
+  {
     name: "impact",
     description:
       "Blast radius for a symbol defined in the indexed repo: callers (called-by), callees, reference count, and a low/med/high change-risk bucket. Use before modifying a function to see what depends on it.",
@@ -135,6 +144,7 @@ async function callTool(name, a) {
     return JSON.stringify(item, null, 1);
   }
   if (name === "recent") return JSON.stringify(ctx.recentActivity({ days: a.days, limit: a.limit }), null, 1);
+  if (name === "promotions") return JSON.stringify(a.threshold ? ctx.promotionCandidates(a.threshold) : ctx.promotionCandidates(), null, 1);
   if (name === "impact") {
     const r = await ctx.impact(a.symbol);
     if (!r) throw new Error(`'${a.symbol}' is not defined in the index — run the index tool, or check the name`);

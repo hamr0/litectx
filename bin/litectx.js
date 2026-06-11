@@ -6,6 +6,7 @@
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--embeddings] [--no-log]
 //   litectx get <id> [--root <dir>] [--no-log]
 //   litectx recent [--root <dir>] [--since <days>] [-n <n>]
+//   litectx promotions [--root <dir>] [--threshold <n>]   # episodes to consider distilling into facts
 //   litectx impact <symbol> [--root <dir>]
 //   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--embeddings]
 //   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
@@ -16,12 +17,13 @@ import { LiteCtx, KINDS } from "../src/index.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, since: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, force: false, embeddings: false, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
     else if (rest[i] === "--since") opts.since = Number(rest[++i]);
+    else if (rest[i] === "--threshold") opts.threshold = Number(rest[++i]);
     else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
@@ -131,6 +133,19 @@ async function main() {
     return;
   }
 
+  if (cmd === "promotions") {
+    const ctx = new LiteCtx({ root: opts.root });
+    const rows = opts.threshold ? ctx.promotionCandidates(opts.threshold) : ctx.promotionCandidates();
+    ctx.close();
+    if (!rows.length) {
+      console.error("litectx: no promotion candidates — agent episodes recalled past the threshold (default 10) within the last 30 days; distil hot ones into facts");
+      return;
+    }
+    // hits \t episode-id — the agent reads each (get <id>) and distils a fact via remember
+    for (const r of rows) console.log(`${r.hits}\t${r.path}`);
+    return;
+  }
+
   if (cmd === "impact") {
     const symbol = opts.words[0];
     if (!symbol) fail("impact needs a symbol name");
@@ -188,7 +203,7 @@ function relAge(sec) {
 function fail(msg) {
   console.error(`litectx: ${msg}`);
   console.error(
-    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
+    "usage: litectx index [root] [--force] [--embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] | litectx forget <id> | --kind/--by   (all take --root <dir>)"
   );
   process.exit(1);
 }

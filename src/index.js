@@ -34,6 +34,16 @@ const QUERY_CACHE_CAP = 128; // LRU of query→vector so repeated queries skip r
 // an admission threshold only hurt (true-paraphrase cosines run low), so there is none.
 const KNN_K = 8;
 
+// Episode promotion ladder (slice 5b, §14 #4 view #4). Episodes are the agent's ephemeral
+// scratchpad; they graduate by USE into durable facts. ACTIVE_EPISODE_DAYS = the rolling window an
+// episode stays promote-eligible AND retained — older episodes self-prune on the next episode write
+// (anything that mattered was already distilled into a fact, which never prunes). 30 days is long
+// enough to promote-and-prove and keeps the set bounded with one knob (no count cap). The promote
+// threshold runs higher than facts' review (10 vs 5) — episodes are noisier and more numerous.
+const ACTIVE_EPISODE_DAYS = 30;
+const EPISODE_PROMOTE_THRESHOLD = 10;
+const DAY_MS = 86_400_000;
+
 /** Min–max normalise to [0,1] so BM25-spread scores and cosine compose on one scale. @param {number[]} a */
 function minmax(a) {
   const lo = Math.min(...a);
@@ -364,6 +374,12 @@ export class LiteCtx {
     const format = opts.format ?? (kind === "doc" ? "md" : "text");
     const occurredAt = kind === "episode" ? opts.occurredAt ?? Date.now() : null;
     const embedding = this.embeddings ? await this.embedder.embed(text) : undefined;
+    // slice 5b ephemerality: an episode write trims the scratchpad of PREVIOUSLY-accumulated episodes
+    // past the rolling active window (anything that mattered was distilled into a durable fact, which
+    // never prunes). Bounds the store with no cron; only episode writes grow the set, so that is where
+    // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
+    // explicit backdated occurredAt — is always honored, never deleted by its own write.
+    if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
     this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, embedding });
   }
 
@@ -393,6 +409,29 @@ export class LiteCtx {
    */
   reviewCandidates(threshold = 5) {
     return this.store.reviewCandidates(threshold);
+  }
+
+  /**
+   * Episode promotion candidates (§14 #4 view #4, slice 5b) — the agent-side first rung of the
+   * promotion ladder. Returns agent-written `episode`s recalled at least `threshold` times within the
+   * {@link ACTIVE_EPISODE_DAYS}-day rolling active window (older episodes have decayed out and
+   * self-prune on the next episode write). The intended loop is the **consumer's agent**: read each
+   * candidate (`get(id)`), distil a durable `fact` via `remember(id, text, { kind: "fact", by:
+   * "agent" })` — which then rides the existing `reviewCandidates(5)` → human-validate path. litectx
+   * **flags, never summarizes** (no extraction LLM): it supplies the trigger; the agent writes the
+   * fact. The count gates **distillation, never ranking** — a frequently-recalled episode does not
+   * rank higher (that would be the feedback loop §4 forbids). Threshold defaults higher than facts'
+   * review (10 vs 5): episodes are noisier and more numerous.
+   *
+   * Unlike `reviewCandidates` (where a human re-`remember` flips provenance and drops the row),
+   * distilling does not remove an episode — it stays a candidate until it ages out of the window (or
+   * the consumer `forget`s it post-distillation). Re-distilling is harmless: the agent's fact id is a
+   * stable handle, so a second pass upserts the same fact rather than duplicating it.
+   * @param {number} [threshold=10]
+   * @returns {{ path: string, hits: number }[]}
+   */
+  promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD) {
+    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS });
   }
 
   /**
