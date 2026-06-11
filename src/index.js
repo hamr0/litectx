@@ -360,7 +360,7 @@ export class LiteCtx {
    *
    * Sync (no embedder involved). Returns `null` for an unknown id.
    *
-   * @param {string} id  a written-memory id, or an indexed file's repo-relative path
+   * @param {string} id  a written-memory id, a stashed payload's id, or an indexed file's repo-relative path
    * @param {{ log?: boolean }} [opts]
    * @returns {Item | null}
    */
@@ -425,6 +425,24 @@ export class LiteCtx {
     if (typeof sel === "string") return this.store.forgetMemory({ id: sel });
     if (sel.kind == null && sel.by == null) throw new Error("forget(query) needs at least { kind } or { by }");
     return this.store.forgetMemory({ kind: sel.kind, provenance: sel.by });
+  }
+
+  /**
+   * Park a payload in the keyed agent-context store and return its handle — the durable half of
+   * **restorable compression** (R-C4). The caller drops a large payload (a tool result, a fetched
+   * page, a file dump) from its context window, keeping only the cheap handle (`id`); {@link get}
+   * rehydrates the full text on demand and {@link forget} evicts it when truly done. A stash is **not
+   * memory**: it is never indexed and never recalled (it lives in no FTS table, so recall can't
+   * surface it on any kind) and never auto-pruned — it is addressable only by exact `id`. Upsert by
+   * `id` (also the rehydrate/evict handle; namespace it, e.g. `"stash:toolresult-42"`). Sync — a
+   * stash is never embedded (it isn't meaning-searchable), which is the whole point.
+   *
+   * @param {string} id    caller-chosen handle / identity
+   * @param {string} text  the payload to park
+   * @returns {void}
+   */
+  stash(id, text) {
+    this.store.writeStash({ id, text, createdAt: Date.now() });
   }
 
   /**

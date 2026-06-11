@@ -21,7 +21,6 @@ export class Embedder {
     this.model = model;
     /** @type {any} */
     this._pipe = null;
-    this.dim = 0;
   }
 
   /** @returns {Promise<any>} the cached pipeline, importing the optional dep on first call */
@@ -54,21 +53,7 @@ export class Embedder {
     const pipe = await this._pipeline();
     const out = await pipe((text || " ").slice(0, HEAD_CHARS), { pooling: "mean", normalize: true });
     const v = Float32Array.from(/** @type {Iterable<number>} */ (out.data));
-    this.dim = v.length;
     return v;
-  }
-
-  /**
-   * Embed many texts (sequential — batching is a deferred indexing-throughput optimization, see
-   * poc/RESULTS.md). Returns vectors aligned with the input order.
-   * @param {string[]} texts
-   * @returns {Promise<Float32Array[]>}
-   */
-  async embedMany(texts) {
-    /** @type {Float32Array[]} */
-    const out = [];
-    for (const t of texts) out.push(await this.embed(t));
-    return out;
   }
 }
 

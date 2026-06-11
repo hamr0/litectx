@@ -6,6 +6,22 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **`stash(id, text)` — a keyed agent-context store (R-C4 restorable compression).** Park a large
+  payload (a tool result, a fetched page, a file dump) out of the context window keeping only the
+  cheap `id` handle; `get(id)` rehydrates it verbatim and `forget(id)` evicts it. A stash is **not
+  memory**: it lives in no FTS table, so `recall` never surfaces it (on any kind), it is **never
+  auto-pruned** (a restore always works), and it's reached only by exact id. The first citizen of the
+  "agent context" domain, kept structurally separate from the searchable memory core. Library API for
+  now (not yet wired to the CLI/MCP surfaces). 6 integration tests.
+
+### Changed
+- **Internal cleanup (no API or behavior change).** Removed dead `Embedder` members (`embedMany`,
+  `dim` — uncalled/unread, not part of the injectable-embedder contract). De-duplicated the
+  written-kind nominee path: `Store.knnCandidates` now reads each candidate's vector from its
+  existing `file_embeddings` join instead of issuing a second query, with the BLOB→Float32Array
+  decode shared via one `blobToVec` helper. Results byte-identical (KNN-union tests unchanged).
+
 ### Security
 - **`Store.forgetMemory` now refuses an empty selector** (defense in depth). A selector-less bulk
   forget degraded to `DELETE … WHERE 1=1` and wiped **all** written memory; the public `forget()`

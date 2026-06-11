@@ -1473,7 +1473,19 @@ mass-delete was unreachable via the public `forget()` guard, now also blocked at
 regression test added). One **known issue, follow-up**: the optional `@xenova/transformers` chain
 carries `protobufjs` advisories (1 critical + 3 high) reachable only when parsing an ONNX model file
 — planned fix is the `@huggingface/transformers` (v4) swap (newer `onnxruntime`, drops the chain) +
-a pinned model revision; the deterministic BM25 core is unaffected.
+a pinned model revision; the deterministic BM25 core is unaffected. A follow-on **code review of the
+memory surface** (same date) found no correctness bugs; two minor cleanups shipped — dead `Embedder`
+members removed, and a redundant vector fetch in `knnCandidates` de-duplicated (behavior byte-identical).
+
+**R-C4 stash() — restorable compression — SHIPPED (2026-06-11).** `stash(id, text)` parks a payload in
+a **keyed agent-context store** (a plain `stash` table — deliberately NOT FTS5): the agent drops a
+large tool result / fetched page / file dump from its window keeping only the `id` handle, then
+`get(id)` rehydrates it and `forget(id)` evicts it. A stash is **not memory** — never indexed, so
+`recall` can't surface it on any kind; never auto-pruned, so a restore always works (it survives the
+episode rolling-window prune); addressable only by exact id. It is the **first citizen of the "agent
+context" domain** (keyed working-set), kept structurally separate from the searchable memory core
+(`mem`/`docs`); future R-W3/R-W4/R-I3 get their own tables — not speculatively reserved (AGENT_RULES).
+Library API only for now (CLI/MCP exposure is a follow-up). 6 integration tests (`test/stash.test.js`).
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,

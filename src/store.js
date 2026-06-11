@@ -128,10 +128,29 @@ const SCHEMA = [
   // chunk; read recency-windowed. `symbol` nullable (same chunk identity as `nodes`).
   "CREATE TABLE IF NOT EXISTS chunk_edits(id INTEGER PRIMARY KEY, path TEXT NOT NULL, symbol TEXT, kind TEXT NOT NULL, ts INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS chunk_edits_ts ON chunk_edits(ts)",
+  // keyed agent-context store (R-C4 restorable compression): parked payloads the agent drops from its
+  // window and rehydrates by exact id. DELIBERATELY a plain table, not fts5 — a stash is never searched
+  // (so it can't pollute recall, on ANY kind) and never pruned (so restore always works); it is reached
+  // only by id via getItem and lives until an explicit forget. First citizen of the "agent context"
+  // domain (keyed working-set), kept separate from the searchable memory core (mem/docs). Future R-W3
+  // (session state) / R-W4 (notes) get their OWN tables; R-I3 summary / R-I1 scope are a cheap nullable
+  // ALTER on this plain table if/when built — not reserved here (we don't speculate; AGENT_RULES).
+  "CREATE TABLE IF NOT EXISTS stash(path TEXT PRIMARY KEY, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
 ];
 
 /** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
 export const MEM_KINDS = new Set(["fact", "episode"]);
+
+/**
+ * Reconstruct a stored embedding BLOB into a copied, 4-byte-aligned Float32Array — the copy means it
+ * never aliases SQLite's internal buffer.
+ * @param {Buffer} buf
+ * @returns {Float32Array}
+ */
+function blobToVec(buf) {
+  const u8 = Uint8Array.from(buf);
+  return new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4);
+}
 
 export class Store {
   /** @param {string} dbPath path to the SQLite file, or ":memory:" */
@@ -353,6 +372,21 @@ export class Store {
   }
 
   /**
+   * Park a payload in the keyed agent-context store (R-C4 restorable compression). Unlike written
+   * memory, a stash is NEVER indexed — it goes into no FTS table, so recall can't surface it on any
+   * kind — and NEVER pruned; it is addressable only by exact `id` (via {@link getItem}) and lives
+   * until an explicit {@link forgetMemory}. The durable half of "drop the payload, keep a handle":
+   * the agent clears a large tool result from its window and rehydrates it by id on demand. Upsert
+   * by `id`.
+   * @param {{ id: string, text: string, createdAt: number }} s
+   */
+  writeStash(s) {
+    this.db
+      .prepare("INSERT INTO stash(path, text, created_at) VALUES (@path, @text, @created_at) ON CONFLICT(path) DO UPDATE SET text = excluded.text, created_at = excluded.created_at")
+      .run({ path: s.id, text: s.text, created_at: s.createdAt });
+  }
+
+  /**
    * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
    * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
    * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
@@ -384,9 +418,16 @@ export class Store {
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM docs WHERE ${docsCond}`).all(params)),
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM mem WHERE ${memCond}`).all(params)),
       ].map((r) => r.path);
-      const removed =
+      let removed =
         this.db.prepare(`DELETE FROM docs WHERE ${docsCond}`).run(params).changes +
         this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
+      // stash (R-C4): the keyed agent-context table is outside the FTS homes and addressable by id
+      // only (no kind/provenance), so only an id selector reaches it. Push its path into `paths` so
+      // the cascade below cleans the 'fetch' recall_log rows a get(id) on it may have left.
+      if (sel.id != null) {
+        const s = this.db.prepare("DELETE FROM stash WHERE path = ?").run(sel.id).changes;
+        if (s) (removed += s), paths.push(sel.id);
+      }
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
@@ -555,7 +596,14 @@ export class Store {
           .prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = ? ORDER BY (source = 'direct') DESC LIMIT 1")
           .get(id)
     );
-    if (!row) return null;
+    if (!row) {
+      // stash fallback (R-C4): a parked payload lives in no FTS table, so the mem/docs lookups miss
+      // it — rehydrate it by id from the keyed agent-context store. kind='stash' is the discriminator
+      // only; it is absent from KINDS/MEM_KINDS, so recall never reaches it.
+      const s = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM stash WHERE path = ?").get(id));
+      if (!s) return null;
+      return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text };
+    }
     let text = null;
     if (row.source === "direct") {
       const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
@@ -809,10 +857,7 @@ export class Store {
     const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
       this.db.prepare(`SELECT path, vec FROM file_embeddings WHERE path IN (${ph})`).all(...paths)
     );
-    for (const r of rows) {
-      const u8 = Uint8Array.from(r.vec); // copy out of SQLite's buffer, guarantees 4-byte alignment
-      m.set(r.path, new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4));
-    }
+    for (const r of rows) m.set(r.path, blobToVec(r.vec));
     return m;
   }
 
@@ -843,16 +888,14 @@ export class Store {
    */
   knnCandidates(kind, qvec, k, exclude) {
     if (!MEM_KINDS.has(kind)) return [];
-    const rows = /** @type {{ path: string, kind: string, format: string }[]} */ (
+    const rows = /** @type {{ path: string, kind: string, format: string, vec: Buffer }[]} */ (
       this.db
-        .prepare("SELECT m.path, m.kind, m.format FROM mem m JOIN file_embeddings e ON e.path = m.path WHERE m.kind = ?")
+        .prepare("SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN file_embeddings e ON e.path = m.path WHERE m.kind = ?")
         .all(kind)
     );
-    const cands = rows.filter((r) => !exclude.has(r.path));
-    if (!cands.length) return [];
-    const vecs = this.getEmbeddings(cands.map((r) => r.path));
-    return cands
-      .map((r) => ({ r, cos: cosine(qvec, vecs.get(r.path)) }))
+    return rows
+      .filter((r) => !exclude.has(r.path))
+      .map((r) => ({ r, cos: cosine(qvec, blobToVec(r.vec)) }))
       .filter((c) => c.cos > 0)
       .sort((a, b) => b.cos - a.cos)
       .slice(0, k)

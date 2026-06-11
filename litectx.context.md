@@ -342,7 +342,20 @@ Delete directly-written memory. Returns the number of rows removed.
 
 **`forget` can never touch indexed files** — it operates only on written
 (`remember`-created) rows. To remove an indexed file from the store, delete the file and
-re-`index()`.
+re-`index()`. A stash (below) is also evicted by `forget(id)`.
+
+### `ctx.stash(id, text)` → `void`
+Park a payload in the **keyed agent-context store** — the durable half of *restorable compression*
+(R-C4). Drop a large payload (a tool result, a fetched page, a file dump) out of your context window,
+keep only the cheap `id`; `get(id)` rehydrates the full text on demand and `forget(id)` evicts it.
+
+- A stash is **not memory.** It lives in no FTS table, so `recall` **never** surfaces it — on any
+  kind — and it is **never auto-pruned** (unlike episodes), so a restore always works. Reachable only
+  by exact `id`.
+- Upsert by `id` (also the rehydrate/evict handle — namespace it, e.g. `"stash:toolresult-42"`).
+- Sync, and never embedded (a stash isn't meaning-searchable — that's the point).
+
+*(Library API for now; not yet exposed on the CLI / MCP surfaces.)*
 
 ### `ctx.reviewCandidates(threshold = 5)` → `{ path, hits }[]`
 The **human-in-the-loop promotion query** (review earned by use): agent-asserted facts
