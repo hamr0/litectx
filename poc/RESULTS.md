@@ -383,3 +383,166 @@ mechanism is the predicted one: in code, word-forms are distinct *symbols* (`tok
 even where MRR holds. In prose, forms are the same meaning — so written memory gets the full win.
 **→ Option (b): stem written memory only** (its own FTS table or per-kind routing), leaving the
 frozen code gates untouched. The schema change rides the next build slice.
+
+---
+
+# Post-slice-7 evidence (slice 11 + access-log tier + v0.5.0)
+
+The sections above are the original §11 gate and the v1 build POCs. The ledger below extends it
+with every POC run after the slice-7 write path: the KNN-union memory tier (slice 11), the
+access-log tier (5a/5b/5c), and the embeddings-by-default litmus (v0.5.0). Same standing rule
+applies — *adopt only if ≥ baseline on EVERY repo* — and it is what falsified two of these into
+**views/columns instead of ranking signals**. The benches are committed and runnable.
+
+## Slice 11 — KNN union earns the memory paraphrase tier — `knn-union-poc.mjs`
+
+**Question:** the memory bench (above) showed `para 0.000` and `morph 0.000` — BM25 cannot retrieve
+a fact a query shares no words with. Embeddings re-ranking can't fix it either: re-ranking only
+reorders the BM25-gated pool, and a zero-overlap paraphrase never *enters* the pool. Does letting
+cosine **nominate** (union the K nearest stored vectors into the pool, not just re-rank it) rescue
+paraphrase recall **without** hurting exact/morph?
+
+**Harness:** prototype the union inline (not in src/) over the committed `memory-facts` corpus, real
+`Xenova/all-MiniLM-L6-v2` model, sweep K (nominee count) × T (min-cosine admission threshold). Union
+mirrors the eventual `src/index.js` `_rankKind` fusion: `pool = FTS-gated dual` ∪ `top-K stored
+vectors by cosine ≥ T not already in pool`, fused `minmax(dual) + 1.0·minmax(cosine)`.
+
+**Result — PASS, the paraphrase half is recovered with exact/morph held:**
+
+| category | BM25 core | KNN union | meaning |
+|---|---|---|---|
+| exact | 1.000 | **1.000** | held — nomination never displaces a shared-keyword hit |
+| morph | 0.722* | **0.889** | inflectional variants lifted (* stemmed-memory baseline, option (b)) |
+| para  | **0.000** | **0.574** | P@3 83% — the zero-overlap case BM25 structurally can't reach |
+
+**Verdict + build decisions locked:** cosine **nominates** for `fact`/`episode` (not just re-ranks),
+which is the whole point — the lift is impossible under re-rank-only. The sweep found **no admission
+threshold T earns its keep** (any T>0 dropped a real paraphrase before it lifted a wrong one), so the
+shipped boundary is **`cos > 0` admits**, `KNN_K = 8`. Strictly-positive-cosine-only, BM25-gated for
+exact/morph (cosine never gates *those*). Shipped in slice 11 (v0.3.0); `--embeddings` bench is
+gated-when-it-runs and mutation-checked.
+
+## Access-log tier — base-level activation: real *next-edit* signal, but NOT a recall term
+
+This is the term §4 (Slice-4 Step-0) deferred as "git-only base-level is repo-dependent." The
+access-log tier revisits it with a *real* signal (witnessed edits, git-replayed as the cold-bench
+proxy) and splits one question into two: does the full ACT-R formula predict anything, and may it
+touch recall ranking?
+
+### (a) The formula DOES predict next-edit — `edit-bind-poc.mjs`
+
+**Question (PRD §14 #4 / §11.3):** was base-level activation falsified because the *idea* is bad, or
+because the POC rebuilt it as a crude half-formula (recency-only, no `count·t^−d` bucketing — the
+borrow-ledger §2/§3 thesis)? Non-circular git-replay oracle: walk commits in time order; at commit
+N score every previously-seen file by activation from edits in commits `< N`, measure how well each
+scorer ranks the files actually edited in commit N (rank-AUC; 0.5 = chance).
+
+**Result:** `BLA > recency > freq > 0.5`, **AUC ≈ 0.79–0.97** across repos. The full aurora
+`base_level.py` formula (bucketed `ln(Σ count·age^−d)`) **is a real next-use predictor** — the
+original falsification was the half-implementation, exactly as the ledger argued. The idea is
+vindicated *for predicting the next edit*.
+
+### (b) …but it must NOT re-rank recall — ships at zero — `access-bench.mjs`
+
+**Question:** can that validated edit-activation be folded into **recall** ranking as a term?
+Non-circular: relevance labels are the committed recall ground truth; activation comes from real git
+edit history, independent of them. Re-rank the recall pool by `norm(recallScore) + w·norm(editBLA)`,
+sweep `w ∈ {0,0.1,0.2,0.3,0.5}` on aurora/gitdone/litectx. **Safety gate (the §7.2 asymmetry —
+pollution is the danger): no swept weight may drop MRR below the recall baseline; a lift is reported,
+never required.**
+
+**Result — the edit-bind ships at ZERO.** Best MRR is at **w = 0** on the repos; any positive weight
+is flat-to-negative and **repo-dependent**. The mechanism is plain: edit-recency answers "what was I
+*touching*," which is **topic-blind** — the file you edited last is rarely the file a *query about a
+concept* wants. AUC-for-next-edit (a) and MRR-for-relevance (b) are different questions, and the
+signal only wins the first.
+
+**Verdict:** base-level activation as a **recall ranking term stays OUT** (the §4 deferral becomes
+permanent for recall). The validated next-edit signal instead powers an **isolated read view** —
+`recentActivity()` (5a) over a `chunk_edits` table — never search scoring. This is the access-log
+tier's core finding: *re-ranking recall by the edit log ships at zero; surfacing the edit log as its
+own view ships real value.*
+
+## Access-log tier 5a/5b — the read views compose through the public API
+
+**`recent-activity-eyeball.mjs` (5a):** runs `recentActivity()` through the real pipeline on a real
+repo by materializing two committed snapshots (oldRef→newRef) into a temp dir and letting `index()`
+witness the span as one edit pass. Confirms the finding-#2 fix — litectx's **tree-sitter chunks give
+clean symbol-grain rows** (the function/section actually edited), unlike the original git-funcContext
+POC that returned class-level spans for code and random prose for md. Isolated from recall by
+construction (reads the edit log, not the ranker).
+
+**`promotion-ladder-poc.mjs` (5b):** proves the episode→fact promotion ladder **composes through the
+shipped public API before any src/ method is added.** The new `promotionCandidates` query (hot, fresh,
+`provenance='agent'`, 30-day soft-decay floor on `occurred_at`) is run inline and shown to select
+exactly the hot/fresh/agent episode while excluding warm/stale/human; the downstream rungs
+(`remember` → real `reviewCandidates`) use only shipped API, and "acting on a candidate removes it
+from the set" holds (a human re-`remember` flips provenance off `agent`). **PASS** — the rung hands
+off cleanly into what exists. Shipped as 5b.
+
+## 5c trust columns — the tie-break is bench-FALSIFIED → surfaced, not scored
+
+The 5c premise was a **trust/stability tie-break** among already-relevant results (more-stable /
+human-verified / more-used first). A tie-break is weaker than a re-rank — it only reorders hits whose
+relevance is (near-)equal, so it can't cross a relevance gap by construction. Two POCs killed even
+that, on both halves of the store.
+
+**Code side — `trust-tiebreak-poc.mjs`:** churn (git commit count, total + 90-day) as the stability
+proxy; sweep the tie-band `ε ∈ {0, 0.02, 0.05, 0.1, 0.2}` (fraction of per-query score range),
+stable-first inside each band. **Result:** at **ε = 0** (pure exact-score tie) it's a **no-op — code
+files almost never tie on BM25** (distinct identifiers → distinct scores). Any **ε > 0** turns it
+into a soft re-rank that is **repo-dependent pollution** (the same failure class as git-seeded BLA).
+There is no band where stable-first safely helps.
+
+**Facts side — `trust-facts-poc.mjs`:** the facts half has its own ranking domain (the stemmed `mem`
+table) and different trust signals (provenance human>agent, recall `use`); no stability signal exists
+(no chunks → no churn). Two questions: **(1) empirical** — do short prose facts even *tie* on BM25
+often enough for an exact-tie rule to fire? They largely **don't**. **(2) policy** — when they do,
+does "human-verified first, then more-used" order them well? **No — it buries better-matching
+answers**: provenance is *validation, not quality* (an agent fact can be the better answer), and
+`use = 0` is a **fresh win, not a demerit** (a brand-new fact hasn't been recalled yet).
+
+**Verdict:** the trust/stability tie-break is **falsified as a ranking mechanism**. 5c ships the
+exact same signals as **surfaced columns** on written-memory hits — `provenance` / `use` /
+`occurredAt` — for the agent to weigh, with **ranking left as pure relevance**. "Surfaced, not
+scored." (Access-log tier complete: 5a view, 5b ladder, 5c columns — all ship; none touch the
+ranker.)
+
+## v0.5.0 — embeddings-by-default litmus — `recall-litmus{,-repos,-expand}.mjs`
+
+**Question:** embeddings shipped opt-in (off by default). Should the **CLI/MCP surfaces** flip it
+**on by default**, or can the always-present agent LLM substitute for it via **query expansion** (so
+the dep/model cost isn't worth a default)? Three committed harnesses, the standing evidence base for
+the v0.5.0 decision.
+
+**(1) `recall-litmus.mjs` — litectx self-queries, naive vs LLM-expanded, BM25 vs emb sweep.** Eight
+`src/` targets on this repo with `poc/`+`test/` as distractors. The weak spot reproduces: a fuzzy
+prose query ("knn union") lets keyword-dense poc/test chunks **outrank the real `src/`
+implementation** under the lexical core. Embeddings and expansion both fix it.
+
+**(2) `recall-litmus-repos.mjs` — aurora/gitdone existing labeled queries, BM25-off vs emb sweep**
+(through the real shipped `recall()` path, n=10):
+
+| repo | BM25 | embeddings (w=1.0) | Δ MRR | misses |
+|---|---|---|---|---|
+| aurora | 0.543 | **0.758** | +0.215 | ~4 → 1 |
+| gitdone | 0.411 | **0.644** | +0.233 | ~4 → 1 |
+
+A big, consistent lift on natural-language code queries; P@1 ~doubles. **`w = 1.0`** (the shipped
+default) is best — no recalibration needed.
+
+**(3) `recall-litmus-expand.mjs` — +LLM-expansion arm.** Free in-agent query expansion (domain
+synonyms + likely identifiers, authored from intent, not from reading the targets) **recovers
+~90–95% of the embeddings lift and erases the misses** — but it is **non-binding**: an agent *may
+skip it*, and the author had prior repo exposure (an optimistic ceiling). So expansion is a real
+mitigation but not a floor.
+
+**Verdict (v0.5.0):** embeddings is the **reliable accuracy floor** that doesn't depend on the agent
+remembering to expand; the memory paraphrase half (0.000→0.574, slice 11) is near-essential and has
+*no* lexical substitute. So the **agent-facing surfaces (CLI + MCP) default embeddings ON**
+(`--no-embeddings` opts out), while the **library `LiteCtx` default stays `false`** so lib consumers,
+all tests, and the BM25 gates remain byte-identical. `@xenova/transformers` → `optionalDependency`
+(auto-installed best-effort, graceful BM25 fallback if absent). The earlier "15–19s cold latency" was
+aurora's mis-borrowed torch figure — measured transformers.js/ONNX is **~2.1s first download · ~0.72s
+cached · ~6ms warm**, model **~23 MB**; the real cost is the dep + index-time embedding, not query
+latency.
