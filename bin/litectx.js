@@ -55,7 +55,7 @@ async function main() {
     const ctx = new LiteCtx({ root: opts.root, embeddings: opts.embeddings });
     if (ctx.size() === 0) console.error("warning: index is empty — run `litectx index` first");
     /** @param {import("../src/store.js").Hit} h */
-    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtChunk(h.chunk)}${fmtGit(h.git)}`);
+    const line = (h) => console.log(`${h.score.toFixed(2)}\t${h.kind}/${h.format}\t${h.path}${fmtChunk(h.chunk)}${fmtGit(h.git)}${fmtMem(h)}`);
     if (opts.kind) {
       // one kind → flat ranked list
       (await ctx.recall(query, { kind: opts.kind, n: opts.n, log: opts.log })).forEach(line);
@@ -189,6 +189,21 @@ function fmtChunk(c) {
 function fmtGit(g) {
   if (!g) return "";
   return `\tgit:${g.commits}c${g.lastCommit ? `/${relAge(g.lastCommit)}` : ""}`;
+}
+
+/**
+ * Render written-memory grounding (slice 5c) as a trailing column — validation status, recall-use, and
+ * episode age. Surfaced for the reader to DECIDE; NEVER scored (ranking stays pure relevance). Absent
+ * on indexed files (provenance/use undefined). `use:0` is meaningful — a fresh memory, not a demerit.
+ * @param {import("../src/store.js").Hit} h
+ */
+function fmtMem(h) {
+  if (h.provenance == null && h.use == null) return "";
+  const parts = [];
+  if (h.provenance) parts.push(h.provenance);
+  if (h.use != null) parts.push(`use:${h.use}`);
+  if (h.occurredAt) parts.push(relAge(h.occurredAt / 1000));
+  return parts.length ? `\t${parts.join(" ")}` : "";
 }
 
 /** @param {number} sec unix seconds of last commit @returns {string} coarse age (m/h/d) */

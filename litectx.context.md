@@ -78,7 +78,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
-| Per-chunk trust/stability tie-breaker | 🚧 roadmap (access-log tier 5c) |
+| **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
+| Trust/stability as a recall *tie-breaker* (use/churn/provenance → search order) | ⊘ dropped (POC-falsified — no-ops on exact ties, pollutes on any band, and buries fresh/better matches; trust ships as columns, ranking stays pure relevance — slice 5c) |
 
 > `recall` ranks by **BM25 + 1-hop additive import-spreading**, kind-scoped (a hit imported by /
 > importing a strong hit is lifted, never taxed). This is the v1 default and the robust ceiling for
@@ -104,6 +105,7 @@ const hits = await ctx.recall("where do we validate the auth token?", { kind: "c
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
 const facts = await ctx.recall("jwt auth", { kind: "fact" });
+// fact/episode hits also carry provenance/use/occurredAt — surfaced for you to weigh, never scored
 ctx.get("fact:auth-uses-jwt")?.text;                  // the body itself (recall returns ranked pointers)
 ctx.forget("fact:auth-uses-jwt");                     // by key; or forget({ by: "agent" }) in bulk
 ctx.close();
@@ -201,11 +203,23 @@ return shape follows the `kind` argument:
   score: number,   // higher = more relevant (BM25 + additive import-spreading)
   git: { commits: number, lastCommit: number|null } | null,  // activity metadata; null = no history
   chunk: { symbol: string|null, nodeType: string,            // the best-matching chunk INSIDE the
-           startLine: number, endLine: number } | null }     // hit — a function pointer, not just a file
+           startLine: number, endLine: number } | null,      // hit — a function pointer, not just a file
+  // written-memory grounding (slice 5c) — present on fact/episode hits, absent on indexed files:
+  provenance?: "human" | "agent",  // validation status (signed-off vs the agent's own assertion)
+  use?: number,                    // recall-demand count ('recall' rows only); a fresh memory reads 0
+  occurredAt?: number|null }       // episode timestamp (epoch ms); null for facts
 ```
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
 > from one `git log` pass at index time. It never affects ranking; `null` means no commit history
 > (a non-git tree, or a tracked-but-uncommitted file).
+>
+> `provenance` / `use` / `occurredAt` (slice 5c) are the **written-memory analog of `git` — surfaced,
+> never scored.** Ranking stays pure relevance; these columns are for the *caller* to weigh. Two
+> deliberate non-signals: `provenance` is a **validation** axis, not quality (an `agent` fact may be
+> perfectly true, awaiting human review — it is not "worse" than a `human` one), and `use: 0` marks a
+> fresh memory, **not** a demerit. Ranking on either would be a who-said-it / popularity prior, which
+> the access-log POCs falsified (a trust/use tie-break can't reorder safely and buries better-matching
+> or fresh answers). They're absent on indexed-file hits — a file is not a claim awaiting validation.
 > `chunk` is **chunk-granular recall**: the function / method / md-section inside the file that
 > best carries your query terms (0-based inclusive lines). It **localizes, never reorders** —
 > ranking stays file-level and bench-identical. The most *specific* match wins: a class that

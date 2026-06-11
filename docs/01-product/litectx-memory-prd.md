@@ -1456,7 +1456,7 @@ package** (§7).
 
 ---
 
-## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) shipped — 5c next
+## 15. Status: read surface + write path + chunk-granular recall + `get(id)` body access + MCP/CLI surfaces + KNN union (slices 0–11, v0.3.0 published) + access-log tier 5a (`recentActivity`) + 5b (`promotionCandidates`) + 5c (trust columns) shipped — access-log tier COMPLETE
 
 Discovery done; **POC passed** (§11, 2026-06-04; harness + writeup in `poc/`); **build underway**.
 This doc lives in the `litectx` repo — name reserved as `litectx@0.0.1` on npm, Apache-2.0, public,
@@ -1497,8 +1497,11 @@ index.
    forms — `poc/access-bench.mjs`) **falsified activation-into-recall**, so the tier is re-scoped to
    four parts, all on the safe side of "use → trust/stability/a-separate-view, never a global rank
    boost": **(1)** search ranking **untouched** (BM25 + stemming + KNN); **(2)** a **trust/stability**
-   property (use + low chunk-edit + human validation; recall-count → review/promotion, at most a
-   tie-breaker among already-relevant, never a global lift); **(3)** a separate **"what was I working
+   property — scoped by the 5c POCs to **surfaced columns, NOT a tie-break**: provenance + use +
+   occurredAt ride along on written-memory hits for the agent to weigh, while ranking stays pure
+   relevance (the tie-break was bench-falsified — it no-ops on exact ties and pollutes on any band,
+   and trust/popularity buries fresh or better-matching answers; recall-count still drives
+   review/promotion, never rank — 5c); **(3)** a separate **"what was I working
    on"** view over recent episodes + chunk-edits (the legitimate home of the next-use signal — its own
    answer, never a recall prior); **(4)** the **episode life-cycle** — `promotionCandidates(10)` (NEW,
    mirrors `reviewCandidates`) flags hot agent-episodes → the consumer's agent distils a `fact` →
@@ -1538,10 +1541,32 @@ index.
      POC-first proved the ladder composes through the real API (`poc/promotion-ladder-poc.mjs`); 5 tests
      (gate + 3 exclusions, 10-vs-5 threshold asymmetry, self-prune cascade, full ladder, ranking
      isolation), 126 total; `tsc` clean; recall/impact gates untouched.
-   - **5c — trust/stability property.** Per-chunk volatility (churn on real edit history) + the
-     validated/used tie-breaker among already-relevant results; bench-gated so it never becomes a
-     global prior. (Cold-start is NOT what this tier solves — day-one recall is BM25 + spreading,
-     already gated; git-seeding falsified, §14 #1.)
+   - **5c — trust columns (the tie-break, bench-falsified → surfaced not scored) — ✅ SHIPPED
+     (2026-06-11).** The premise was a trust/stability tie-break among already-relevant results (use +
+     low churn + human-verified). **Two POCs killed it AS RANKING and reshaped the slice into pure
+     exposure.** `poc/trust-tiebreak-poc.mjs` (code-side stability): a pure exact-score tie-break is a
+     measured **no-op** (code files almost never tie — 0/20 gitdone, 0/7 litectx, 2/22 aurora, none
+     moving a target), and **any** band-widening is repo-dependent pollution (aurora 0.552 → 0.222,
+     below floor at the first band; gitdone/litectx lift) — the same every-corpus failure as
+     git-seeding (§4.1) and edit→recall. `poc/trust-facts-poc.mjs` (facts-side): facts don't
+     exact-tie either (0/4), **and** forcing trust-first actively *harms* — a better-worded agent fact
+     (BM25 3.11) rightly outranks a human one (1.44), so "human-first" would bury the better answer.
+     The reframe that settled it: `provenance` is a **validation** axis, not a quality one (an agent
+     fact may be perfectly true, awaiting HITL); `use` is demand, and a fresh effective memory has
+     use 0 — ranking on either is a who-said-it / popularity prior, the exact global-prior harm §14 #4
+     forbids. **So trust ships as COLUMNS, never a score:** written-memory recall hits now carry
+     `provenance` (human/agent), `use` (`'recall'` demand count, fetch-toll excluded), and `occurredAt`
+     (episodes) — the written-memory analog of the `git` grounding field (displayed, never scored).
+     Ranking stays pure relevance (BM25 + spreading); the agent reads the columns and decides per need,
+     litectx never editorialises via rank. `attachMemMeta` (one batched `mem ⋈ recall_log` query) runs
+     on mem-kind hits only — code/doc carry nothing (a file is not a claim). The per-chunk churn signal
+     stays in `recentActivity` (5a), **not** on recall (the bench's verdict). All 3 surfaces (hit
+     fields · `litectx recall` trailing column · MCP `recall` hits + tool-desc). 5 tests
+     (columns present/correct · `use` counts recall-only · the **never-reorder** guarantee · episode
+     `occurredAt` · code carries nothing), mutation-checked; 131 total; `tsc` clean; recall / memory /
+     impact benches **byte-identical**. Standing gates: `poc/trust-tiebreak-poc.mjs`,
+     `poc/trust-facts-poc.mjs`. (Cold-start is not what this tier solves — day-one recall is BM25 +
+     spreading, already gated; git-seeding falsified, §14 #1.)
 
 **Competitor borrows (2026-06-11 survey of the "code-graph MCP" wave — codebase-memory-mcp /
 codegraph / codegraph-rust). None is due before the access-log tier; full grounding in §7, §7.2,

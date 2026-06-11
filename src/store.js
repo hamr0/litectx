@@ -47,6 +47,15 @@ import { cosine } from "./embedder.js"; // pure math — the ML dep stays lazy i
  * @property {ChunkRef | null} [chunk]  the best-matching chunk inside the hit (function pointer >
  *                            file pointer); null when nothing localizes — written memory has no
  *                            chunks (the row IS the unit), and a path-only match names none
+ * @property {string|null} [provenance]  written memory only (slice 5c): "human" | "agent" — the
+ *                            VALIDATION status (signed-off vs the agent's own assertion), NOT a quality
+ *                            signal and NEVER scored: an agent fact may be perfectly true, awaiting HITL.
+ *                            Surfaced for the caller to decide; absent on indexed files (not a claim).
+ * @property {number} [use]   written memory only (slice 5c): recall-demand count ('recall' rows only —
+ *                            fetches excluded, the fetch-toll). Surfaced, NEVER ranked — a fresh effective
+ *                            memory has use 0, so ranking on it would be a popularity prior (§14 #4).
+ * @property {number|null} [occurredAt]  written memory only (slice 5c): episode timestamp (epoch ms);
+ *                            null for facts; absent on indexed files.
  */
 
 const SCHEMA = [
@@ -122,7 +131,7 @@ const SCHEMA = [
 ];
 
 /** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
-const MEM_KINDS = new Set(["fact", "episode"]);
+export const MEM_KINDS = new Set(["fact", "episode"]);
 
 export class Store {
   /** @param {string} dbPath path to the SQLite file, or ":memory:" */
@@ -737,6 +746,38 @@ export class Store {
     );
     const m = new Map(rows.map((r) => [r.path, { commits: r.commits, lastCommit: r.last_commit }]));
     for (const h of hits) h.git = m.get(h.path) ?? null;
+    return hits;
+  }
+
+  /**
+   * Attach written-memory grounding columns to a result set, in place (slice 5c, §15): `provenance`
+   * (human/agent VALIDATION status), `use` (recall-demand count — 'recall' rows only, the fetch-toll),
+   * and `occurredAt` (episode timestamp). The written-memory analog of {@link attachGit}: metadata the
+   * caller reads to DECIDE, never a ranking input. Ranking stays pure relevance — the trust/use
+   * tie-break was bench-falsified (it can't safely reorder, and forcing trust/popularity buries fresh
+   * or better-matching answers; §14 #4 / §15 5c). Only `mem`-table rows (facts/episodes) match; file
+   * and doc-from-disk hits are left untouched (a file is not a claim awaiting validation). One batched
+   * query (mem LEFT JOIN recall_log) over the hit paths.
+   * @param {Hit[]} hits
+   * @returns {Hit[]}
+   */
+  attachMemMeta(hits) {
+    if (!hits.length) return hits;
+    const ph = hits.map(() => "?").join(",");
+    const rows = /** @type {{ path: string, provenance: string|null, occurred_at: number|null, use: number }[]} */ (
+      this.db
+        .prepare(
+          "SELECT m.path, m.provenance, m.occurred_at, count(r.id) AS use FROM mem m " +
+            "LEFT JOIN recall_log r ON r.path = m.path AND r.action = 'recall' " +
+            `WHERE m.path IN (${ph}) GROUP BY m.path`
+        )
+        .all(...hits.map((h) => h.path))
+    );
+    const meta = new Map(rows.map((r) => [r.path, r]));
+    for (const h of hits) {
+      const m = meta.get(h.path);
+      if (m) (h.provenance = m.provenance), (h.use = m.use), (h.occurredAt = m.occurred_at);
+    }
     return hits;
   }
 

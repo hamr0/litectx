@@ -7,6 +7,24 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- **Slice 5c — trust columns on written-memory recall hits (access-log tier, view #2).** Fact/episode
+  hits now carry `provenance` (`human`/`agent`), `use` (`'recall'` demand count, fetches excluded), and
+  `occurredAt` (episode timestamp) — the written-memory analog of the `git` grounding field:
+  **surfaced for the caller to weigh, never scored.** Ranking stays pure relevance (BM25 + spreading),
+  byte-identical on every bench. The original plan — a trust/stability *tie-breaker* — was **falsified
+  by two POCs** and re-scoped to exposure: `poc/trust-tiebreak-poc.mjs` showed code-side stability
+  no-ops on exact ties (code files almost never tie) and pollutes repo-dependently on any band (aurora
+  0.552→0.222), and `poc/trust-facts-poc.mjs` showed facts don't tie either *and* that forcing
+  trust-first buries a better-worded answer (a stronger-BM25 `agent` fact rightly outranks a `human`
+  one). The reframe: `provenance` is a **validation** axis, not quality (an agent fact may be true,
+  awaiting HITL), and a fresh effective memory has `use: 0` — ranking on either is a who-said-it /
+  popularity prior. So litectx hands the agent the columns and never editorialises via rank;
+  recall-count still drives `reviewCandidates`/`promotionCandidates`, never search order. Exposed on
+  all three surfaces (hit fields · `litectx recall` trailing column · MCP `recall` hits + tool-desc).
+  The per-chunk churn signal stays in `recentActivity` (5a), not on recall. 5 integration tests
+  (columns present/correct, `use` counts recall-only, the never-reorder guarantee, episode
+  `occurredAt`, code carries nothing), mutation-checked. **The access-log tier (5a/5b/5c) is now
+  complete.**
 - **Slice 5b — `promotionCandidates()`: the episode promotion ladder (access-log tier).** Episodes
   are the agent's ephemeral scratchpad (its own synthesized gotchas); they graduate by **use** into
   durable facts. `promotionCandidates(threshold = 10)` returns agent-written `episode`s recalled at

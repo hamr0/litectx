@@ -9,7 +9,7 @@
 
 import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
-import { Store } from "./store.js";
+import { Store, MEM_KINDS } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
@@ -251,6 +251,7 @@ export class LiteCtx {
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
       const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec), terms);
+      if (MEM_KINDS.has(opts.kind)) this.store.attachMemMeta(hits); // slice 5c: surface provenance/use/occurredAt — read, never scored
       if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
       return hits;
     }
@@ -260,7 +261,10 @@ export class LiteCtx {
     const n = opts.n ?? 5;
     /** @type {Record<string, import("./store.js").Hit[]>} */
     const grouped = {};
-    for (const k of kinds) grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
+    for (const k of kinds) {
+      grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
+      if (MEM_KINDS.has(k)) this.store.attachMemMeta(grouped[k]); // slice 5c: written-memory columns (read, never scored)
+    }
     if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
     return grouped;
   }
