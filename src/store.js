@@ -7,6 +7,16 @@ import Database from "better-sqlite3";
 import { indexBody, splitIdent } from "./tokenize.js";
 import { cosine } from "./embedder.js"; // pure math — the ML dep stays lazy inside Embedder
 
+// R-I3 peek: a fixed head+tail preview budget, in characters. Head+tail (not head-only) because for the
+// payloads stash holds — logs, traces, tool results — the conclusion lives at the END (the failing frame,
+// the exit code, the closing structure). The win is a BOUNDED RESULT: the caller gets ~head+tail bytes,
+// never the whole blob, so the payload stays out of its context/token budget. NOTE it is *not* a DB-time
+// win — SQLite materializes the column to run substr/length, so peek's local compute scales with payload
+// (measured: ~comparable to getItem, slower past a few MB). A true O(1) peek would need the byte length
+// stored at write time (deferred column). NOT the R-C7 anomaly-keep (full scan → stays in C7).
+const STASH_HEAD = 160;
+const STASH_TAIL = 80;
+
 /**
  * @typedef {Object} DocRow
  * @property {string} path    repo-relative file path
@@ -384,6 +394,34 @@ export class Store {
     this.db
       .prepare("INSERT INTO stash(path, text, created_at) VALUES (@path, @text, @created_at) ON CONFLICT(path) DO UPDATE SET text = excluded.text, created_at = excluded.created_at")
       .run({ path: s.id, text: s.text, created_at: s.createdAt });
+  }
+
+  /**
+   * Peek a stashed payload (R-I3 handle / lazy-load): a lightweight head+tail preview of a parked blob
+   * WITHOUT rehydrating it. Returns the `head` (first {@link STASH_HEAD} chars), the `tail` (last
+   * {@link STASH_TAIL} chars — empty unless the middle is actually elided), the true byte `bytes`, and
+   * the parked-at timestamp — all computed in SQL via first-N / last-N `substr` + `length(CAST(text AS
+   * BLOB))`. The win is the BOUNDED RESULT: only ~head+tail bytes cross back to the caller, so the
+   * payload stays out of its context/token budget (the point of a lazy-load handle). It is *not* a
+   * DB-time win — SQLite reads the full column to slice it, so peek's compute scales with payload size.
+   * Head+tail because a payload's conclusion (exit code, failing frame, closing structure) lives at the
+   * end. `bytes` is the OCTET length, not `length(text)` (chars — wrong for multibyte). `truncated`
+   * flags that the preview omits a middle span; the full body is one {@link getItem} away. Stash-only —
+   * recall owns ranked retrieval over memory. Null for an unknown id.
+   * @param {string} id
+   * @returns {{ id: string, bytes: number, head: string, tail: string, createdAt: number, truncated: boolean } | null}
+   */
+  peekStash(id) {
+    const r = /** @type {{ bytes: number, chars: number, head: string, tail: string, created_at: number } | undefined} */ (
+      this.db
+        .prepare("SELECT length(CAST(text AS BLOB)) AS bytes, length(text) AS chars, substr(text, 1, ?) AS head, substr(text, ?) AS tail, created_at FROM stash WHERE path = ?")
+        .get(STASH_HEAD, -STASH_TAIL, id)
+    );
+    if (!r) return null;
+    // tail only when a genuine middle gap exists — otherwise head already holds the whole payload and a
+    // tail would just duplicate its end. truncated = the head alone misses content (chars beyond HEAD).
+    const gapped = r.chars > STASH_HEAD + STASH_TAIL;
+    return { id, bytes: r.bytes, head: r.head, tail: gapped ? r.tail : "", createdAt: r.created_at, truncated: r.chars > STASH_HEAD };
   }
 
   /**

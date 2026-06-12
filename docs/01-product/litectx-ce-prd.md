@@ -129,7 +129,7 @@ succeeded (R-W7 input) → harness/bareagent.
 | **R-C1 Chunk + rerank** | coherent chunks; surface only the best (before-context) | aurora; LangChain [LC] | internal to recall | 🟢 | 🧩 have (ledger §1/§7) |
 | **R-C2 Token-budgeted assembly** | given a token budget, return the highest-salience subset — *the* lite-Compress primitive | survey; ADK budget | `assemble({budget})` (= R-G6) | 🟢 | **net-new, flagship** |
 | **R-C3 Tool-result clearing** | drop raw payloads already acted on, keep a 1-line stub | Anthropic context-editing [A] | `clear(nodeId)` / auto-policy | 🟢 | net-new |
-| **R-C4 Restorable compression** | drop a payload but keep a cheap handle (URL/path/id) to restore on demand | Manus file-system-as-context [Manus] | `node.handle`, `rehydrate(id)` | 🟢 | **net-new** (Manus pattern, done right; [study §3](../02-engineering/copy-pattern-studies.md)) |
+| **R-C4 Restorable compression** | drop a payload but keep a cheap handle (URL/path/id) to restore on demand | Manus file-system-as-context [Manus] | `stash(id,text)` + `get(id)` + `forget(id)` | 🟢 | ✅ **SHIPPED v0.6.0** — dedicated non-fts5 `stash` table (never indexed → recall-invisible, never pruned → restore always works). **API-only by §10.5** (orchestration mechanic, not a model-reasoning verb → no CLI/MCP). (Manus pattern, done right; [study §3](../02-engineering/copy-pattern-studies.md)) |
 | **R-C5 Trim / prune (heuristic)** | recency/size heuristics to drop old turns | LangChain trim [LC]; Provence | `trim(policy)` | 🟢 | net-new |
 | **R-C6 Running-summary scaffold** | "last-N verbatim + rolling summary of older" — litectx decides *what/when*; LLM does the prose | LlamaIndex buffer [LC]; ADK compaction | `summaryWindow(n)` + hook | 🟡 scaffold 🟢 / ⊘ LLM step | net-new ([study §1](../02-engineering/copy-pattern-studies.md) — keep handles to summarized turns) |
 | **R-C7 Rank-tiered render** | compact code **by rank**: top-N **verbatim code** · next tier **signature+docstring** · **drop** past a cap (aurora `CHUNK_LIMITS` (top-N, max) per complexity). The docstring render is the unit; R-C2 budget picks the tier | aurora `decompose.py:243-310` ✅ confirmed — *inlined in `_build_context_summary`, reimplement not extract* (ledger §13); Arize "LLM-summary failed" [Arize] | `compress(node,{level})`; `assemble()` tiers by rank | 🟢 | **net-new** (extraction in memory PRD §2; pairs with R-C2) |
@@ -145,7 +145,7 @@ compression (LLMLingua) — opt-in tier behind the embeddings line.
 |---|---|---|---|---|---|
 | **R-I1 Namespacing / scope** | a scope key (agent/session/user) + filtered queries so contexts don't bleed | Memary/Letta (survey); ADK scope-by-default [ADK] | `scope` on every op | 🟢 | net-new (cheap) |
 | **R-I2 State partitioning** | expose one field of state to the LLM, isolate the rest | LangChain state [LC] | `state.view(fields)` | 🟢 | follows R-W3 |
-| **R-I3 Handle / lazy-load** | return a lightweight name+summary; fetch raw only on explicit request, then offload | ADK handle pattern [ADK]; Manus | `peek(id)` vs `load(id)` | 🟢 | net-new (pairs with R-C4; [study §2](../02-engineering/copy-pattern-studies.md)) |
+| **R-I3 Handle / lazy-load** | return a lightweight handle; fetch raw only on explicit request, then offload | ADK handle pattern [ADK]; Manus | `peek(id)` (`{id,bytes,head,tail,createdAt,truncated}`) vs `get(id)` (= load) | 🟢 | ✅ **SHIPPED** (stash-only) — `peek` previews **head+tail** via SQL first-N/last-N `substr` + octet `length`; `load`==`get` already. **Win = bounded RESULT** (only ~head+tail bytes reach the caller → payload stays out of the context/token budget), **NOT** bounded compute — grounding measured peek wall-time *scales* with payload (≈`get`, slower past a few MB; SQLite reads the column to slice it). An O(1) peek would need byte-size stored at write (deferred column). **Head+tail, not head-only**: the conclusion (exit code, failing frame, closing structure) lives at the END — borrows SmartCrusher's start+end split (study §4, R-C7 prior), but *only* the cheap structural slice, NOT the anomaly-keep (full-scan → stays in R-C7). **POC-validated** (`poc/ri3-handle-poc.mjs`, 17 assertions): byte-length via `CAST(text AS BLOB)` not `length(text)`; tail via negative `substr`. `summary`/`scope` columns stay **deferred** — head+tail covers logs/traces/text/code; opaque blobs would need a caller-supplied summary, added only when a real caller passes one. (pairs with R-C4; [study §2](../02-engineering/copy-pattern-studies.md)) |
 
 **Ceded (⊘):** sub-agent **orchestration** (fork/lifecycle) and **sandboxes** → **bareagent**
 owns spawning (`tools/spawn.js`); litectx supplies each child's scoped store (§10.2). Phase
@@ -353,3 +353,40 @@ the cost-budget gate and the retrieval-quality signal were *design-only* in auro
   *verdict* is bareagent's; the *boost* is litectx's (see R-W7).
 - **JSON-schema-enforced LLM I/O** — force structured output, retry on mismatch (general
   prompting discipline; pairs with the closed-label rule above).
+
+### 10.5 Consumption surface — `import` vs MCP (who *chooses* the call)
+
+litectx exposes the same capability through up to three channels; the deciding question for
+each verb is **who decides to call it — code, or a model.**
+
+- **Direct API (`import { LiteCtx }`)** — the caller is a *program* that knows the verb at
+  write-time. **Strictly better than MCP for program→library use**: real types, in-process,
+  no JSON serialization, no subprocess, streams/objects/handles survive, direct error
+  semantics. baresuite/bareagent's own orchestration logic consumes litectx **this way**.
+- **MCP server (`bin/litectx-mcp.js`)** — a *thin adapter over the API* whose only job is to
+  **curate the verbs a reasoning model sees**. MCP earns its keep solely when an **LLM** must
+  discover a toolbox at runtime and choose among tools. It does **not** make program
+  consumption easier — wrapping a function call in JSON-RPC only *removes* capability and
+  *adds* overhead. MCP is a toolbox **for the model**, never a convenience for the program.
+- **CLI (`bin/litectx.js`)** — the human/hook surface (index, recall, impact checks). Gated by
+  a concrete human/script caller; no verb goes here speculatively.
+
+**The discriminator → which channel a verb lands on:**
+
+| Verb class | Who chooses to call | Channel |
+|---|---|---|
+| `recall` · `remember` · `impact` · `get` · `recent` · `promotions` | the **model**, mid-reasoning ("recall X", "blast radius of editing Y") | **MCP** (+ API) |
+| `stash` · future `assemble`/`isolate`/`clear`/`trim` | the **runtime loop** (baresuite), as plumbing *around* the model ("this result is huge — park it") | **API only** |
+| `index` (human/hook-driven) | a person or a build hook | **CLI** (+ API/MCP for completeness) |
+
+**Two relationships, not one** — baresuite both (1) **imports** litectx for its own loop logic
+*and* (2) **mounts litectx's MCP** into the toolbox of the *sub-agent it drives*. #2 is the only
+legitimate MCP use: equipping the model in the loop, not easing baresuite's own consumption.
+The MCP surface stays lean **by design** — it holds exactly the model-reasoning verbs, so
+orchestration mechanics like `stash` never clutter the everyday/standalone memory toolbox.
+
+**A second MCP server is deferred** — true tool separation (e.g. an everyday `litectx` vs an
+`litectx-agent`) is only warranted if an **autonomous Claude-style agent** (not baresuite —
+baresuite imports) ever needs CE-automation verbs over MCP. A tool *description* does not
+separate (every tool in a server stays visible + callable); only a separate server, left
+disabled, does. Build it when that caller is real, not before.

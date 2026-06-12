@@ -446,6 +446,27 @@ export class LiteCtx {
   }
 
   /**
+   * Peek a stashed payload (R-I3 handle / lazy-load): a cheap **head+tail** preview of a parked blob
+   * *without* rehydrating it — the read-half of {@link stash}. Where {@link get} pays the whole
+   * payload's tokens back, `peek` returns only `{ id, bytes, head, tail, createdAt, truncated }`: a
+   * fixed-length prefix *and suffix* (the conclusion — exit code, failing frame, closing structure —
+   * lives at the end), the true byte size, the parked-at time, and whether a middle span is elided
+   * (`tail` is empty when the head already holds the whole payload). The agent reasons over the handle
+   * and calls {@link get} to load the full body *only if it decides it needs it*. The win is the
+   * **bounded result** — only ~head+tail bytes return to the caller, never the whole blob, so the
+   * payload stays out of its context/token budget. (Not a DB-time win: SQLite reads the column to slice
+   * it, so peek's local compute scales with payload size — `get` it directly if you'll load it anyway.)
+   * **Stash-only**: recall owns ranked retrieval over memory; a stash is a dumb keyed blob, so `peek`
+   * carries no weights and no ranking. Null for an unknown id.
+   *
+   * @param {string} id  a stashed payload's id (as passed to {@link stash})
+   * @returns {{ id: string, bytes: number, head: string, tail: string, createdAt: number, truncated: boolean } | null}
+   */
+  peek(id) {
+    return this.store.peekStash(id);
+  }
+
+  /**
    * Human-in-the-loop review candidates (§3.2): agent-asserted facts whose recall count has crossed
    * `threshold`. The intended loop is the **consumer's** — it shows each candidate to a human who
    * either validates it (re-`remember(id, text, { by: "human" })`, promoting it to durable/high-trust)

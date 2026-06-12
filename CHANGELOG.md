@@ -4,6 +4,30 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+The lazy-load release. Adds `peek()` — the read-half of `stash()` — and settles the consumption-surface
+question for both. No new dependencies; the deterministic BM25 core and every quality gate are unchanged.
+
+### Added
+- **`peek(id)` — a head+tail preview of a stashed payload, without rehydrating it (R-I3 handle /
+  lazy-load).** Where `get(id)` returns the whole parked blob, `peek` returns only
+  `{ id, bytes, head, tail, createdAt, truncated }`: a fixed-length prefix *and* suffix (the conclusion
+  — exit code, failing frame, closing structure — lives at the end), the true octet size, the parked-at
+  time, and whether a middle span is elided. The agent reasons over the handle and `get`s the full body
+  only if it decides it needs it. Head+tail borrows the structural half of SmartCrusher's start+end
+  split (not the full-scan anomaly-keep, which stays an R-C7 concern). **Stash-only** — `recall` owns
+  ranked retrieval over memory; `peek` carries no weights. The win is the **bounded result** (only
+  ~head+tail bytes reach the caller, so the payload stays out of the context/token budget) — *not* a
+  DB-time win: SQLite reads the column to slice it, so peek's compute scales with payload size (measured
+  ≈`get`, slower past a few MB). 6 integration tests; design validated in `poc/ri3-handle-poc.mjs`.
+
+### Changed
+- **`stash()` / `peek()` are library-API only, by design** (clarifying 0.6.0's "not yet wired to
+  CLI/MCP"). Parking and previewing a payload are runtime mechanics the host loop performs, not calls a
+  reasoning model makes; the MCP surface stays the model's verbs (recall/remember/impact). Documented in
+  `litectx.context.md` and the CE PRD §10.5 (consumption surface — `import` vs MCP).
+
 ## [0.6.1] — 2026-06-11
 
 Clears the optional-tier CVE chain flagged in 0.6.0's known issues. No change to the deterministic

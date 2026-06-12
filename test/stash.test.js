@@ -82,3 +82,76 @@ test("stash coexists with real memory without polluting its recall", async () =>
   assert.ok(c.get("stash:noise"));
   c.close();
 });
+
+// R-I3 peek (handle / lazy-load): the read-half of stash. A cheap preview of a parked blob WITHOUT
+// rehydrating it — head prefix + true byte size + parked-at + a truncation flag, never the whole body.
+
+test("peek previews a stash without rehydrating it — bounded head+tail, get() has the full body", () => {
+  const c = ctx();
+  c.stash("stash:big", BIG); // BIG is ~34KB
+  const h = c.peek("stash:big");
+  assert.ok(h, "peek returns a handle");
+  assert.equal(h.id, "stash:big");
+  assert.ok(h.head.length <= 160 && h.tail.length <= 80, "head/tail capped at the fixed preview budget");
+  assert.ok(h.head.length + h.tail.length < BIG.length, "preview is a slice, not the whole payload");
+  assert.equal(h.truncated, true, "truncated flags that a middle span is elided");
+  assert.equal(h.bytes, Buffer.byteLength(BIG), "bytes is the true full octet size");
+  assert.ok(BIG.startsWith(h.head), "head is the verbatim leading slice");
+  assert.ok(BIG.endsWith(h.tail), "tail is the verbatim trailing slice");
+  // the full body is one get() away — peek never destroys or replaces it
+  assert.equal(c.get("stash:big").text, BIG);
+  c.close();
+});
+
+test("peek's tail captures the conclusion at the END of the payload (head-only would miss it)", () => {
+  const c = ctx();
+  const log = "START build\n" + "compiling module ".repeat(3000) + "\nFATAL: Process exited with code 1";
+  c.stash("stash:log", log);
+  const h = c.peek("stash:log");
+  assert.ok(h.head.startsWith("START build"), "head shows the beginning");
+  assert.ok(h.tail.endsWith("Process exited with code 1"), "tail shows the verdict at the end");
+  assert.ok(!h.head.includes("exited with code 1"), "the conclusion is NOT in the head — only the tail carries it");
+  c.close();
+});
+
+test("peek reports OCTET bytes for multibyte text (not character count)", () => {
+  const c = ctx();
+  const utf8 = "ERREUR: le pool est épuisé — 接続プール枯渇 🔥\n" + "x".repeat(50);
+  c.stash("stash:utf8", utf8);
+  const h = c.peek("stash:utf8");
+  assert.equal(h.bytes, Buffer.byteLength(utf8), "bytes counts UTF-8 octets, matching Buffer.byteLength");
+  assert.notEqual(h.bytes, [...utf8].length, "and is distinct from the character count for multibyte text");
+  // substr is char-based, so the head never splits a codepoint
+  assert.equal(Buffer.from(h.head, "utf8").toString("utf8"), h.head, "head is valid UTF-8");
+  c.close();
+});
+
+test("peek on a payload shorter than the budget is not truncated; head == full text", () => {
+  const c = ctx();
+  c.stash("stash:small", "short payload");
+  const h = c.peek("stash:small");
+  assert.equal(h.head, "short payload");
+  assert.equal(h.tail, "", "no tail when the head already holds the whole payload");
+  assert.equal(h.truncated, false);
+  c.close();
+});
+
+test("peek is stash-only and null-safe — written memory and unknown ids return null", async () => {
+  const c = ctx();
+  await c.remember("fact:x", "a written fact, not a stash", { kind: "fact", by: "human" });
+  assert.equal(c.peek("fact:x"), null, "peek does not reach into memory (recall owns that)");
+  assert.equal(c.peek("stash:nope"), null, "unknown id is null, parity with get()");
+  c.close();
+});
+
+test("peek surfaces the parked-at timestamp; re-stash refreshes it", () => {
+  const c = ctx();
+  c.stash("stash:t", "first");
+  const t1 = c.peek("stash:t").createdAt;
+  assert.equal(typeof t1, "number");
+  c.stash("stash:t", "second payload");
+  const h2 = c.peek("stash:t");
+  assert.ok(h2.createdAt >= t1, "re-stash advances the parked-at time");
+  assert.ok(h2.head.startsWith("second"), "and previews the new payload");
+  c.close();
+});

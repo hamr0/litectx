@@ -355,7 +355,31 @@ keep only the cheap `id`; `get(id)` rehydrates the full text on demand and `forg
 - Upsert by `id` (also the rehydrate/evict handle — namespace it, e.g. `"stash:toolresult-42"`).
 - Sync, and never embedded (a stash isn't meaning-searchable — that's the point).
 
-*(Library API for now; not yet exposed on the CLI / MCP surfaces.)*
+*Library API only, by design — not a CLI or MCP tool. Parking a payload is a runtime mechanic the
+host loop performs, not a call a reasoning model makes; the MCP surface stays the model's verbs
+(recall/remember/impact).*
+
+### `ctx.peek(id)` → `{ id, bytes, head, tail, createdAt, truncated } | null`
+The **read-half of `stash`** — *handle / lazy-load* (R-I3). A cheap **head+tail** preview of a parked
+blob *without* rehydrating it: where `get(id)` pays the whole payload's tokens back, `peek` returns only
+the handle — `head` (a fixed-length prefix), `tail` (a fixed-length suffix — the *conclusion*: exit
+code, failing frame, closing structure), `bytes` (the true octet size), `createdAt` (parked-at, ms), and
+`truncated` (whether a middle span is elided). Reason over the handle; call `get(id)` to load the full
+body **only if you decide you need it**. `null` for an unknown id.
+
+- **Head+tail, not head-only.** For the payloads stash holds — logs, traces, tool results — the verdict
+  is at the END, so a head-only preview would miss it. `tail` is empty when `head` already holds the
+  whole payload (no middle to elide).
+- **Bounded result, not bounded compute.** Only ~head+tail bytes return to the caller regardless of
+  payload size — the blob stays out of your context/token budget (the point of a lazy-load handle).
+  This is *not* a DB-time win: SQLite reads the column to `substr`/`length` it, so peek's local compute
+  scales with payload (measured comparable to `get`, slower past a few MB — `get` directly if you'll
+  load it anyway). An O(1) peek would need the byte size stored at write time (a deferred column).
+- **Truncation is signalled, never lossy.** `truncated` + `bytes` tell you the preview omits a span; the
+  untruncated body is always one `get(id)` away. `peek` is a read-only view.
+- **Stash-only.** `recall` owns ranked retrieval over memory; a stash is a dumb keyed blob, so `peek`
+  carries no weights and no ranking. `peek` on a memory id or a file path returns `null`.
+- Library API only, same rationale as `stash`.
 
 ### `ctx.reviewCandidates(threshold = 5)` → `{ path, hits }[]`
 The **human-in-the-loop promotion query** (review earned by use): agent-asserted facts
