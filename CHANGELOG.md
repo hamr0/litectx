@@ -4,7 +4,7 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] — 2026-06-12
 
 The context-primitive release. Adds the first two CE *render* verbs — `compress()` (R-C7 rank-tiered
 render: verbatim / signature / drop) and `peek()` (R-I3 head+tail preview, the read-half of `stash()`) —
