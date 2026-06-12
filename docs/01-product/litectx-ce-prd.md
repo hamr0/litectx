@@ -269,12 +269,17 @@ the def** → `chunker.js` sweeps it into the file's `preamble` chunk (86/86 rea
 So the doc is indexed but **dissociated from its symbol at chunk granularity. ✅ FIXED 2026-06-12**
 (`chunker.js` `docStartRow` — extends a def chunk upward over an immediately-adjacent comment block;
 a blank line breaks attachment) → a memory-engine change, not compress. The compress docstring tier
-now falls out for free (docs ride in the body). **Validated:** doc-only queries → localized symbol
-went **JS 0/2→2/2, TS 0/2→2/2, PY 2/2 (control)** (`poc/rc7-doc-localize-poc.mjs`), with file-level
-recall **byte-identical** (aurora 0.552 / gitdone 0.425) — confirming the trace that FTS +
-`file_embeddings` index the **raw whole file** (`indexer.js:104`→`store.js:317`), so the change lands
-only on chunk localization (`attachChunks`, `index.js:279`), never file ranking. 146 tests, tsc +
-types clean. *(memory: `chunker-orphans-leading-docs.md`)*
+now falls out for free (docs ride in the body). **This is the fix's only justification — it does NOT
+improve recall** (an earlier "doc→symbol 0/2→2/2" claim was retracted: it came from a crafted bench
+with doc-exclusive sentinel queries; on real OpenSpec TS the fix changed localization in **0/3** cases,
+because real queries share vocabulary with the code body and the named-chunk-over-preamble tie-break
+already localizes correctly). Semantic recall is a wash too: the embeddings tier indexes the raw whole
+file (no-op), and at symbol granularity the doc adds **−0.003 MRR** on fair name-derived queries
+(`poc/rc7-doc-embed-poc.mjs`; the +0.248 upper bound is an artifact of doc-derived queries). File-level
+recall is **byte-identical** (aurora 0.552 / gitdone 0.425) — FTS + `file_embeddings` index the **raw
+whole file** (`indexer.js:104`→`store.js:317`), so the change lands only on chunk localization
+(`attachChunks`, `index.js:279`), never file ranking. 146 tests, tsc + types clean.
+*(memory: `chunker-orphans-leading-docs.md`)*
 
 ---
 

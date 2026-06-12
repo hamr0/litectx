@@ -34,6 +34,8 @@ function tsUnder(dir, out, depth = 0) {
   return out;
 }
 try { for (const f of tsUnder(GD, []).slice(0, 8)) FILES.push(f); } catch {}
+// TS — OpenSpec (real first-party TS corpus)
+try { for (const f of tsUnder("/home/hamr/PycharmProjects/OpenSpec/src", []).slice(0, 30)) FILES.push(f); } catch {}
 
 const fmtOf = (p) => (p.endsWith(".py") ? "py" : p.endsWith(".ts") ? "ts" : "js");
 

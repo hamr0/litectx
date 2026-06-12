@@ -31,11 +31,16 @@ question for both. No new dependencies; the deterministic BM25 core and every qu
   JSDoc block (a sibling node *above* the `function`/`class`) orphan into the file `preamble`,
   dissociating a symbol from its own documentation; Python docstrings (inside the body) were unaffected.
   Each def chunk now extends upward over an immediately-adjacent comment block (a blank line breaks the
-  association), so **chunk-granular recall localizes a doc-phrased query to the documented symbol**
-  instead of the preamble. Measured doc→symbol localization JS 0/2→2/2, TS 0/2→2/2 (Python 2/2 control),
-  with **file-level ranking byte-identical** (FTS + embeddings index the whole file, not chunks; aurora
-  0.552 / gitdone 0.425 unchanged). Unblocks the R-C7 `compress()` signature/docstring render tier.
-  Evidence: `poc/rc7-doc-localize-poc.mjs` + `poc/rc7-compress-real-poc.mjs`; 2 new regression tests.
+  association). **This exists to unblock the R-C7 `compress()` signature+docstring render tier** — for
+  JS/TS the JSDoc must ride in the chunk body to render the signature tier — and that is its *only*
+  justification. **It does not improve recall.** *Lexical:* 0/3 on real OpenSpec TS (the earlier
+  "0/2→2/2" came from a crafted bench with doc-exclusive sentinel queries; real queries share vocabulary
+  with the code body, and the named-chunk-over-preamble tie-break already localizes correctly). *Semantic:*
+  also a wash — the embeddings tier indexes the raw whole file (file-level, so this is a no-op there); at
+  symbol granularity the doc adds **−0.003 MRR** on fair name-derived queries (`poc/rc7-doc-embed-poc.mjs`,
+  229 real symbols), the +0.248 MRR upper bound being an artifact of doc-derived queries. **File-level
+  ranking byte-identical** (aurora 0.552 / gitdone 0.425 unchanged). Evidence: `poc/rc7-compress-real-poc.mjs`,
+  `poc/rc7-doc-embed-poc.mjs`; 2 new regression tests.
 
 ## [0.6.1] — 2026-06-11
 

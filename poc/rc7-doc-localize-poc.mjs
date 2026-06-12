@@ -1,6 +1,14 @@
 // R-C7 chunk-localization bench — does attaching a symbol's doc-comment to its chunk make a
 // DOC-PHRASED query localize to the right SYMBOL? (the win the file-level floor benches can't see).
 //
+// ⚠️ RETRACTED RESULT (2026-06-12): this bench is CRAFTED — its queries use doc-EXCLUSIVE sentinel
+// words (terms that live ONLY in the doc), so it shows an idealized "0/2→2/2" that does NOT hold in
+// practice. On REAL OpenSpec TS the fix changed localization in 0/3 cases (real queries share the
+// code's vocabulary, and the named-chunk-over-preamble tie-break already localizes). Semantic recall
+// is a wash too (−0.003 MRR fair; see poc/rc7-doc-embed-poc.mjs). The chunker fix is kept ONLY to
+// feed compress()'s signature+doc tier — NOT to improve recall. Keep this file as the mechanism demo;
+// do not cite its numbers as a recall benefit.
+//
 // Method: each function's distinctive words live ONLY in its doc — never in the symbol name or
 // body. So recall can localize to that symbol ONLY IF the doc rides in the symbol's chunk. The
 // engine (indexer, FTS, attachChunks) is fully real; files are crafted to isolate the mechanism.
@@ -86,5 +94,5 @@ console.log("R-C7 doc→symbol localization (doc-only queries; real engine)\n");
 console.table(rows);
 console.log("\nlocalized to the documented symbol, by language:");
 for (const [l, s] of Object.entries(byLang)) console.log(`  ${l}: ${s.ok}/${s.n}`);
-console.log("\nWith the chunker fix: JS+TS should localize (doc now rides in the symbol chunk).");
-console.log("Without it (git stash): JS+TS ✗ (doc orphaned in preamble), PY ✓ either way (in-body).");
+console.log("\n⚠️ CRAFTED (doc-exclusive queries) — idealized, NOT a real-world recall benefit.");
+console.log("On real OpenSpec TS the fix changed localization 0/3. Kept only as a mechanism demo.");
