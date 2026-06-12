@@ -132,7 +132,7 @@ succeeded (R-W7 input) → harness/bareagent.
 | **R-C4 Restorable compression** | drop a payload but keep a cheap handle (URL/path/id) to restore on demand | Manus file-system-as-context [Manus] | `stash(id,text)` + `get(id)` + `forget(id)` | 🟢 | ✅ **SHIPPED v0.6.0** — dedicated non-fts5 `stash` table (never indexed → recall-invisible, never pruned → restore always works). **API-only by §10.5** (orchestration mechanic, not a model-reasoning verb → no CLI/MCP). (Manus pattern, done right; [study §3](../02-engineering/copy-pattern-studies.md)) |
 | **R-C5 Trim / prune (heuristic)** | recency/size heuristics to drop old turns | LangChain trim [LC]; Provence | `trim(policy)` | 🟢 | net-new |
 | **R-C6 Running-summary scaffold** | "last-N verbatim + rolling summary of older" — litectx decides *what/when*; LLM does the prose | LlamaIndex buffer [LC]; ADK compaction | `summaryWindow(n)` + hook | 🟡 scaffold 🟢 / ⊘ LLM step | net-new ([study §1](../02-engineering/copy-pattern-studies.md) — keep handles to summarized turns) |
-| **R-C7 Rank-tiered render** | compact code **by rank**: top-N **verbatim code** · next tier **signature+docstring** · **drop** past a cap (aurora `CHUNK_LIMITS` (top-N, max) per complexity). The docstring render is the unit; R-C2 budget picks the tier | aurora `decompose.py:243-310` ✅ confirmed — *inlined in `_build_context_summary`, reimplement not extract* (ledger §13); Arize "LLM-summary failed" [Arize] | `compress(node,{level})`; `assemble()` tiers by rank | 🟢 | **net-new** (extraction in memory PRD §2; pairs with R-C2) |
+| **R-C7 Rank-tiered render** | compact code **by rank**: top-N **verbatim code** · next tier **signature+docstring** · **drop** past a cap (aurora `CHUNK_LIMITS` (top-N, max) per complexity). The docstring render is the unit; R-C2 budget picks the tier | aurora `decompose.py:243-310` ✅ confirmed — *inlined in `_build_context_summary`, reimplement not extract* (ledger §13); Arize "LLM-summary failed" [Arize] | `compress(node,{level})`; `assemble()` tiers by rank | 🟢 | **net-new** (extraction in memory PRD §2; pairs with R-C2) · ⏳ **ACTIVE — Tier-A current pick, POC-first (§8.1)**; de-risks `assemble()` (the render half it composes) |
 
 **Ceded (⊘):** the LLM that writes the summary (auto-compaction prose); perplexity/LLM token
 compression (LLMLingua) — opt-in tier behind the embeddings line.
@@ -214,6 +214,67 @@ litectx (one importable lib, one config, safe defaults)
   selectTools()      — 🔧 Select (cand.) (R-S6)
   [tiers] embeddings | summarizer-hook | extractor-hook   — opt-in, ⊘ by default
 ```
+
+---
+
+## 8.1 Build order — adopter-pulled vs factory-independent
+
+The [software factory](software-factory-prd.md) is litectx's first adopter and validation harness
+(the ON-vs-OFF A/B). The standing doctrine is *adoption-first*: don't speculatively grind an API —
+let a real consumer pull its contract. **But that doctrine governs *ambiguous shapes*, not
+*universal primitives*.** The factory is **one** adopter exercising one or two flows; it will not
+surface every CE need. Conflating the two would make primitives whose shape is already fixed wait
+on a consumer that adds nothing to their design — procrastination dressed as discipline.
+
+The discriminator: **does the contract depend on knowing how a specific consumer drives it, or is
+it self-evident from litectx's own data model and falsifiable on litectx's own bench?**
+
+**Tier A — factory-independent (build now; shape fixed by our data + validated on existing benches).**
+The first adopter may *fine-tune* these (thresholds, defaults), but it does not *define* their shape.
+
+| Req | Surface | Why it needs no adopter | Validation harness (exists today) |
+|---|---|---|---|
+| **R-C7** | `compress(node,{level})` | Signature tier is a pure fn of `body` (100% of 247 real defs; saves 95–98% bytes). **Docstring tier has an indexing dependency** (below). aurora-calibrated (`decompose.py:243-310`). **De-risks `assemble()` — it's the render half assemble composes.** | `poc/rc7-compress*-poc.mjs` (real aurora/gitdone/litectx fixtures) |
+| **R-G7** | `evict(policy)` | **Real present caller, not hypothetical:** `stash` has no eviction → unbounded growth (flagged in R-I3/R-C4 sessions). Policy (age/size/count)→delete. litectx owns it (unclaimed by bareagent). | the shipped `stash` store |
+| **R-S8** | `recall().quality` | litectx-**original** (only we hold the activation scores). Internal to `recall()` (already built). PRD thresholds (≥3 nodes ≥0.3) are *untested priors* → validate, don't assume. | the existing recall bench |
+| **R-G5** | `supersede(old,new)` | Pure graph mechanics on data we own; pairs with shipped fact/episode kinds. Every memory needs fact retirement. | `:memory:` integration tests |
+
+*Half-in:* **R-W7 `recordUseful`** — the boost *mechanism* is buildable + aurora-calibrated
+(+0.2/+0.05), but whether the boost helps ranking wants a real loop feeding "what was useful" →
+mechanism now, weight-validation with the adopter.
+
+**Tier B — adopter-pulled (shape is genuinely unknown until a caller exists).**
+
+| Req | Surface | The ambiguity only a consumer resolves |
+|---|---|---|
+| **R-G6 / R-C2** | `assemble({intent,budget})` | What *is* `intent` (query? step descriptor?); budget unit (tokens? nodes?); how the caller wants blocks ordered. **The headline call — the doctrine was written for exactly this.** |
+| **R-X1 / R-X4** | `assemble()` ordering contract | Cache-prefix split + authority precedence are properties of the *assembled output* → follow assemble. |
+| **R-W3 / R-I2** | `session/state`, `state.view` | The state *schema* (which fields, which are LLM-visible) is the consumer's, not ours. |
+| **R-C3 / R-C5 / R-C6** | `clear` / `trim` / `summaryWindow` | Loop-mechanics: *when* to clear/trim/summarize is a policy the orchestration loop owns. |
+
+**Caution (POC-rigor):** the table tags **R-I1 `scope`** "cheap," but it touches *every op*
+(schema migration + a filter on every query) — its shape is obvious but it is **invasive, not
+cheap**. Don't let the label wave it through unmeasured.
+
+**Current pick:** **R-C7 `compress()`** — Tier A, and uniquely it *de-risks* the Tier-B linchpin
+(`assemble` composes it) instead of competing with it. POC-first against real aurora/gitdone/litectx
+fixtures (`poc/rc7-compress*-poc.mjs`). The signature tier ships now (body-only, 95–98% byte
+savings). **The docstring tier surfaced an upstream indexing defect** (below) that the POC traced —
+the fix belongs to the memory engine, not compress.
+
+**↳ Indexing dependency (memory-engine, not CE) — leading docs are orphaned.** The POC falsified the
+ledger's *"signature/docstring already extracted, render unit is free"*: the chunker persists only
+`body`. **Python docstrings are inside the body (free).** But **JS/TS JSDoc is a sibling node above
+the def** → `chunker.js` sweeps it into the file's `preamble` chunk (86/86 real JS defs orphaned).
+So the doc is indexed but **dissociated from its symbol at chunk granularity. ✅ FIXED 2026-06-12**
+(`chunker.js` `docStartRow` — extends a def chunk upward over an immediately-adjacent comment block;
+a blank line breaks attachment) → a memory-engine change, not compress. The compress docstring tier
+now falls out for free (docs ride in the body). **Validated:** doc-only queries → localized symbol
+went **JS 0/2→2/2, TS 0/2→2/2, PY 2/2 (control)** (`poc/rc7-doc-localize-poc.mjs`), with file-level
+recall **byte-identical** (aurora 0.552 / gitdone 0.425) — confirming the trace that FTS +
+`file_embeddings` index the **raw whole file** (`indexer.js:104`→`store.js:317`), so the change lands
+only on chunk localization (`attachChunks`, `index.js:279`), never file ranking. 146 tests, tsc +
+types clean. *(memory: `chunker-orphans-leading-docs.md`)*
 
 ---
 

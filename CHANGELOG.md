@@ -27,6 +27,15 @@ question for both. No new dependencies; the deterministic BM25 core and every qu
   CLI/MCP"). Parking and previewing a payload are runtime mechanics the host loop performs, not calls a
   reasoning model makes; the MCP surface stays the model's verbs (recall/remember/impact). Documented in
   `litectx.context.md` and the CE PRD §10.5 (consumption surface — `import` vs MCP).
+- **A symbol's chunk now carries its own leading doc-comment.** The chunker previously let a JS/TS
+  JSDoc block (a sibling node *above* the `function`/`class`) orphan into the file `preamble`,
+  dissociating a symbol from its own documentation; Python docstrings (inside the body) were unaffected.
+  Each def chunk now extends upward over an immediately-adjacent comment block (a blank line breaks the
+  association), so **chunk-granular recall localizes a doc-phrased query to the documented symbol**
+  instead of the preamble. Measured doc→symbol localization JS 0/2→2/2, TS 0/2→2/2 (Python 2/2 control),
+  with **file-level ranking byte-identical** (FTS + embeddings index the whole file, not chunks; aurora
+  0.552 / gitdone 0.425 unchanged). Unblocks the R-C7 `compress()` signature/docstring render tier.
+  Evidence: `poc/rc7-doc-localize-poc.mjs` + `poc/rc7-compress-real-poc.mjs`; 2 new regression tests.
 
 ## [0.6.1] — 2026-06-11
 

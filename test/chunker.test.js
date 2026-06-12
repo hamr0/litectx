@@ -23,6 +23,37 @@ test("chunks python into functions, classes, methods, and a preamble", async () 
   for (const c of chunks) assert.ok(c.endLine >= c.startLine, "line range must be ordered");
 });
 
+test("attaches a leading JSDoc to its symbol chunk, not the preamble", async () => {
+  // regression: JS/TS JSDoc is a sibling node ABOVE the def — without attachment it orphans into
+  // `preamble`, dissociating the doc from the symbol it documents (recall localizes to the wrong
+  // chunk). The doc must ride in the function's own chunk. (poc/rc7-doc-localize-poc.mjs)
+  const src = [
+    "import { run } from './r.js';",
+    "",
+    "/**",
+    " * Reconcile invoices before the settlement window.",
+    " */",
+    "export function settle(acct) {",
+    "  return run(acct);",
+    "}",
+    "",
+  ].join("\n");
+  const chunks = await chunkFile("billing.js", src);
+  const settle = chunks.find((c) => c.symbol === "settle");
+  assert.ok(settle, "settle chunk exists");
+  assert.ok(settle.text.includes("Reconcile invoices"), "JSDoc rides in the symbol chunk");
+  assert.ok(settle.text.startsWith("/**"), "chunk starts at the doc-comment");
+  const preamble = chunks.find((c) => c.nodeType === "preamble");
+  assert.ok(!preamble || !preamble.text.includes("Reconcile invoices"), "doc is NOT orphaned into preamble");
+});
+
+test("a blank line breaks doc attachment (the comment isn't this def's)", async () => {
+  const src = ["# unrelated banner", "", "def f(x):", "    return x", ""].join("\n");
+  const chunks = await chunkFile("m.py", src);
+  const f = chunks.find((c) => c.symbol === "f");
+  assert.ok(f && !f.text.includes("banner"), "a comment separated by a blank line stays in preamble");
+});
+
 test("chunks markdown into heading sections", async () => {
   const md = ["# Title", "intro", "", "## Section A", "body a", "", "## Section B", "body b", ""].join("\n");
   const chunks = await chunkFile("doc.md", md);

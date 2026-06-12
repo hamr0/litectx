@@ -76,21 +76,45 @@ async function chunkCode(lang, body) {
   const defs = collectDefs(tree.rootNode, lang.defTypes, []);
 
   /** @type {Chunk[]} */
-  const chunks = defs.map((d) => ({
-    symbol: symbolName(d),
-    nodeType: d.type,
-    startLine: d.startPosition.row,
-    endLine: d.endPosition.row,
-    text: lines.slice(d.startPosition.row, d.endPosition.row + 1).join("\n"),
-  }));
+  const chunks = defs.map((d) => {
+    // a symbol's own documentation must ride IN its chunk, not orphan into `preamble` — JS/TS JSDoc
+    // is a sibling node ABOVE the def, so extend the chunk upward over an adjacent doc-comment block.
+    const start = docStartRow(lines, d.startPosition.row);
+    return {
+      symbol: symbolName(d),
+      nodeType: d.type,
+      startLine: start,
+      endLine: d.endPosition.row,
+      text: lines.slice(start, d.endPosition.row + 1).join("\n"),
+    };
+  });
 
   // preamble: top-level lines no def-node owns (imports, module-level config/docstring) — so
-  // file-level signals (module docstring, top-level constants) still land as a node.
+  // file-level signals (module docstring, top-level constants) still land as a node. Uses the
+  // EXTENDED chunk ranges so an attached doc-comment isn't double-counted here.
   const covered = new Array(lines.length).fill(false);
-  for (const d of defs) for (let i = d.startPosition.row; i <= d.endPosition.row; i++) covered[i] = true;
+  for (const c of chunks) for (let i = c.startLine; i <= c.endLine; i++) covered[i] = true;
   const pre = lines.filter((_, i) => !covered[i]).join("\n").trim();
   if (pre) chunks.push({ symbol: null, nodeType: "preamble", startLine: 0, endLine: lines.length - 1, text: pre });
   return { chunks, imports: collectImports(tree.rootNode, lang) };
+}
+
+// Walk up from a def's first line over an IMMEDIATELY-adjacent comment block (JSDoc `/** … */`,
+// contiguous `//`, or Python `#`) and return its first row, so the doc binds to the symbol it
+// documents. A blank line breaks the association (the doc isn't this def's). Over-capture is
+// acceptable (§7) — a mis-attached comment only widens a chunk, never drops a symbol.
+function docStartRow(lines, defRow) {
+  let start = defRow;
+  for (let i = defRow - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t === "") break; // not adjacent → leave for `preamble`
+    const isComment =
+      t.startsWith("//") || t.startsWith("#") || t.startsWith("/*") || t.startsWith("*") || t.endsWith("*/");
+    if (!isComment) break; // reached code
+    start = i;
+    if (t.startsWith("/*")) break; // opening of a block comment — done
+  }
+  return start;
 }
 
 // strip surrounding quotes from a tree-sitter `string` node, preferring its string_fragment child.

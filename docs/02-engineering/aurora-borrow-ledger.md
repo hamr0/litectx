@@ -420,9 +420,20 @@ are designs, not validated borrows.
   drop past a cap*. This is the calibration (code-only confused the agent; tiered fixed it) and it's
   the natural implementation of **R-C2 token-budgeted assembly** + **R-C7 render**.
 - **Correct/adapt:** it's **inlined** in the orchestrator → **reimplement clean**, don't extract.
-  litectx already extracts `signature`/`docstring` (memory PRD §2), so the render unit is free; the
-  tiering belongs in `assemble()`. The `(top_N, max)` numbers are aurora priors — re-tune to a
-  **token budget**, not a fixed count.
+  The `(top_N, max)` numbers are aurora priors — re-tune to a **token budget**, not a fixed count;
+  the tiering belongs in `assemble()`.
+- **⚠️ CORRECTION (2026-06-12, POC-measured — `poc/rc7-compress-real-poc.mjs`):** the earlier claim
+  *"litectx already extracts signature/docstring, so the render unit is free"* was **FALSE**. The
+  chunker persists only the full `body` — no signature/docstring column. **Signature** is derivable
+  from `body` (100% of 247 real defs; signature tier saves **95–98% bytes**). **Docstring** splits by
+  language: **Python docstrings live inside the body (60/60 free)**; **JS/TS JSDoc is a sibling node
+  ABOVE the def → orphaned into the `preamble` chunk (86/86 JS defs orphaned, 0 attached)**. So the
+  doc is indexed but **dissociated from its symbol at chunk granularity.** Fix is an **indexing-engine**
+  change (chunker attaches a leading doc-comment to its def chunk), not a compress() concern.
+  **Ranking impact (traced, not asserted):** FTS + embeddings index the **raw whole file**
+  (`indexer.js:104`→`store.js:317`), so file-level recall is **unaffected** (floor benches
+  byte-identical); the change lands only on chunk localization (`attachChunks`, `index.js:279`) —
+  which symbol a hit points to. See memory `chunker-orphans-leading-docs.md` + memory PRD §2.
 - **Companion prior (non-aurora) — Headroom `SmartCrusher`.** A *second* structural prior for the
   same R-C7 tiering, from the Headroom library (`github.com/chopratejas/headroom`, Apache-2.0; full
   study in [copy-pattern-studies §4](copy-pattern-studies.md)): retain **30% from start (schema) +

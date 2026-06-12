@@ -225,7 +225,10 @@ return shape follows the `kind` argument:
 > best carries your query terms (0-based inclusive lines). It **localizes, never reorders** —
 > ranking stays file-level and bench-identical. The most *specific* match wins: a class that
 > merely contains the matching method never shadows it, and an anonymous arrow is labeled with
-> its nearest named container. `null` when nothing localizes: written memory has no chunks
+> its nearest named container. A symbol's chunk now **includes its own leading doc-comment**
+> (JSDoc / `//` / `#` block immediately above it), so a query phrased in a function's
+> *documentation* localizes to that function — not to the file preamble where the comment would
+> otherwise orphan. `null` when nothing localizes: written memory has no chunks
 > (the row IS the unit), and a match carried only by the filename names none.
 > 🚧 The richer roadmap shape (`{ id, signals: { bm25, activation, ... } }`)
 > is not shipped yet. Today a hit is the six fields above.

@@ -645,6 +645,19 @@ Grounding: `MEM_INDEXING.md`.
 - **Block-level git signals** (DIFFERENTIATOR): `git blame --line-porcelain` → commit
   count + recency **per chunk line-range**, not per file — feeds churn, cold-start BLA
   (§4.1), and the output schema.
+- **Symbol-chunk composition — a chunk carries its own leading doc** (DECIDED, shipped 2026-06-12):
+  a code chunk's line-range extends *upward* over an immediately-adjacent doc-comment block (JSDoc
+  `/** … */`, contiguous `//`, or Python `#`); a blank line breaks the association. **Why:** a JS/TS
+  JSDoc is a tree-sitter *sibling node above* the `function`/`class`, so without this it orphaned into
+  the file `preamble` chunk — indexed but **dissociated from the symbol it documents** (a doc-phrased
+  query localized to the preamble, not the function; the symbol embedded without its own docs; Python
+  docstrings, being *inside* the body, were never affected). This is **chunk-granular only**: file-level
+  FTS + embeddings index the raw whole file, so ranking is byte-identical (proven: aurora 0.552 /
+  gitdone 0.425 unchanged). Effect is on `hit.chunk` localization — doc→symbol JS 0/2→2/2, TS 0/2→2/2
+  (`poc/rc7-doc-localize-poc.mjs`). Over-capture is acceptable (a mis-attached comment widens a chunk,
+  never drops a symbol). This is the indexing half of the CE PRD's R-C7 `compress()` render tier — the
+  signature/docstring unit is *derived from the chunk body*, not a stored column (correcting the
+  borrow-ledger's "render unit is free"; signature 100% from body, docstring now rides in the body).
 - **Ignore**: `.git`, `node_modules`, `__pycache__`, `.venv`, `dist`, `build`, plus a
   `.litectxignore` (gitignore syntax).
 
