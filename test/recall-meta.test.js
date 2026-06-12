@@ -86,6 +86,35 @@ test("re-remember without meta clears prior meta; the latest write wins", async 
   rmSync(root, { recursive: true, force: true });
 });
 
+// A deterministic 2-D stub embedder (no model download) so the tri-hybrid / KNN-union ranking path
+// runs in CI — the path none of the BM25-only tests above exercise.
+function vecStub() {
+  return {
+    /** @param {string} t */
+    async embed(t) {
+      const a = (t.match(/auth/gi) || []).length;
+      const j = (t.match(/jwt/gi) || []).length;
+      const n = Math.hypot(a, j) || 1;
+      return Float32Array.from([a / n, j / n]);
+    },
+  };
+}
+
+test("body + meta survive the embeddings-ON ranking path (KNN/cosine), not just BM25", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-meta-emb-"));
+  const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings: true, embedder: vecStub() });
+  await ctx.remember("fact:a", "auth uses jwt tokens", { meta: { src: "handbook" } });
+  await ctx.remember("fact:b", "auth via oauth flows", {}); // 2nd candidate → engages cosine fusion, not the short-circuit
+  const hits = await ctx.recall("auth jwt", { kind: "fact", body: true });
+  const hit = hits.find((h) => h.path === "fact:a");
+  assert.equal(ctx.embeddings, true, "embeddings tier active (the tri-hybrid path)");
+  assert.ok(hit, "recalled through the embeddings ranking, not BM25-only");
+  assert.equal(hit.body, "auth uses jwt tokens", "body attached after tri-hybrid ranking");
+  assert.deepEqual(hit.meta, { src: "handbook" }, "meta attached after tri-hybrid ranking");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("forget removes meta — a reused id does not inherit a ghost", async () => {
   const { ctx, root } = await fixture();
   await ctx.remember("fact:y", "body", { meta: { secret: true } });
