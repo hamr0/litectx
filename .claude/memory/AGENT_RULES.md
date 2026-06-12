@@ -40,8 +40,10 @@
 ### Validate Before You Build
 
 - **POC everything first.** Before committing to a design, build a quick proof-of-concept (~15 min) that validates the core logic. Keep it stupidly simple — manual steps are fine, hardcoded values are fine, no tests needed yet
-- **POC scope:** Cover the happy path and 2-3 common edge cases. If those work, the idea is sound
+- **POC scope:** Cover the happy path, 2-3 common edge cases, **and the riskiest assumption (see below) — not just the parts that are easy to check**. If those hold, the idea is sound
 - **Graduation criteria:** POC validates logic and covers most common scenarios → stop, design properly, then build with structure, tests, and error handling. Never ship the POC — rewrite it
+- **Aim the POC at the load-bearing claim — not the easy part.** Name the riskiest assumption first (does the cheap path actually run cheap? does the library really do X? does the perf hold?), then point the spike straight at *that*. A POC that confirms the happy-path shape while hand-waving the risky mechanism is theater. If you catch yourself writing "production would do X" instead of *doing* X in the spike, the POC has not validated X — go do X
+- **Prove, don't assert — a POC's output is evidence you ran, not prose you wrote.** Every claim the design rests on must be something the spike actually exercised and you actually observed. **Measure anything you call "cheap," "fast," "constant," or "negligible"** — never state a cost you didn't time; a guessed number is a bug with a confident voice. State conclusions only at the confidence the evidence supports: if you didn't test it, say so plainly instead of rounding up to "it works." Better a small honest finding than a big-mouthed claim that measurement later falsifies
 - **Build incrementally.** After POC graduates, break the work into small, independent modules. Focus on one at a time. Each piece must work on its own before integrating with the next
 
 ### Dependency Hierarchy
@@ -84,6 +86,7 @@ Before adding any external dependency, all of these must be true:
 - Frameworks where a library or stdlib would suffice
 - Vendor-specific implementations when open alternatives exist
 - Skipping POC validation for unproven ideas
+- POC-ing only the easy part while hand-waving the risky mechanism, or claiming a cost ("cheap"/"fast"/"constant") you never measured
 
 ---
 
@@ -226,7 +229,7 @@ Copy this to any project's CLAUDE.md. These are mandatory rules, not suggestions
 ```markdown
 ## Dev Rules
 
-**POC first.** Always validate logic with a ~15min proof-of-concept before building. Cover happy path + common edges. POC works → design properly → build with tests. Never ship the POC.
+**POC first.** Always validate logic with a ~15min proof-of-concept before building. Cover happy path + common edges. POC works → design properly → build with tests. Never ship the POC. **Aim the spike at the riskiest assumption, not the easy part; prove, don't assert — measure anything you call "cheap"/"fast"/"constant," and claim only what the evidence supports (no big-mouthed conclusions measurement can falsify).**
 
 **Build incrementally.** Break work into small independent modules. One piece at a time, each must work on its own before integrating.
 
