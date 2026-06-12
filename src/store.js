@@ -71,6 +71,10 @@ const STASH_TAIL = 80;
  *                            memory has use 0, so ranking on it would be a popularity prior (§14 #4).
  * @property {number|null} [occurredAt]  written memory only (slice 5c): episode timestamp (epoch ms);
  *                            null for facts; absent on indexed files.
+ * @property {Record<string, unknown>} [meta]  written memory only (RT-3 #3): the opaque caller
+ *                            metadata supplied to `remember`, parsed back from its sealed JSON store
+ *                            and returned VERBATIM. Absent when the memory carries none and on every
+ *                            indexed file (a file has no caller metadata). Never tokenized/ranked.
  */
 
 /**
@@ -150,6 +154,16 @@ const SCHEMA = [
   // disk to re-read — so `get(id)` needs the original text stored verbatim. One row per written
   // id, upserted by `writeMemory`, dropped by `forgetMemory`. Indexed files never get a row.
   "CREATE TABLE IF NOT EXISTS mem_text(path TEXT PRIMARY KEY, text TEXT NOT NULL)",
+  // opaque caller metadata for direct-written memory (RT-3 #3): a sealed JSON passthrough so a
+  // consumer mounting litectx as a generic key-value memory store (bareagent's `Store`) can attach an
+  // arbitrary dict ({sessionId, tag, author, …}) and get it back VERBATIM. DELIBERATELY a plain
+  // sibling table, not an `mem`/`docs` column: it lives in NO fts5 table, so it is sealed by
+  // construction — never tokenized, never searched, never scored (litectx stores the bytes, never
+  // reads their meaning). One row per written id when meta is supplied; upserted/cleared by
+  // `writeMemory`, dropped by `forgetMemory`. A new `CREATE TABLE IF NOT EXISTS` = the most additive
+  // migration possible (old dbs gain an empty table, no backfill). Guidance: small structured tags,
+  // not payloads — a big blob inflates every hit; park those in `stash`.
+  "CREATE TABLE IF NOT EXISTS mem_meta(path TEXT PRIMARY KEY, meta TEXT NOT NULL)",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
   // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
@@ -373,7 +387,10 @@ export class Store {
    * **never** clobbers an indexed (`source='file'`) row. Always `source='direct'`, so the incremental
    * index sweep — whose `deletes` come only from `file_index` keys — structurally can't touch it.
    * Stored **whole** (no chunking); the FTS body is identifier-split like any other (`indexBody`).
-   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, embedding?: Float32Array }} m
+   * `meta` (RT-3 #3) is an opaque JSON string stored verbatim in the sealed `mem_meta` table and
+   * never indexed; `null`/omitted clears any prior meta (the row reflects the latest write, like
+   * `mem_text`).
+   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array }} m
    */
   writeMemory(m) {
     const tx = this.db.transaction(() => {
@@ -399,6 +416,15 @@ export class Store {
       this.db
         .prepare("INSERT INTO mem_text(path, text) VALUES (@path, @text) ON CONFLICT(path) DO UPDATE SET text = excluded.text")
         .run({ path: m.id, text: m.text });
+      // sealed opaque metadata (RT-3 #3): upsert when supplied, else clear any prior — the row tracks
+      // the latest write. Stored verbatim, read by no FTS/ranking path.
+      if (m.meta != null) {
+        this.db
+          .prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta")
+          .run({ path: m.id, meta: m.meta });
+      } else {
+        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(m.id);
+      }
       if (m.embedding) {
         this.db
           .prepare("INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
@@ -519,9 +545,10 @@ export class Store {
       // NB: `forget` is MEMORY-ONLY. Stash deletion lives in {@link evictStash} (R-C4 housekeeping),
       // split out so a bulk age/size sweep can never reach a durable fact — see §10.5 / CE-PRD R-G7.
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
+      const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delText.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -637,9 +664,10 @@ export class Store {
       if (!paths.length) return 0;
       const removed = this.db.prepare("DELETE FROM mem WHERE kind = 'episode' AND occurred_at < ?").run(before).changes;
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
+      const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delText.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -677,7 +705,7 @@ export class Store {
    * namespaced by convention). A pre-slice-9 written row with no `mem_text` falls back to its
    * stored FTS body — degraded (path tokens folded in) but preserved.
    * @param {string} id
-   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null } | null}
+   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, meta: string|null } | null}
    */
   getItem(id) {
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
@@ -692,14 +720,17 @@ export class Store {
       // only; it is absent from KINDS/MEM_KINDS, so recall never reaches it.
       const s = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM stash WHERE path = ?").get(id));
       if (!s) return null;
-      return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text };
+      return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text, meta: null };
     }
     let text = null;
+    let meta = null;
     if (row.source === "direct") {
       const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
       text = raw ? raw.text : row.body;
+      const mrow = /** @type {{ meta: string } | undefined} */ (this.db.prepare("SELECT meta FROM mem_meta WHERE path = ?").get(id));
+      meta = mrow ? mrow.meta : null;
     }
-    return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text };
+    return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text, meta };
   }
 
   /**
@@ -1019,6 +1050,23 @@ export class Store {
       if (m) (h.provenance = m.provenance), (h.use = m.use), (h.occurredAt = m.occurred_at);
     }
     return hits;
+  }
+
+  /**
+   * Batched lookup of the sealed opaque `meta` (RT-3 #3) for a set of written-memory paths — the raw
+   * JSON strings as stored, for the facade to parse and attach to recall hits / `get`. Returns a Map
+   * keyed by path; a path with no metadata is simply absent. Reads the `mem_meta` passthrough table
+   * only — never an FTS/ranking surface.
+   * @param {string[]} paths
+   * @returns {Map<string, string>}
+   */
+  metaFor(paths) {
+    if (!paths.length) return new Map();
+    const ph = paths.map(() => "?").join(",");
+    const rows = /** @type {{ path: string, meta: string }[]} */ (
+      this.db.prepare(`SELECT path, meta FROM mem_meta WHERE path IN (${ph})`).all(...paths)
+    );
+    return new Map(rows.map((r) => [r.path, r.meta]));
   }
 
   /** @returns {number} number of import edges (slice 4 — for tests/introspection) */

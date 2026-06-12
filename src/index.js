@@ -93,6 +93,9 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {number|null} occurredAt    episode timestamp (epoch ms); null otherwise
  * @property {string|null} text          the full body — written memory verbatim as remembered, files
  *                                       read fresh from disk; null only when the file is gone
+ * @property {Record<string, unknown>|null} meta  opaque caller metadata (RT-3 #3) as supplied to
+ *                                       `remember`, returned verbatim; null for files and for memory
+ *                                       with none
  */
 
 /**
@@ -283,6 +286,7 @@ export class LiteCtx {
       // single kind → one flat ranked list
       const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec), terms);
       if (MEM_KINDS.has(opts.kind)) this.store.attachMemMeta(hits); // slice 5c: surface provenance/use/occurredAt — read, never scored
+      this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(hits); // RT-3 inline-body — content, not a pointer
       if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
       return hits;
@@ -296,6 +300,7 @@ export class LiteCtx {
     for (const k of kinds) {
       grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
       if (MEM_KINDS.has(k)) this.store.attachMemMeta(grouped[k]); // slice 5c: written-memory columns (read, never scored)
+      this._attachMeta(grouped[k]); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(grouped[k]); // RT-3 inline-body — content, not a pointer
     }
     if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
@@ -334,6 +339,24 @@ export class LiteCtx {
           h.body = null; // indexed but gone from disk
         }
       }
+    }
+    return hits;
+  }
+
+  /**
+   * Attach parsed opaque `meta` (RT-3 #3) to written-memory hits, in place — the read half of the
+   * sealed passthrough. One batched lookup; a hit whose path carries no metadata (every file, and
+   * memory written without meta) is left untouched, so this is a no-op on pure-code recall. Parsed
+   * here because the facade owns the JSON boundary; the store only ever holds/returns the raw string.
+   * @param {import("./store.js").Hit[]} hits
+   * @returns {import("./store.js").Hit[]}
+   */
+  _attachMeta(hits) {
+    if (!hits.length) return hits;
+    const map = this.store.metaFor(hits.map((h) => h.path));
+    for (const h of hits) {
+      const raw = map.get(h.path);
+      if (raw != null) h.meta = JSON.parse(raw);
     }
     return hits;
   }
@@ -447,7 +470,7 @@ export class LiteCtx {
       }
     }
     if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch");
-    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text };
+    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, meta: r.meta != null ? JSON.parse(r.meta) : null };
   }
 
   /**
@@ -459,10 +482,13 @@ export class LiteCtx {
    *
    * @param {string} id    caller key / identity (lands in the row's `path`)
    * @param {string} text  the content
-   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number }} [opts]
+   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown> }} [opts]
    *   `kind` ∈ {fact, episode, doc} (default `fact`); `by` = provenance `"human"|"agent"` (default
    *   `"agent"`); `occurredAt` = episode timestamp (epoch ms, default now; ignored for non-episodes);
-   *   `format` defaults to `md` for docs, `text` otherwise.
+   *   `format` defaults to `md` for docs, `text` otherwise. `meta` = an opaque caller dict (RT-3 #3)
+   *   stored verbatim and returned untouched by `get`/`recall` — small structured tags ({sessionId,
+   *   tag, …}), NEVER searched or ranked; park large payloads in `stash`, not here. Re-`remember`ing
+   *   without `meta` clears any prior meta.
    * @returns {Promise<void>}
    */
   async remember(id, text, opts = {}) {
@@ -474,6 +500,9 @@ export class LiteCtx {
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
     const format = opts.format ?? (kind === "doc" ? "md" : "text");
     const occurredAt = kind === "episode" ? opts.occurredAt ?? Date.now() : null;
+    // RT-3 #3: serialize the opaque caller dict to JSON once, here — the store holds bytes, the facade
+    // owns the (de)serialization boundary. null when none → writeMemory clears any prior meta.
+    const meta = opts.meta != null ? JSON.stringify(opts.meta) : null;
     const embedding = this.embeddings ? ((await this._embedSafe(text)) ?? undefined) : undefined;
     // slice 5b ephemerality: an episode write trims the scratchpad of PREVIOUSLY-accumulated episodes
     // past the rolling active window (anything that mattered was distilled into a durable fact, which
@@ -481,7 +510,7 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, embedding });
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding });
   }
 
   /**
