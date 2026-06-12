@@ -4,6 +4,18 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### In progress
+- **`assemble(units, ctx) → units` — the RT-1 context-assembly verb.** Budget-fit POC **cleared**
+  (2026-06-13): replayed 8 real multi-round transcripts (1059 deps) fitted-vs-full and confirmed with
+  a live model — a **recency-anchored** fit @50% budget preserves task success (loses 1.8% of re-read
+  deps; the model produces the correct next action 8/8 with the needed unit present vs 0/8 absent).
+  Constraints carried into the build: the fit is recency-anchored (semantic re-rank of the transcript
+  does not help), and `dropped[]`-with-restorable-handle ships in the same slice (a dropped re-read
+  becomes an explicit re-read, never silent). Evidence: `poc/assemble-fit-poc.mjs`,
+  `poc/assemble-fit-model-poc.mjs`, `poc/RESULTS.md`. The verb is not yet shipped.
+
 ## [0.10.0] — 2026-06-12
 
 The memory socket — litectx now drops in as a host's swappable memory backend (RT-3), with content and

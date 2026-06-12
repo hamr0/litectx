@@ -39,7 +39,7 @@ until a caller exists — and these are **not** speculative-build candidates. Li
 
 | Primitive | ID | Why it waits on bareagent (do NOT build speculatively) |
 |---|---|---|
-| ~~`assemble({intent,budget})`~~ | R-G6/R-C2/R-X1/R-X4 | **NOW RESOLVED → build-now (CE-PRD §8.2).** bareagent's RT-1 seam supplied the consumer: `assemble(units, ctx)` over a neutral unit model, `intent`=`ctx.task`, budget=tokens, cache-stable order via `pinned`/`atomic`. Budget-fit quality stays POC-gated. |
+| ~~`assemble({intent,budget})`~~ | R-G6/R-C2/R-X1/R-X4 | **RESOLVED → build-now; budget-fit POC ✅ CLEARED 2026-06-13 (CE-PRD §8.2).** bareagent's RT-1 seam supplied the consumer: `assemble(units, ctx)` over a neutral unit model, `intent`=`ctx.task`, budget=tokens, cache-stable order via `pinned`/`atomic`. POC (`poc/assemble-fit-*.mjs`) settled the one open claim: recency-anchored fit @50% loses 1.8% of 1059 real re-read deps, live model 8/8-present vs 0/8-absent; constraints → recency-anchored (no semantic re-rank), `dropped[]`-with-handle in the same slice. **Build, not blocked.** |
 | `session` / `state` / `state.view` | R-W3/R-I2 | The state *schema* (which fields, which are LLM-visible) is the consumer's, not ours. |
 | `clear` / `trim` / `summaryWindow` | R-C3/R-C5/R-C6 | Loop mechanics: *when* to clear/trim/summarize is the orchestration loop's policy. |
 | `selectTools(intent, defs)` | R-S6 | Net-new candidate; needs a real tool corpus + a caller to rank for. |
@@ -54,7 +54,9 @@ RT-seam negotiation (2026-06-12) supplied the consumer and pinned its shape (CE-
 - ✅ **RT-3 SHIPPED (the memory socket):** `recall(q,{body:true})` inline-body (`9df3f5a`) · `meta`
   sealed passthrough as a new non-FTS `mem_meta` table (`5402a6e`) · `liteCtxAsStore(lc)` adapter
   (`1b57e77`); plus a pre-existing store.js NUL-byte defect fixed (`acc6ea0`). 196 tests green.
-- **build-now (next):** `assemble(units, ctx)` — shape pinned, opens with a budget-fit POC.
+- **build-now (next):** `assemble(units, ctx)` — shape pinned, **budget-fit POC ✅ CLEARED 2026-06-13**
+  (`poc/assemble-fit-poc.mjs` structural + `poc/assemble-fit-model-poc.mjs` live-model; RESULTS.md).
+  Building: recency-anchored fit · `pinned`/`atomic` invariants · `dropped[]`-with-handle same slice.
 - **zero new code (adapter ready):** RT-4 sub-agent toolbox = `litectx-mcp` read verbs +
   `liteCtxAsStore` + child-own `dbPath` isolation (memory-PRD §3.2) — read-only child default, no
   schema. Recipe/example/test are bareagent's side.
