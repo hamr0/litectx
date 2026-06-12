@@ -546,3 +546,84 @@ all tests, and the BM25 gates remain byte-identical. `@xenova/transformers` → 
 aurora's mis-borrowed torch figure — measured transformers.js/ONNX is **~2.1s first download · ~0.72s
 cached · ~6ms warm**, model **~23 MB**; the real cost is the dep + index-time embedding, not query
 latency.
+
+## Track-2 POC — `assemble(units, ctx)` budget-fit preserves task success (2026-06-12)
+
+**Question (the one unproven RT-1 claim, CE-PRD §8.2):** fitting a multi-round transcript to a token
+budget is trivially possible; the gate is whether it drops the unit a *later round re-reads*.
+Dropping a stale tool-result is safe; dropping the one about to be re-read is a **silent regression**.
+
+**Method (`poc/assemble-fit-poc.mjs`, prove-don't-assert):** replay **8 real Claude Code session
+transcripts** across 8 different projects (not one — no single-session overfit), map each to the RT-1
+neutral unit stream `{id,role,content,kind,pinned,atomic,tokensApprox}`, and extract dependency
+ground-truth **mechanically** (never hand-labelled — the [[chunker-orphans-leading-docs]] crafted-bench
+trap): `edit-after-read` (an `Edit`/`Write(P)` needs the most-recent `Read`-result of `P` in context)
+and `re-read` (a second `Read(P)`). **1059 real deps.** Fit policies never peek at the dep edges.
+`tokensApprox = chars/4`. Outcome proxy = *is the needed unit still in the assembled window* (the
+structural precondition for the Edit's `old_string` to match; a live LLM is not re-run — stated limit).
+
+**Results (silent-regression rate = needed unit dropped before its re-read):**
+
+| policy @ budget | violRate | avg window |
+|---|---|---|
+| recency @10% | 31.4% | 12% |
+| recency @25% | 16.6% | 27% |
+| **recency @50%** | **1.8%** | 44% |
+| salience(recency+bounded-relevance) @50% | 1.9% | 44% |
+
+**Findings.**
+1. **A recency-anchored fit preserves task success.** At a 50% budget it loses **1.8%** of 1059 real
+   re-read deps; the loss grows only as the budget tightens (16.6% @25%, 31.4% @10%) — and the spread
+   across the sweep proves the deps are genuinely long-range (e.g. `mailproof` 86% @10%, all
+   edit-after-read), not trivially recent.
+2. **Semantic re-ranking of the transcript does NOT help and slightly hurts** — re-reads are
+   *recency-bound, not topic-bound*. (Honest correction: an early unbounded-overlap salience scored
+   far worse; that was a weight mis-scaling, not a truth. With a bounded jaccard nudge it washes out.)
+   This is a *discovered design constraint*, matching RT-1's cache-stable / recency-anchored order
+   doctrine — not an assumption carried in.
+3. **The restorable handle (R-C4 `dropped[]`/`rehydrate`, already POC'd in `ri3-handle-poc.mjs`) is
+   LOAD-BEARING, not optional** — it converts the residual silent loss into an *explicit* re-read
+   round (costs a round-trip, never silent data loss). Must ship *with* `assemble`, not after.
+4. **Conservative floor:** this models **drop-only**. Real `assemble` adds **COMPRESS** (down-tier a
+   non-needed unit to `signature` instead of evicting it), which can only *free budget to keep more
+   needed units verbatim* → violRate is an upper bound. Not measured here (would need per-unit
+   signature costing); claimed as headroom, not a number.
+
+**Verdict: PASS — `assemble()` is safe to build**, with the constraints the replay pinned: fit is
+**recency-anchored** (semantic re-rank off for the transcript path), `pinned`/`atomic` invariants hold
+by construction, and **`dropped[]`-with-handle ships in the same slice** (the residual loss has nowhere
+else to go). Next: build `assemble(units, ctx)` over the neutral unit shape, reusing `recall({body:true})`
+(units need bodies) and `compress()` (the COMPRESS tier).
+
+### Track-2 "last bit" — live-model confirmation of the structural proxy (2026-06-13)
+
+The drop-replay above measured a *structural proxy* ("needed unit survived in the window"). This
+closes the gap with a **real model in the loop** (`poc/assemble-fit-model-poc.mjs`): on 8 clean
+edit-after-read cases across 8 projects, ask `claude -p` (sonnet, **tools OFF** — it can't go re-read
+the file and cheat) to produce the exact `old_string` an `Edit` replaces, with the needed Read result
+**PRESENT vs ABSENT** in the assembled window — everything else held equal. Success = the returned
+anchor is a real substring of the file. Majority of 3 samples/cell.
+
+| | PRESENT | ABSENT |
+|---|---|---|
+| cases passing (majority of 3) | **8/8** | **0/8** |
+| raw valid draws | 24/24 | 2/24 |
+
+Keeping the re-read unit → the model reproduces the correct edit anchor every time; dropping it → it
+collapses to ~0 (the 2 stray ABSENT draws were short, guessable anchors like a function signature),
+and typically returns `CANNOT_DETERMINE` — an **explicit, non-silent** failure that the R-C4
+`dropped[]`/`rehydrate` handle recovers in one re-read. **The proxy is real, not an artifact.**
+
+**Honest process note (prove-don't-assert).** The first run looked noisy (PRESENT 6/8, one *inverted*
+row) — every "anomaly" turned out to be a **measurement bug, not a finding**, and only running again
+surfaced them: (1) a scorer that stripped triple-fences but not inline backticks silently failed a
+*correct* answer; (2) single-sample cells flipped between runs (→ majority-of-3); (3) the harness's own
+`claude -p` calls wrote new transcripts into the live corpus mid-run (→ skip transcripts modified
+<120 s ago); (4) a self-inflicted array-aliasing bug (`chosenF = chosen` then `chosen.length = 0`
+emptied both) printed "no clean cases" while selection had genuinely found 8. The clean 8/8-vs-0/8
+only appeared after each was fixed. Also surfaced: ~5/13 candidate cases were **leak-rejected** because
+the file content was *redundantly* present (re-reads, prior edits) — which independently supports
+budget-fit safety (dropping one copy rarely removes the information).
+
+**Combined Track-2 verdict (structural + model): PASS, build `assemble()`** — recency-anchored fit,
+`pinned`/`atomic` invariants, `dropped[]`-with-handle in the same slice.
