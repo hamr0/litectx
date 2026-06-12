@@ -1494,6 +1494,25 @@ package** (§7).
    feeds **review/promotion** (the episode→fact→durable ladder), *use + low-edit + validation* is a
    **trust/stability property** (a tie-breaker among already-relevant, never a global lift), and the
    corrective re-`remember` is the only fact "edit" signal — see §14 #4 (4).
+7. **Retrieval-confidence label (`recall().quality` / a "weak/ok" trust flag)** — ~~does a per-query
+   confidence signal off recall's own scores tell a caller "this retrieval is too weak to act on"?~~
+   **CLOSED — POC-falsified (2026-06-12, `poc/confidence-poc.mjs`).** This is the memory-engine half of
+   CE-PRD R-S8 (struck there too). Three findings, in order: (a) the original premise — a label "off the
+   **activation distribution**, only litectx holds those scores" — is void: base-level activation was
+   never shipped into recall (§4, §14 #1/#4 falsified it); the only ranking signals are BM25 (+code
+   import-spreading). (b) The fallback — thresholding **raw BM25 magnitude** — is the repo/query-length-
+   dependent prior §4 forbids. (c) The last candidate — a label off **top raw embeddings cosine** (an
+   absolute similarity, and for fact/episode the slice-11 KNN union reaches the whole store, not just the
+   lexical gate) — **separates answerable from unanswerable queries in aggregate (AUC 0.92) but has no
+   usable threshold.** On the committed `memory-facts` corpus + 18 authored unanswerable queries (easy
+   off-domain + hard in-domain-absent), the **paraphrase/morph answers score in the same 0.21–0.54 cosine
+   band as the unanswerable queries (≤0.36)** — so any τ high enough to catch "nothing here" (~0.40)
+   falsely flags ~25% of *real* answers as "weak," and disproportionately the para/morph hits the label
+   would exist to judge. It is most wrong exactly where it would be most used, and the absolute cosine
+   values are MiniLM-specific (τ won't survive a model swap). **Same shape as the §4/§14-#4 activation
+   result: a signal real for *aggregate* judgment, useless for the *per-query* decision.** At most a
+   coarse "obvious-garbage" flag (τ≈0.25–0.30, ~6% false alarms) — low value, not built. *(POC kept as
+   the evidence record; no live code changed.)*
 
 ---
 
@@ -1520,7 +1539,8 @@ members removed, and a redundant vector fetch in `knnCandidates` de-duplicated (
 **R-C4 stash() — restorable compression — SHIPPED (2026-06-11).** `stash(id, text)` parks a payload in
 a **keyed agent-context store** (a plain `stash` table — deliberately NOT FTS5): the agent drops a
 large tool result / fetched page / file dump from its window keeping only the `id` handle, then
-`get(id)` rehydrates it and `forget(id)` evicts it. A stash is **not memory** — never indexed, so
+`get(id)` rehydrates it and `evict(id)` drops it (stash deletion is `evict`, stash-only; `forget` is
+memory-only). A stash is **not memory** — never indexed, so
 `recall` can't surface it on any kind; never auto-pruned, so a restore always works (it survives the
 episode rolling-window prune); addressable only by exact id. It is the **first citizen of the "agent
 context" domain** (keyed working-set), kept structurally separate from the searchable memory core

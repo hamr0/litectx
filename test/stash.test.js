@@ -1,8 +1,9 @@
 // R-C4 restorable compression — stash(): the keyed agent-context store. Behavior tests against an
 // in-memory DB. The load-bearing invariants: a stashed payload round-trips by id (get rehydrates it
 // verbatim), is NEVER surfaced by recall (no FTS home, on any kind), survives the episode rolling-
-// window prune (restore must always work), and is evictable by an explicit forget. A stash is NOT
-// memory — it coexists with facts/episodes without polluting their ranking.
+// window prune (restore must always work), and is evictable only by an explicit evict() — by id, age,
+// or count (forget is memory-only and never reaches it). A stash is NOT memory — it coexists with
+// facts/episodes without polluting their ranking.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -62,12 +63,60 @@ test("stash upserts by id — re-stashing the same id replaces the payload", () 
   c.close();
 });
 
-test("forget(id) evicts a stash; get then returns null", () => {
+test("evict(id) drops a stash; get then returns null", () => {
   const c = ctx();
   c.stash("stash:gone", BIG);
-  const removed = c.forget("stash:gone");
-  assert.equal(removed, 1, "forget reports the stash removed");
+  const removed = c.evict("stash:gone");
+  assert.equal(removed, 1, "evict reports the stash removed");
   assert.equal(c.get("stash:gone"), null, "evicted — no longer rehydratable");
+  c.close();
+});
+
+test("forget is memory-only — it no longer reaches the stash table (R-G7 seam)", () => {
+  const c = ctx();
+  c.stash("stash:notmemory", BIG);
+  assert.equal(c.forget("stash:notmemory"), 0, "forget(id) does NOT delete a stash");
+  assert.ok(c.get("stash:notmemory"), "stash still rehydratable after a forget");
+  assert.equal(c.evict("stash:notmemory"), 1, "evict is the stash deleter");
+  c.close();
+});
+
+test("evict({ olderThan }) drops stale parked payloads, keeps fresh ones", () => {
+  const c = ctx();
+  const now = Date.now();
+  c.store.writeStash({ id: "stash:old", text: "x", createdAt: now - 5 * 3_600_000 });
+  c.store.writeStash({ id: "stash:fresh", text: "y", createdAt: now });
+  const removed = c.evict({ olderThan: now - 3_600_000 });
+  assert.equal(removed, 1, "only the stale one is evicted");
+  assert.equal(c.get("stash:old"), null);
+  assert.ok(c.get("stash:fresh"), "fresh stash kept");
+  c.close();
+});
+
+test("evict({ maxCount }) keeps the newest N by parked-at, evicts the rest", () => {
+  const c = ctx();
+  const now = Date.now();
+  for (let i = 0; i < 5; i++) c.store.writeStash({ id: `stash:${i}`, text: "x", createdAt: now - (5 - i) * 1000 }); // 0 oldest … 4 newest
+  const removed = c.evict({ maxCount: 2 });
+  assert.equal(removed, 3, "5 parked, keep newest 2 → evict 3");
+  assert.equal(c.get("stash:0"), null);
+  assert.ok(c.get("stash:3") && c.get("stash:4"), "the two newest survive");
+  c.close();
+});
+
+test("evict NEVER touches written memory (the reason it is split from forget)", async () => {
+  const c = ctx();
+  await c.remember("fact:keep", "auth uses jwt", { kind: "fact" });
+  c.store.writeStash({ id: "stash:junk", text: "x", createdAt: 1 });
+  c.evict({ olderThan: Date.now(), maxCount: 0 }); // most aggressive sweep possible
+  const back = c.get("fact:keep");
+  assert.ok(back && back.text === "auth uses jwt", "the fact survives an all-evicting stash sweep");
+  c.close();
+});
+
+test("evict(policy) with no usable selector throws", () => {
+  const c = ctx();
+  assert.throws(() => c.evict({}), /needs an id string|olderThan|maxCount/);
   c.close();
 });
 

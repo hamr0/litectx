@@ -387,7 +387,7 @@ export class Store {
    * kind — and NEVER pruned; it is addressable only by exact `id` (via {@link getItem}) and lives
    * until an explicit {@link forgetMemory}. The durable half of "drop the payload, keep a handle":
    * the agent clears a large tool result from its window and rehydrates it by id on demand. Upsert
-   * by `id`.
+   * by `id`. Deletion is {@link evictStash} (NOT `forgetMemory`, which is memory-only).
    * @param {{ id: string, text: string, createdAt: number }} s
    */
   writeStash(s) {
@@ -425,6 +425,34 @@ export class Store {
   }
 
   /**
+   * Evict parked stash payloads (R-C4 housekeeping) — the stash deleter, split from {@link forgetMemory}
+   * so a bulk age/size sweep can NEVER reach durable written memory: **only the `stash` table is touched.**
+   * Exactly one selector per call: `{ id }` (one payload), `{ olderThan }` (epoch-ms floor — drop anything
+   * parked before it, via `created_at <`), or `{ maxCount }` (keep the newest N by `created_at`, evict the
+   * rest). Also cleans any `fetch` recall_log rows a {@link getItem} left on an evicted id (parity with the
+   * old forget cascade). Returns rows removed. (Ties on `created_at` under `maxCount` keep an arbitrary
+   * member of the tie — the *count* held is exact, which is all a janitor needs.)
+   * @param {{ id?: string, olderThan?: number, maxCount?: number }} sel
+   * @returns {number}
+   */
+  evictStash(sel) {
+    /** @type {string} */ let where;
+    /** @type {(string | number)[]} */ let params;
+    if (sel.id != null) (where = "WHERE path = ?"), (params = [sel.id]);
+    else if (sel.olderThan != null) (where = "WHERE created_at < ?"), (params = [sel.olderThan]);
+    else if (sel.maxCount != null) (where = "WHERE path IN (SELECT path FROM stash ORDER BY created_at DESC LIMIT -1 OFFSET ?)"), (params = [sel.maxCount]);
+    else throw new Error("evictStash: a selector is required (id, olderThan, or maxCount)");
+    const tx = this.db.transaction(() => {
+      const paths = /** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM stash ${where}`).all(...params)).map((r) => r.path);
+      const removed = this.db.prepare(`DELETE FROM stash ${where}`).run(...params).changes;
+      const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
+      for (const p of paths) delLog.run(p);
+      return removed;
+    });
+    return tx();
+  }
+
+  /**
    * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
    * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
    * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
@@ -456,16 +484,11 @@ export class Store {
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM docs WHERE ${docsCond}`).all(params)),
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM mem WHERE ${memCond}`).all(params)),
       ].map((r) => r.path);
-      let removed =
+      const removed =
         this.db.prepare(`DELETE FROM docs WHERE ${docsCond}`).run(params).changes +
         this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
-      // stash (R-C4): the keyed agent-context table is outside the FTS homes and addressable by id
-      // only (no kind/provenance), so only an id selector reaches it. Push its path into `paths` so
-      // the cascade below cleans the 'fetch' recall_log rows a get(id) on it may have left.
-      if (sel.id != null) {
-        const s = this.db.prepare("DELETE FROM stash WHERE path = ?").run(sel.id).changes;
-        if (s) (removed += s), paths.push(sel.id);
-      }
+      // NB: `forget` is MEMORY-ONLY. Stash deletion lives in {@link evictStash} (R-C4 housekeeping),
+      // split out so a bulk age/size sweep can never reach a durable fact — see §10.5 / CE-PRD R-G7.
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");

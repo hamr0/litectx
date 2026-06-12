@@ -346,12 +346,13 @@ Delete directly-written memory. Returns the number of rows removed.
 
 **`forget` can never touch indexed files** — it operates only on written
 (`remember`-created) rows. To remove an indexed file from the store, delete the file and
-re-`index()`. A stash (below) is also evicted by `forget(id)`.
+re-`index()`. **`forget` is memory-only** — it does **not** reach the stash table; clean parked
+payloads with `evict` (below).
 
 ### `ctx.stash(id, text)` → `void`
 Park a payload in the **keyed agent-context store** — the durable half of *restorable compression*
 (R-C4). Drop a large payload (a tool result, a fetched page, a file dump) out of your context window,
-keep only the cheap `id`; `get(id)` rehydrates the full text on demand and `forget(id)` evicts it.
+keep only the cheap `id`; `get(id)` rehydrates the full text on demand and `evict(id)` drops it.
 
 - A stash is **not memory.** It lives in no FTS table, so `recall` **never** surfaces it — on any
   kind — and it is **never auto-pruned** (unlike episodes), so a restore always works. Reachable only
@@ -384,6 +385,19 @@ body **only if you decide you need it**. `null` for an unknown id.
 - **Stash-only.** `recall` owns ranked retrieval over memory; a stash is a dumb keyed blob, so `peek`
   carries no weights and no ranking. `peek` on a memory id or a file path returns `null`.
 - Library API only, same rationale as `stash`.
+
+### `ctx.evict(idOrPolicy)` → `number`
+The **cleanup-half of `stash`** (R-C4 / R-G7) — the runtime's stash deleter. Returns the count removed.
+
+- **`evict(id)`** drops one parked payload; **`evict({ olderThan })`** drops anything parked before an
+  epoch-ms floor; **`evict({ maxCount })`** keeps only the newest N by parked-at and drops the rest. Pass
+  both `olderThan` and `maxCount` to apply them in turn (age first, then count). An empty policy throws.
+- **Stash-only, by construction.** Unlike `forget` (which invalidates durable memory), `evict` touches
+  **only** the `stash` table — a bulk age/size sweep can **never** reach a `fact`/`episode`. That safety
+  is why the two are separate verbs (not one overloaded `forget`).
+- **The runtime owns the policy; litectx owns the delete.** *Which* stashes are stale and *when* to sweep
+  is the orchestration loop's call (e.g. bareagent); `evict` is the mechanism it calls.
+- Library API only, same rationale as `stash` (orchestration plumbing, never a model-facing verb).
 
 ### `ctx.reviewCandidates(threshold = 5)` → `{ path, hits }[]`
 The **human-in-the-loop promotion query** (review earned by use): agent-asserted facts

@@ -416,7 +416,9 @@ export class LiteCtx {
   /**
    * Forget directly-written memory (§3.2). Pass an `id` to drop one item, or a query
    * (`{ kind?, by? }`) for bulk human invalidation (e.g. drop every agent-asserted fact). **Only ever
-   * removes `source='direct'` rows** — an indexed file is never touched. Returns the count removed.
+   * removes `source='direct'` rows** — an indexed file is never touched. **Memory-only:** a stash is not
+   * memory — clean parked payloads with {@link evict} (a `forget`-by-id no longer reaches the stash table).
+   * Returns the count removed.
    *
    * @param {string | { kind?: string, by?: string }} sel
    * @returns {number}
@@ -431,7 +433,7 @@ export class LiteCtx {
    * Park a payload in the keyed agent-context store and return its handle — the durable half of
    * **restorable compression** (R-C4). The caller drops a large payload (a tool result, a fetched
    * page, a file dump) from its context window, keeping only the cheap handle (`id`); {@link get}
-   * rehydrates the full text on demand and {@link forget} evicts it when truly done. A stash is **not
+   * rehydrates the full text on demand and {@link evict} drops it when truly done. A stash is **not
    * memory**: it is never indexed and never recalled (it lives in no FTS table, so recall can't
    * surface it on any kind) and never auto-pruned — it is addressable only by exact `id`. Upsert by
    * `id` (also the rehydrate/evict handle; namespace it, e.g. `"stash:toolresult-42"`). Sync — a
@@ -464,6 +466,29 @@ export class LiteCtx {
    */
   peek(id) {
     return this.store.peekStash(id);
+  }
+
+  /**
+   * Evict parked stashes (R-C4 housekeeping) — the runtime's stash deleter, the cleanup half of
+   * {@link stash}. **API-only** (§10.5: a stash is orchestration plumbing, never a model verb) and
+   * **stash-only**: unlike {@link forget} (which invalidates durable memory), `evict` can never reach a
+   * fact/episode — a bulk age/size sweep is safe by construction (only the `stash` table is touched).
+   * Pass an `id` to drop one parked payload, or a policy: `{ olderThan }` (epoch-ms floor — evict anything
+   * parked before it) and/or `{ maxCount }` (keep only the newest N, evict the rest). When both are given
+   * they apply in turn (age first, then count). The runtime owns the *policy* (which/when); litectx owns
+   * the *delete*. Returns the count removed.
+   *
+   * @param {string | { olderThan?: number, maxCount?: number }} sel
+   * @returns {number}
+   */
+  evict(sel) {
+    if (typeof sel === "string") return this.store.evictStash({ id: sel });
+    let removed = 0;
+    let applied = false;
+    if (sel.olderThan != null) (removed += this.store.evictStash({ olderThan: sel.olderThan })), (applied = true);
+    if (sel.maxCount != null) (removed += this.store.evictStash({ maxCount: sel.maxCount })), (applied = true);
+    if (!applied) throw new Error("evict(policy) needs an id string, { olderThan }, and/or { maxCount }");
+    return removed;
   }
 
   /**

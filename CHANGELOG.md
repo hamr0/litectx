@@ -4,6 +4,27 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-06-12
+
+The stash-cleanup verb, and a clean memory/scratch seam.
+
+### Added
+- **`evict(id | { olderThan, maxCount })` — the stash-cleanup verb (R-C4 / R-G7).** The runtime's
+  deleter for parked payloads: `evict(id)` drops one; `{ olderThan }` (epoch-ms floor) drops anything
+  parked before it; `{ maxCount }` keeps only the newest N and drops the rest (both policies compose —
+  age first, then count). **API-only** (§10.5, like `stash`/`peek`) and **stash-only by construction** —
+  it touches only the `stash` table, so a bulk age/size sweep can never reach a durable `fact`/`episode`.
+  The runtime owns the *policy* (which/when); litectx owns the *delete*. (POC `poc/evict-poc.mjs`; tests
+  assert the *evict-never-touches-memory* and *forget-can't-reach-stash* invariants.)
+
+### Changed (BREAKING)
+- **`forget` is now memory-only.** Previously `forget(id)` would also delete a same-id `stash`; that
+  fallthrough is removed — stash deletion moved to the dedicated `evict` verb above. This keeps the
+  model-facing "drop knowledge" verb (`forget`) and the runtime-only "reclaim scratch" verb (`evict`) on
+  opposite sides of the §10.5 surface line, and makes "a bulk sweep can never harm a durable fact"
+  structural. **Migration:** replace any `forget(stashId)` with `evict(stashId)`. (Blast radius ~zero —
+  `stash`/`evict` are library-only orchestration plumbing with no live consumer yet.)
+
 ## [0.7.0] — 2026-06-12
 
 The context-primitive release. Adds the first two CE *render* verbs — `compress()` (R-C7 rank-tiered
