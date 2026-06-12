@@ -297,7 +297,7 @@ export class Store {
     // them (below). `chunkKey` collapses null symbols to "" so identity matches the stored row.
     const prevNodes = this.db.prepare("SELECT symbol, body FROM nodes WHERE path = ?");
     const insEdit = this.db.prepare("INSERT INTO chunk_edits(path, symbol, kind, ts) VALUES (@path, @symbol, @kind, @ts)");
-    const chunkKey = (/** @type {string|null} */ symbol, /** @type {string} */ body) => `${symbol ?? ""} ${body}`;
+    const chunkKey = (/** @type {string|null} */ symbol, /** @type {string} */ body) => `${symbol ?? ""}\0${body}`;
     // import edges are owned by their source file: refreshed when the importer is re-indexed,
     // and on delete dropped from BOTH ends so no edge dangles to a removed file.
     const delEdgesOf = this.db.prepare("DELETE FROM edges WHERE src_path = ? OR dst_path = ?");
