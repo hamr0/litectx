@@ -73,6 +73,9 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
+| **`recall(q, {body:true})`** — inline each hit's content (verbatim memory / localized chunk / whole-file fallback); off by default | ✅ shipped (RT-3) |
+| **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (RT-3) |
+| **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (RT-3) |
 | **`compress(node, {level})`** — rank-tiered render (R-C7): `verbatim` / `signature` (header + doc, body elided) / `drop`; tree-sitter signature extraction, ~82% bytes saved with the doc kept | ✅ shipped (library API only, like `stash`/`peek`) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
@@ -188,6 +191,11 @@ return shape follows the `kind` argument:
   ranking). A kind with no content returns an empty array — honest, not an error.
 - `opts.n?: number` — max hits **per kind**; raise to dig deeper. No hard cap, no
   pagination (a larger `n` is a larger context — your budget to manage).
+- `opts.body?: boolean` (default `false`) — inline each hit's content as `hit.body`. Off by
+  default: recall returns **pointers**, not payloads. Opt in to skip the follow-up `get()`s when
+  mounting litectx as a memory store or feeding an assembler. Written memory comes back **verbatim**;
+  a file hit returns its **localized chunk** (the indexed text that ranked — drift-free), or the
+  whole file when nothing localized; `null` when the file is gone or the id is unknown.
 - No usable query terms → `[]` (single kind) or all-empty groups.
 - `opts.log?: boolean` (default `true`) — set `false` to skip the recall audit log. The log
   is a **demand signal**: queries from dashboards, CI checks, batch tooling, or a read-only
@@ -209,7 +217,9 @@ return shape follows the `kind` argument:
   // written-memory grounding (slice 5c) — present on fact/episode hits, absent on indexed files:
   provenance?: "human" | "agent",  // validation status (signed-off vs the agent's own assertion)
   use?: number,                    // recall-demand count ('recall' rows only); a fresh memory reads 0
-  occurredAt?: number|null }       // episode timestamp (epoch ms); null for facts
+  occurredAt?: number|null,        // episode timestamp (epoch ms); null for facts
+  body?: string | null,            // the hit's content — ONLY when called with { body: true } (see above)
+  meta?: Record<string, unknown> } // opaque caller metadata (RT-3), verbatim; written memory only
 ```
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
 > from one `git log` pass at index time. It never affects ranking; `null` means no commit history
@@ -231,8 +241,12 @@ return shape follows the `kind` argument:
 > *documentation* localizes to that function — not to the file preamble where the comment would
 > otherwise orphan. `null` when nothing localizes: written memory has no chunks
 > (the row IS the unit), and a match carried only by the filename names none.
+> `body` rides only when you pass `{ body: true }` (see the option above); `meta` is the **sealed
+> opaque metadata** (RT-3) a caller attached via `remember({ meta })` — returned verbatim but stored
+> in no FTS table, so it is **never tokenized, searched, or scored** (a term that lives only in `meta`
+> can't make the memory recallable). Both are written-memory concerns, absent on indexed files.
 > 🚧 The richer roadmap shape (`{ id, signals: { bm25, activation, ... } }`)
-> is not shipped yet. Today a hit is the six fields above.
+> is not shipped yet.
 
 ### `ctx.get(id, opts?)` → `Item | null`
 **Body access** (slice 9) — the read counterpart to `recall`: recall returns ranked
@@ -255,6 +269,7 @@ Item = {
   provenance: "human"|"agent"|null,  // written memory only; null for files
   occurredAt: number | null,         // episode timestamp (epoch ms)
   text: string | null,               // the full body
+  meta: Record<string, unknown>|null,// opaque caller metadata, verbatim; null for files / none
 }
 ```
 
@@ -358,6 +373,12 @@ content. The `id` is your handle for update/forget — namespace it (`"fact:auth
   Ignored for facts/docs (a durable assertion has no constitutive "when").
 - `opts.format?: string` — defaults to `"md"` for docs, `"text"` otherwise. Metadata only
   for direct writes (nothing is chunked or parsed).
+- `opts.meta?: Record<string, unknown>` — an **opaque caller dict** (RT-3), stored verbatim and
+  returned untouched by `get`/`recall` (as `.meta`). It lives in **no FTS table** — never tokenized,
+  searched, or scored — so it's the sealed passthrough that lets litectx stand in as a generic
+  key-value memory store (see `liteCtxAsStore`). Keep it to **small structured tags** (`{ sessionId,
+  tag, author }`); park large payloads in `stash`, not here. Re-`remember`ing without `meta` clears
+  any prior meta (the latest write wins, like the text).
 
 Content is stored **whole** — one searchable unit, no tree-sitter/section chunking. You
 control granularity by how you split before writing (ten atomic facts beat one blob).
@@ -510,8 +531,35 @@ Given a graph node and a `level`, return its text at one of three fidelities:
   but owns none of its logic. Library API only (a render mechanic the host loop runs, like `stash`/`peek`
   — not an MCP verb). `COMPRESS_LEVELS` exports the level vocabulary.
 
+### `liteCtxAsStore(lc, opts?)` → a host `Store`
+Mount an indexed `LiteCtx` as a host's swappable memory backend — the four-method `Store` shape
+(`{ store, search, get, delete }`) a runtime like bareagent's `Memory` expects — so a substring-scan
+`JsonFileStore` can be swapped for litectx in **one line**, host code unchanged, gaining ranked,
+graph-aware recall. A free function (`import { liteCtxAsStore } from "litectx"`); it **copies** the
+host's shape, no import of the host.
+
+```js
+const memory = new Memory({ store: liteCtxAsStore(lc) });   // lc: a LiteCtx (its own dbPath = isolation)
+const id = await memory.store("Auth uses JWT", { tag: "auth" });  // → minted id; ranked, not substring
+const hits = await memory.search("how does auth work");           // [{ id, content, metadata, score }]
+```
+
+- **`store(content, metadata?)` → `Promise<id>`** — mints a namespaced id (`"<kind>:<uuid>"`) and
+  `remember`s. `metadata.kind` (default `"fact"`) and `metadata.by` drive the write; **every other key
+  rides the sealed `meta` passthrough** and round-trips verbatim. The adapter is the store, so *it* owns
+  the id — the host never supplies one.
+- **`search(query, options?)` → `Promise<[{ id, content, metadata, score }]>`** — ranked recall with
+  `{ body: true }` (content inlined). Targets **one kind** (`options.kind`, default `"fact"`) so scores
+  stay comparable; `options.limit` caps results. `metadata` comes back whole (kind/by reassembled +
+  the passthrough).
+- **`get(id)` → `{ id, content, metadata } | null`** · **`delete(id)`** → `forget(id)`.
+- `opts.kind` sets the default write/search kind. `store`/`search` are **async** (litectx embeds /
+  ranks); `get`/`delete` are sync. Give each sub-agent its **own `dbPath`** for isolation — separate
+  files, zero shared state.
+
 ### Named exports (advanced / extension)
 - `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
+- `liteCtxAsStore(lc, { kind })` — mount litectx as a host `Store` (the section just above).
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).
@@ -609,8 +657,10 @@ indexed files and direct-written docs share it, discriminated by a `source`
 column) and `mem` (facts + episodes, porter-stemmed) — plus a `file_index` table
 for incremental change detection, a `nodes` table for the symbol substrate,
 `edges` (imports → spreading; impact), `git_sig` (activity metadata),
-`file_embeddings` (the opt-in tier), and `recall_log` (the slice-7 audit/access
-log). A `kind` routes to exactly one FTS table, and kinds never share a ranking,
+`file_embeddings` (the opt-in tier), `recall_log` (the slice-7 audit/access
+log), and two **non-FTS sidecars** for written memory — `mem_text` (verbatim
+text) and `mem_meta` (the sealed opaque-metadata passthrough, RT-3): both live
+outside every FTS table by design, so they're returned but never searched. A `kind` routes to exactly one FTS table, and kinds never share a ranking,
 so BM25 scores never merge across the two. Indexing is **routed by file
 extension** (never by content) and
 prefers `git ls-files` (tracked files, respects `.gitignore`), falling back to a

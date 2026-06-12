@@ -665,3 +665,4 @@ export { Store } from "./store.js";
 export { splitIdent, keywords, ftsMatch } from "./tokenize.js";
 export { Embedder, cosine } from "./embedder.js";
 export { compress, COMPRESS_LEVELS } from "./compress.js";
+export { liteCtxAsStore } from "./memory-store.js";
