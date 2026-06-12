@@ -50,12 +50,14 @@ is pending the consumer, so building now would be procrastination dressed as pro
 is the one the whole doctrine is reserved for.~~ — **`assemble()` is no longer pending:** bareagent's
 RT-seam negotiation (2026-06-12) supplied the consumer and pinned its shape (CE-PRD §8.2).
 
-**↳ RT-seam negotiation outcome (2026-06-12) — three more build-now, two still deferred-with-trip-wire:**
-- **build-now:** `assemble(units, ctx)` (shape pinned, budget-fit POC-gated) · `recall(q,{body:true})`
-  inline-body flag (no migration) · `meta TEXT` sealed passthrough column (first memory-tier migration,
-  write-path rows only).
-- **zero new code:** RT-4 sub-agent toolbox = `litectx-mcp` read verbs + child-own `dbPath` isolation
-  (memory-PRD §3.2) — read-only child default, no schema.
+**↳ RT-seam negotiation outcome (2026-06-12):**
+- ✅ **RT-3 SHIPPED (the memory socket):** `recall(q,{body:true})` inline-body (`9df3f5a`) · `meta`
+  sealed passthrough as a new non-FTS `mem_meta` table (`5402a6e`) · `liteCtxAsStore(lc)` adapter
+  (`1b57e77`); plus a pre-existing store.js NUL-byte defect fixed (`acc6ea0`). 196 tests green.
+- **build-now (next):** `assemble(units, ctx)` — shape pinned, opens with a budget-fit POC.
+- **zero new code (adapter ready):** RT-4 sub-agent toolbox = `litectx-mcp` read verbs +
+  `liteCtxAsStore` + child-own `dbPath` isolation (memory-PRD §3.2) — read-only child default, no
+  schema. Recipe/example/test are bareagent's side.
 - **still deferred:** RT-2 post-round harvest (un-defers *with* the `trim`/truncation seam, as a
   harvest-before-evict interlock) · RT-5 `scope` column R-I1 (un-defers for the shared-db multi-tenant
   case; separate-db covers spawn isolation today). Full ledger: CE-PRD §8.2.
