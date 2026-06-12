@@ -19,9 +19,10 @@ All notable changes to this project are documented here, following
   and never reorders (**cache-stable**, deterministic). `dropped[]` accounts for every elided unit (no
   silent loss; restorable by `id` from the host's canonical transcript). Best-effort, never a hard cap.
   **v1 ships FIT only**; SELECT (recall-inject) + COMPRESS (signature-tier) are the next slice (COMPRESS
-  needs a `format` only recall-injected units carry). POC evidence: `poc/assemble-fit-poc.mjs` (structural,
-  1.8% loss @50% over 1059 real deps) + `poc/assemble-fit-model-poc.mjs` (live model, 8/8 present vs 0/8
-  absent), `poc/RESULTS.md`. (Tests `test/assemble.test.js`, 12.)
+  needs a `format` only recall-injected units carry). POC evidence: `poc/assemble-fit-poc.mjs` (structural)
+  + `poc/assemble-verify-shipped.mjs` (the **shipped** verb: 3.8% silent-loss @50% over 1059 real deps —
+  budget-honest; the POC's inline 1.8% was an atomic-overflow artifact, corrected) + `poc/assemble-fit-model-poc.mjs`
+  (live model, 8/8 present vs 0/8 absent), `poc/RESULTS.md`. (Tests `test/assemble.test.js`, 12.)
 
 ## [0.10.0] — 2026-06-12
 

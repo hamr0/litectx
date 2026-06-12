@@ -627,3 +627,32 @@ budget-fit safety (dropping one copy rarely removes the information).
 
 **Combined Track-2 verdict (structural + model): PASS, build `assemble()`** — recency-anchored fit,
 `pinned`/`atomic` invariants, `dropped[]`-with-handle in the same slice.
+
+### Track-2 build verification — SHIPPED `assemble()` vs the POC, and a correction (2026-06-13)
+
+After building `src/assemble.js`, ran the **exported verb** over the same 8 real transcripts
+(`poc/assemble-verify-shipped.mjs`) to check it reproduces the POC — because the unit tests in
+`test/assemble.test.js` are author-written and confirmatory (they guard the invariants, they don't
+re-prove the real-data claim). It **does not exactly match**, and the gap is a real finding:
+
+| | @25% | @50% |
+|---|---|---|
+| POC inline fit (`assemble-fit-poc.mjs`) | 16.6% | 1.8% |
+| **shipped `assemble()`** | **19.0%** | **3.8%** |
+| mailproof (longest-range) | 82% | **23% (POC: 2%)** |
+
+**Root cause (instrumented, not guessed).** The POC's inline fit completed atomic groups with a
+post-hoc `ATOMIC_WHOLE` pass that had **no budget check**: a needed *old* read's tiny tool-*call*
+(~18 tok) could slip in under budget during the greedy pass, then group-completion dragged its large
+*result* (~1.2k tok) in too — **keeping it by overflowing the budget**. The shipped verb fits whole
+atomic groups **budget-honestly** (an over-budget group drops whole), so long-range reads that sit past
+the budget boundary fall out of the window. On `mailproof` (94 deps, the longest-range set) this flips
+2% → 23%.
+
+**The correction (prove-don't-assert).** **The POC's 1.8%@50% was optimistic — an overflow artifact.
+The budget-honest cost is 3.8%@50%** (single-digit aggregate still; but long-range-heavy sessions pay
+more). This does **not** weaken the verdict — it **strengthens** the load-bearing role of
+`dropped[]`-with-handle: a budget-honest fit drops *more* long-range reads, and the rehydrate re-read is
+exactly what recovers them (the model's `CANNOT_DETERMINE` → re-read path, confirmed by the live-model
+A/B, which is independent of this — it compared PRESENT vs ABSENT directly, not via a fit policy).
+The shipped verb is kept as-is (budget-honest is correct); the number is corrected to 3.8%.
