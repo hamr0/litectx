@@ -6,8 +6,10 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
-The lazy-load release. Adds `peek()` — the read-half of `stash()` — and settles the consumption-surface
-question for both. No new dependencies; the deterministic BM25 core and every quality gate are unchanged.
+The context-primitive release. Adds the first two CE *render* verbs — `compress()` (R-C7 rank-tiered
+render: verbatim / signature / drop) and `peek()` (R-I3 head+tail preview, the read-half of `stash()`) —
+and settles the consumption-surface question for all three (library/orchestration verbs, not MCP). No new
+dependencies; the deterministic BM25 core and every quality gate are unchanged.
 
 ### Added
 - **`compress(node, { level })` — the R-C7 rank-tiered render primitive.** Given a graph node (a code
