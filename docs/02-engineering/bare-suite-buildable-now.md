@@ -39,15 +39,26 @@ until a caller exists — and these are **not** speculative-build candidates. Li
 
 | Primitive | ID | Why it waits on bareagent (do NOT build speculatively) |
 |---|---|---|
-| `assemble({intent,budget})` | R-G6/R-C2/R-X1/R-X4 | The headline call. `intent` (query? step descriptor?), budget unit (tokens? nodes?), block ordering — **all defined by the consumer**. The doctrine was written for exactly this. |
+| ~~`assemble({intent,budget})`~~ | R-G6/R-C2/R-X1/R-X4 | **NOW RESOLVED → build-now (CE-PRD §8.2).** bareagent's RT-1 seam supplied the consumer: `assemble(units, ctx)` over a neutral unit model, `intent`=`ctx.task`, budget=tokens, cache-stable order via `pinned`/`atomic`. Budget-fit quality stays POC-gated. |
 | `session` / `state` / `state.view` | R-W3/R-I2 | The state *schema* (which fields, which are LLM-visible) is the consumer's, not ours. |
 | `clear` / `trim` / `summaryWindow` | R-C3/R-C5/R-C6 | Loop mechanics: *when* to clear/trim/summarize is the orchestration loop's policy. |
 | `selectTools(intent, defs)` | R-S6 | Net-new candidate; needs a real tool corpus + a caller to rank for. |
 | `recordUseful(ids, weight)` | R-W7 | Mechanism is aurora-calibrated, but the recall-rerank use was **falsified topic-blind** (memory-PRD §14 #4); its only safe home (trust/tie-break) already shipped as columns. Needs the loop's success-verdict. |
 
 **These are "pending litectx" only in the sense that litectx will eventually host them — their design
-is pending the consumer, so building now would be procrastination dressed as progress.** `assemble()`
-is the one the whole doctrine is reserved for.
+is pending the consumer, so building now would be procrastination dressed as progress.** ~~`assemble()`
+is the one the whole doctrine is reserved for.~~ — **`assemble()` is no longer pending:** bareagent's
+RT-seam negotiation (2026-06-12) supplied the consumer and pinned its shape (CE-PRD §8.2).
+
+**↳ RT-seam negotiation outcome (2026-06-12) — three more build-now, two still deferred-with-trip-wire:**
+- **build-now:** `assemble(units, ctx)` (shape pinned, budget-fit POC-gated) · `recall(q,{body:true})`
+  inline-body flag (no migration) · `meta TEXT` sealed passthrough column (first memory-tier migration,
+  write-path rows only).
+- **zero new code:** RT-4 sub-agent toolbox = `litectx-mcp` read verbs + child-own `dbPath` isolation
+  (memory-PRD §3.2) — read-only child default, no schema.
+- **still deferred:** RT-2 post-round harvest (un-defers *with* the `trim`/truncation seam, as a
+  harvest-before-evict interlock) · RT-5 `scope` column R-I1 (un-defers for the shared-db multi-tenant
+  case; separate-db covers spawn isolation today). Full ledger: CE-PRD §8.2.
 
 ---
 

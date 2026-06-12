@@ -257,8 +257,8 @@ the **adopter-pulled `assemble()`** (Tier B), not a Tier-A scrape.
 
 | Req | Surface | The ambiguity only a consumer resolves |
 |---|---|---|
-| **R-G6 / R-C2** | `assemble({intent,budget})` | What *is* `intent` (query? step descriptor?); budget unit (tokens? nodes?); how the caller wants blocks ordered. **The headline call — the doctrine was written for exactly this.** |
-| **R-X1 / R-X4** | `assemble()` ordering contract | Cache-prefix split + authority precedence are properties of the *assembled output* → follow assemble. |
+| **R-G6 / R-C2** | `assemble({intent,budget})` | What *is* `intent` (query? step descriptor?); budget unit (tokens? nodes?); how the caller wants blocks ordered. **The headline call — the doctrine was written for exactly this.** → **SHAPE RESOLVED by the bareagent RT-seam negotiation, §8.2** (2026-06-12): `assemble(units, ctx)` over a neutral unit model; `intent`=`ctx.task`, budget=tokens, ordering=cache-stable with `pinned`/`atomic` flags. |
+| **R-X1 / R-X4** | `assemble()` ordering contract | Cache-prefix split + authority precedence are properties of the *assembled output* → follow assemble. → resolved with the above (§8.2): `pinned` units never move/drop, `atomic` units never split. |
 | **R-W3 / R-I2** | `session/state`, `state.view` | The state *schema* (which fields, which are LLM-visible) is the consumer's, not ours. |
 | **R-C3 / R-C5 / R-C6** | `clear` / `trim` / `summaryWindow` | Loop-mechanics: *when* to clear/trim/summarize is a policy the orchestration loop owns. |
 
@@ -297,6 +297,37 @@ recall is **byte-identical** (aurora 0.552 / gitdone 0.425) — FTS + `file_embe
 whole file** (`indexer.js:104`→`store.js:317`), so the change lands only on chunk localization
 (`attachChunks`, `index.js:279`), never file ranking. 146 tests, tsc + types clean.
 *(memory: `chunker-orphans-leading-docs.md`)*
+
+---
+
+## 8.2 Build order resolved by the bareagent RT-seam negotiation (2026-06-12)
+
+bareagent's first real CE consumer cut five seams into its loop (RT-1…RT-5) and negotiated, seam by
+seam, **what litectx must do on its side of each**. This is the adopter the §8.1 Tier-B rows were
+waiting on — it resolves `assemble`'s shape and surfaces two small build-now additions, while two
+items stay deferred *with crisp trip-wires* (the litectx discipline: a deferral names the exact
+condition that un-defers it). The seam shapes (the holes) are bareagent's and live in
+[`litectx-for-baresuite.md`](../02-engineering/litectx-for-baresuite.md); the **litectx obligations**
+are here.
+
+**The boundary principle (binds all five): litectx owns content + relevance; it never learns the
+provider's transcript grammar.** bareagent adapts *its* messages to litectx's neutral shapes — the
+Store-socket move run in reverse. This is what keeps litectx standalone and is what makes both of
+RT-1's hard questions (tool-call/result pairing; system-prompt protection) dissolve at the
+*representation* layer instead of via trust or validation.
+
+| RT | litectx obligation | Status | Resolution / trip-wire |
+|---|---|---|---|
+| **RT-1** | **`assemble(units, ctx) → units`** (R-G6/C2/X1/X4) over a neutral unit model `{id, role, content, kind, pinned, atomic, tokensApprox}`; SELECT (recall-inject) + COMPRESS (`compress`) + fit-to-`ctx.budget`, cache-stable order. | **BUILD-NOW (shape pinned)**, *budget-fit POC-gated* | `pinned` units never drop/reorder; `atomic` units (a tool-call+its-result, bundled by bareagent's adapter) never split → grammar can't break and the system prompt can't be dropped, *by construction*, not by trust. Fits **best-effort and returns** — never enforces a hard cap; bareagent does final grammar-check + **fail-open** (degrade to full context, never crash). **The one unproven claim — "budget-fit preserves task success" — is a POC gate, not an assertion** (replay a real multi-round transcript, fitted vs full; dropping a stale tool-result is safe, dropping the one about to be re-read is a silent regression). |
+| **RT-2** | post-round observe/harvest hook (would let litectx `remember`/log mid-round). | **DEFERRED-ON-EVIDENCE** | No mid-round *capability* gap exists **while the canonical transcript is preserved intact** — every write target is losslessly reconstructable from `result.msgs` at end-of-task. Trip-wire: **un-defers the day the transcript-truncation seam (R-C3/`trim`) ships**, bound to it as a **harvest-before-evict interlock** (you cannot drop history you have not harvested). Secondary: RT-2 is also the *incremental* harvest vs end-of-task *batch* — an efficiency lever only, same trip-wire. |
+| **RT-3 #2** | **`recall(q, {body:true})`** — inline-body flag. | **BUILD-NOW** | Chosen over the adapter doing N `get()`s: *where the body lives is kind-dependent* (fact/episode = same FTS row, ~free, zero extra reads; code/doc = the chunk slice we already localize) and that knowledge must not leak into the adapter. Bound default to the chunk span; widen to whole-file only when nothing localizes. Reused by `assemble` (units need body) — earns its place twice. Pure read-path; **no migration**. |
+| **RT-3 #3** | **`meta TEXT` sealed passthrough column** on write-path rows (`remember`/`writeMemory` only; null for indexed code/doc). | **BUILD-NOW**, *first memory-tier migration* | Chosen over a narrow "refuse unknown keys" contract: that would silently break drop-in `Store` replacement (RT-3's whole premise). Sealed = written verbatim, returned verbatim by `get`/`recall`, **never tokenized, FTS-indexed, or scored** — a coat-check, not a modeled field. Guidance ships with it: *small structured tags, not payloads — big things go in `stash`*. Additive nullable column → grades the migration path RT-5 later reuses. |
+| **RT-4** | sub-agent toolbox (mount `litectx-mcp` read verbs into a spawned child). | **ZERO NEW litectx CODE** | `litectx-mcp` already curates to model-reasoning verbs (§10.5). Child default = **read-only** (`recall`/`get`/`impact`/`recent` allow; `remember`/`forget` opt-in; `index`/`promotions` deny). Opted-in writes land in the **child's own `dbPath`** (physical isolation, memory-PRD §3.2, **no schema** — decouples RT-4 from RT-5). Promotion to the parent store = explicit parent-orchestrated `recall`(child)→`remember`(parent), existing verbs, never an automatic bleed. |
+| **RT-5** | **`scope TEXT`** column (R-I1) — logical partitioning of one shared store. | **DEFERRED** | Separate `dbPath` per child (RT-4) covers spawn isolation **today**, zero schema. Trip-wire: un-defers only for the **shared-db multi-tenant case** — many/ephemeral children in one store, or cross-child union queries (`WHERE scope=` for isolation, omit for union). Threads a scope predicate through *every* read/write/knn/access-log path (the §8.1 "invasive, not cheap" caution) — backward-compatible (default = single global scope) and **reuses RT-3's additive-column migration**. |
+
+**Recording rule applied:** build-now obligations live here as requirements; the settled
+*why/deferrals* are mirrored one-line in project memory (`bareagent-rt-seam-contract.md`) so the two
+deferrals aren't re-litigated; the consumer-side seam shapes stay in the baresuite integration guide.
 
 ---
 
