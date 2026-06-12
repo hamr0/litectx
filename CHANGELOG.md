@@ -4,6 +4,23 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] — 2026-06-12
+
+The graph becomes directly addressable — recall and impact were always *views*; now the substrate has accessors.
+
+### Added
+- **`getNode(id)` + `related(id, opts)` — the graph-substrate accessors (R-G1 / R-G2).** The graph is
+  first-class public API; recall and impact are *views* over it, and now there's a direct accessor.
+  `getNode` describes a node's *structure* (its `chunks`/symbols + **exact** import-edge counts) — the
+  counterpart to `get`, which returns the body; kind-agnostic (written memory = a zero-chunk, zero-edge
+  node). `related` walks the persisted `import` graph by `dir` (`out`/`in`/`both`) and `hops` (default
+  1, capped at 3) — deduped, nearest-hop-wins, `via`-tagged. `edge` is a **generic type** so future
+  non-code edges (`derived_from`/`supersedes`, for a contextgraph view) slot in with no migration.
+  Tested seam invariant: `getNode.edges.imports === related(out,1).length`. **API-only** (§10.5).
+  (POC `poc/graph-substrate-poc.mjs`; tests `test/graph.test.js`; example consumer
+  `examples/graph-view/` — a zero-dep human code-map. Design:
+  `docs/plans/2026-06-12-graph-substrate-design.md`.)
+
 ## [0.8.0] — 2026-06-12
 
 The stash-cleanup verb, and a clean memory/scratch seam.

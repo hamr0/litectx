@@ -23,3 +23,7 @@ npm-debug.log*
 
 # Browser-tool scratch
 poc/.barebrowse/
+.barebrowse/
+
+# generated example data (regenerate: node poc/graph-substrate-poc.mjs)
+examples/graph-view/graph.json

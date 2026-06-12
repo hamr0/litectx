@@ -1,0 +1,121 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>litectx — graph substrate demo (getNode + related)</title>
+<!--
+  EXAMPLE consumer, repo-only (not in package.json "files"). Demonstrates that litectx's getNode +
+  related substrate feeds a lightweight HUMAN code-map: search/click a file → highlight its imports
+  (green) and importers (red), with impact() risk as a single per-node badge.
+  Design rationale (why this shape and not a call-graph): docs/plans/2026-06-12-graph-substrate-design.md.
+    · Edges are IMPORTS ONLY — related, EXACT (persisted import edges).
+    · impact() is a single fuzzy risk badge (over-counts by design), never drawn as edges, so a
+      probabilistic signal can't masquerade as precise structure.
+  litectx ships the DATA (graph.json, via `node poc/graph-substrate-poc.mjs`); this page is the GUI a
+  consumer would build. Zero deps, offline — open via `python3 -m http.server` in this folder.
+-->
+<style>
+  :root { --bg:#0d1117; --fg:#c9d1d9; --dim:#30363d; --hub:#d29922; --out:#3fb950; --in:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,Menlo,monospace; display:flex; height:100vh; }
+  #stage { flex:1; position:relative; }
+  svg { width:100%; height:100%; }
+  .edge { stroke:#21262d; stroke-width:1; }
+  .edge.out { stroke:var(--out); stroke-width:2; }
+  .edge.in { stroke:var(--in); stroke-width:2; }
+  .node circle { fill:var(--dim); stroke:#484f58; cursor:pointer; transition:fill .1s; }
+  .node.sel circle { fill:var(--hub); stroke:var(--hub); }
+  .node.out circle { fill:var(--out); }
+  .node.in circle { fill:var(--in); }
+  .node.faded { opacity:.18; }
+  .node text { fill:var(--fg); font-size:11px; pointer-events:none; }
+  #panel { width:340px; border-left:1px solid var(--dim); padding:16px; overflow:auto; }
+  h1 { font-size:13px; margin:0 0 4px; color:#8b949e; font-weight:600; letter-spacing:.04em; }
+  #search { width:100%; padding:6px 8px; background:#161b22; border:1px solid var(--dim); color:var(--fg); border-radius:6px; margin-bottom:14px; }
+  .sel-id { color:var(--hub); font-weight:600; word-break:break-all; margin-bottom:8px; }
+  .badge { display:inline-block; padding:4px 10px; border-radius:6px; font-weight:600; font-size:13px; }
+  .badge.low { background:#2d333b; color:#8b949e; } .badge.medium { background:#9e6a03; color:#fff; } .badge.high { background:#8b2c2c; color:#fff; }
+  .row { display:flex; justify-content:space-between; padding:2px 0; border-bottom:1px solid #21262d; }
+  .k { color:#8b949e; }
+  .grp { margin:14px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .grp.out { color:var(--out); } .grp.in { color:var(--in); }
+  .lst li { list-style:none; padding:1px 0; cursor:pointer; word-break:break-all; }
+  .lst li:hover { color:#fff; }
+  .legend { position:absolute; bottom:12px; left:12px; font-size:11px; color:#8b949e; }
+  .hint { color:#8b949e; font-size:12px; }
+</style>
+<div id="stage">
+  <svg id="svg"></svg>
+  <div class="legend">import map · click a node · <b style="color:#3fb950">green = imports</b> · <b style="color:#f85149">red = imported-by</b> · impact risk shows in the panel badge</div>
+</div>
+<div id="panel">
+  <h1>litectx · code map (getNode + related)</h1>
+  <input id="search" placeholder="search a file…" autocomplete="off" />
+  <div id="detail"><p class="hint">Edges = <b>imports</b> only (<code>related</code>, exact). Click a node: its import neighborhood highlights, and <code>impact()</code> shows as a single risk <b>badge</b> — a fuzzy readout, never drawn as edges.</p></div>
+</div>
+<script type="module">
+  const SVG = "http://www.w3.org/2000/svg";
+  const data = await fetch("./graph.json").then((r) => r.json());
+  const svg = document.getElementById("svg");
+  const W = svg.clientWidth || 900, H = svg.clientHeight || 700, R = Math.min(W, H) / 2 - 70, cx = W / 2, cy = H / 2;
+
+  const order = [...data.nodes].sort((a, b) => (b.imports + b.importedBy) - (a.imports + a.importedBy));
+  const pos = new Map();
+  order.forEach((n, i) => {
+    const t = (i / order.length) * 2 * Math.PI - Math.PI / 2;
+    pos.set(n.id, { x: cx + R * Math.cos(t), y: cy + R * Math.sin(t) });
+  });
+  const out = new Map(), inc = new Map();
+  for (const e of data.edges) {
+    (out.get(e.source) ?? out.set(e.source, []).get(e.source)).push(e.target);
+    (inc.get(e.target) ?? inc.set(e.target, []).get(e.target)).push(e.source);
+  }
+
+  const edgeEls = data.edges.map((e) => {
+    const a = pos.get(e.source), b = pos.get(e.target);
+    const l = document.createElementNS(SVG, "line");
+    l.setAttribute("x1", a.x); l.setAttribute("y1", a.y); l.setAttribute("x2", b.x); l.setAttribute("y2", b.y);
+    l.setAttribute("class", "edge"); l.dataset.s = e.source; l.dataset.t = e.target;
+    svg.appendChild(l); return l;
+  });
+  const nodeEls = new Map();
+  for (const n of data.nodes) {
+    const p = pos.get(n.id);
+    const g = document.createElementNS(SVG, "g");
+    g.setAttribute("class", "node"); g.setAttribute("transform", `translate(${p.x},${p.y})`);
+    const c = document.createElementNS(SVG, "circle");
+    c.setAttribute("r", Math.max(6, Math.min(18, 6 + (n.symbols || 0) * 0.4)));
+    const t = document.createElementNS(SVG, "text");
+    t.setAttribute("x", 10); t.setAttribute("y", 4); t.textContent = n.id.replace(/^src\//, "");
+    g.append(c, t); g.onclick = () => select(n.id); svg.appendChild(g); nodeEls.set(n.id, g);
+  }
+
+  const shortName = (id) => id.replace(/^src\//, "");
+  function select(id) {
+    const node = data.nodes.find((n) => n.id === id);
+    const outs = out.get(id) ?? [], ins = inc.get(id) ?? [];
+    const hot = new Set([id, ...outs, ...ins]);
+    for (const [nid, g] of nodeEls) {
+      g.className.baseVal = "node" + (nid === id ? " sel" : outs.includes(nid) ? " out" : ins.includes(nid) ? " in" : hot.has(nid) ? "" : " faded");
+    }
+    for (const l of edgeEls) l.className.baseVal = "edge" + (l.dataset.s === id ? " out" : l.dataset.t === id ? " in" : "");
+    const li = (arr, cls) => arr.length ? `<ul class="lst">${arr.map((x) => `<li data-go="${x}" class="${cls}">${shortName(x)}</li>`).join("")}</ul>` : `<p class="hint">none</p>`;
+    document.getElementById("detail").innerHTML = `
+      <p class="sel-id">${id}</p>
+      <p><span class="badge ${node.risk}">impact: ${node.risk.toUpperCase()}</span> &nbsp;<span class="k">~${node.callers} callers (fuzzy)</span></p>
+      <div class="row"><span class="k">kind</span><span>${node.kind}</span></div>
+      <div class="row"><span class="k">symbols</span><span>${node.symbols}</span></div>
+      <div class="row"><span class="k">imports → </span><span>${node.imports}</span></div>
+      <div class="row"><span class="k">imported-by ← </span><span>${node.importedBy}</span></div>
+      <div class="grp out">imports · depends on <span class="k">(related, exact)</span></div>${li(outs, "out")}
+      <div class="grp in">imported-by · dependents <span class="k">(related, exact)</span></div>${li(ins, "in")}
+      <p class="hint" style="margin-top:14px">Edges = <code>related</code> (exact imports). Badge = <code>impact()</code> (over-counts by design — a risk bucket, not a caller list).</p>`;
+    document.querySelectorAll("[data-go]").forEach((el) => (el.onclick = () => select(el.dataset.go)));
+  }
+
+  const search = document.getElementById("search");
+  search.oninput = () => {
+    const q = search.value.trim().toLowerCase();
+    const hit = q && data.nodes.find((n) => n.id.toLowerCase().includes(q));
+    if (hit) select(hit.id);
+  };
+  if (data.hub) select(data.hub);
+</script>

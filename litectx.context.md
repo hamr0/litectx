@@ -14,7 +14,7 @@ but everything you need to *use* litectx is here.
 > the **write path** — `remember`/`forget` for facts/episodes/direct docs —
 > chunk-granular recall, `get(id)` body
 > access, and the two consumption surfaces: the **CLI** and the stdio **MCP server**). Where the eventual surface (ACT-R base-level activation
-> weighting, `getNode`/`related` accessors) is **not yet available**, it is marked
+> weighting, persisted `call` edges) is **not yet available**, it is marked
 > **🚧 roadmap** — do not wire against it yet. What is documented without that mark works
 > today and is covered by tests and the multi-repo benchmark.
 
@@ -67,7 +67,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **impact** view (`impact(symbol)`: called-by/calling → risk bucket + complexity, on-demand) | ✅ shipped (slice 5a + 5b barrel/alias resolution) |
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
-| `getNode` / `related` graph accessors | 🚧 roadmap |
+| `getNode` / `related` graph accessors (R-G1/R-G2: describe a node + walk its `import` edges) | ✅ shipped (v0.9.0; API-only) |
 | **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@huggingface/transformers` is an *optional* dep (auto-installed; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
 | **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
@@ -305,6 +305,40 @@ dangerous (a false "isolated → safe" breaks hidden consumers). So:
   and tsconfig `paths` to find the real callers (tagged with `caller.alias`) and a hedge naming the
   alias, so it no longer reads as a false isolation. Single-hop barrels and JS/TS only — multi-hop
   barrel chains and Python `from x import y as z` re-export barrels are not yet followed.
+
+### `ctx.getNode(id)` → `GraphNode | null`
+The **graph substrate** (R-G1): describe one node's *structure* — the counterpart to `get`, which
+returns its *body*. The graph is first-class public API; recall and impact are views over it, and so
+is the example code-map (`examples/graph-view/`). **Kind-agnostic** — an indexed file's repo-relative
+path returns a file node (its symbols as `chunks` + exact import-edge counts); a written-memory id
+returns a zero-chunk, zero-edge node. Edge counts are over the **persisted `import` graph (exact)** —
+call relationships are `impact()`'s on-demand job, never persisted as edges. Sync; `null` if unknown.
+
+```ts
+GraphNode = {
+  id: string, kind: string, format: string,
+  source: "file" | "direct",
+  provenance?: "human" | "agent",        // written memory only
+  git: { commits, lastCommit } | null,   // file activity (grounding, not scored); null for written memory
+  chunks: { symbol: string|null, nodeType: string, startLine: number, endLine: number }[],  // [] for written memory
+  edges: { imports: number, importedBy: number },  // EXACT persisted import-edge counts
+}
+```
+
+### `ctx.related(id, opts?)` → `{ items: RelatedNode[], truncated: boolean }`
+The **graph navigator** (R-G2): walk the persisted edge graph from `id`. BFS over `opts.edge` edges
+(`"import"` is the only persisted type today — `call`/blast is `impact()`). `opts.dir`: `"out"` = what
+`id` imports, `"in"` = what imports it, `"both"` = the neighbourhood (default). `opts.hops` = BFS depth
+(default 1, **hard-capped at 3**; `truncated` flags when a larger request was clamped). Deduped,
+nearest-hop-wins, excludes the seed. `edge` is a **generic type** so future non-code edges
+(`derived_from`/`supersedes`) slot in unchanged once a producer emits them. Sync.
+
+```ts
+RelatedNode = { id: string, kind: string|null, format: string|null, hops: number, via: "out"|"in" }
+```
+Invariant: `getNode(id).edges.imports === related(id,{dir:"out",hops:1}).items.length` (and
+`importedBy` ↔ `dir:"in"`). The exact import graph is the *map*; `impact()` is the fuzzy risk *readout*
+laid over it — never drawn as edges (so a probabilistic signal can't masquerade as precise structure).
 
 ### `await ctx.remember(id, text, opts?)` → `Promise<void>`
 Write one **directly-authored memory** — knowledge that isn't a file (slice 7). The write

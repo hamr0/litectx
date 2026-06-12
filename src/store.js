@@ -68,6 +68,30 @@ const STASH_TAIL = 80;
  *                            null for facts; absent on indexed files.
  */
 
+/**
+ * A graph node's STRUCTURE (what `getNode` returns) — distinct from its body (`get`). Kind-agnostic:
+ * an indexed file carries its chunks + import-edge counts; written memory is a zero-chunk, zero-edge node.
+ * @typedef {Object} GraphNode
+ * @property {string} id                     repo-relative path (file) or written-memory id
+ * @property {string} kind
+ * @property {string} format
+ * @property {"file"|"direct"} source
+ * @property {string|null} [provenance]      written memory only: "human" | "agent"
+ * @property {import("./gitsig.js").GitSig | null} git  file activity (grounding, not scored); null for written memory
+ * @property {ChunkRef[]} chunks             the symbols inside a file node; [] for written memory
+ * @property {{ imports: number, importedBy: number }} edges  persisted `import`-edge counts (EXACT; calls are impact()'s job)
+ */
+
+/**
+ * One neighbour returned by `related` — a node reached by walking persisted edges from the seed.
+ * @typedef {Object} RelatedNode
+ * @property {string} id
+ * @property {string|null} kind    null when the neighbour isn't an indexed node (e.g. an import to a file outside scope)
+ * @property {string|null} format
+ * @property {number} hops         BFS distance from the seed (nearest-hop-wins)
+ * @property {"out"|"in"} via      "out" = the seed imports it; "in" = it imports the seed
+ */
+
 const SCHEMA = [
   // path tokens are folded into `body` (doubled) so filename matches count;
   // path/kind/format and the slice-7 write-path metadata are stored but not full-text indexed.
@@ -706,6 +730,84 @@ export class Store {
       this.db.prepare("SELECT DISTINCT symbol FROM nodes WHERE symbol IS NOT NULL").all()
     );
     return new Set(rows.map((r) => r.symbol));
+  }
+
+  /**
+   * Describe one graph node by id (the substrate accessor). `getNode` returns STRUCTURE; `getItem`/
+   * `get` return the body. Kind-agnostic: an indexed file resolves to a file node carrying its chunks
+   * (the symbols inside) plus exact per-type edge counts; a written-memory id resolves to a zero-chunk,
+   * zero-edge node. Edge counts cover the persisted `import` graph only — call relationships are
+   * impact()'s on-demand job and are never persisted as edges. Returns null for an unknown id.
+   * @param {string} id  an indexed file's repo-relative path, or a written-memory id
+   * @returns {GraphNode | null}
+   */
+  getNode(id) {
+    const chunks = this.nodesForPath(id);
+    if (chunks.length) {
+      const meta = /** @type {{ kind: string, format: string }} */ (
+        this.db.prepare("SELECT kind, format FROM nodes WHERE path = ? LIMIT 1").get(id)
+      );
+      const git = /** @type {import("./gitsig.js").GitSig | undefined} */ (
+        this.db.prepare("SELECT commits, last_commit AS lastCommit FROM git_sig WHERE path = ?").get(id)
+      );
+      const imports = /** @type {{ c: number }} */ (this.db.prepare("SELECT COUNT(*) c FROM edges WHERE type = 'import' AND src_path = ?").get(id)).c;
+      const importedBy = /** @type {{ c: number }} */ (this.db.prepare("SELECT COUNT(*) c FROM edges WHERE type = 'import' AND dst_path = ?").get(id)).c;
+      return {
+        id, kind: meta.kind, format: meta.format, source: "file", git: git ?? null,
+        chunks: chunks.map((c) => ({ symbol: c.symbol, nodeType: c.node_type, startLine: c.start_line, endLine: c.end_line })),
+        edges: { imports, importedBy },
+      };
+    }
+    const mem = /** @type {{ kind: string, format: string, provenance: string|null } | undefined} */ (
+      this.db.prepare("SELECT kind, format, provenance FROM mem WHERE path = ?").get(id)
+    );
+    if (mem) return { id, kind: mem.kind, format: mem.format, source: "direct", provenance: mem.provenance, git: null, chunks: [], edges: { imports: 0, importedBy: 0 } };
+    return null;
+  }
+
+  /**
+   * Walk the persisted edge graph from `id` (the substrate navigator). BFS over edges of `edge` type
+   * ('import' is the only persisted type today — `call` relationships are impact()'s on-demand job).
+   * `dir` picks direction: "out" = what `id` imports, "in" = what imports `id`, "both" = the
+   * neighbourhood. `hops` is the BFS depth, hard-capped at 3 (navigation, not ranking — multi-hop is
+   * legitimate; the cap stops a walk returning half the repo, and `truncated` flags when it bit).
+   * Deduped, nearest-hop-wins, never includes the seed. `edge` is a generic type so future non-code
+   * edges (e.g. `derived_from`) slot in unchanged once a producer emits them.
+   * @param {string} id
+   * @param {{ edge?: string, dir?: "out"|"in"|"both", hops?: number }} [opts]
+   * @returns {{ items: RelatedNode[], truncated: boolean }}
+   */
+  related(id, opts = {}) {
+    const MAX_HOPS = 3;
+    const edge = opts.edge ?? "import";
+    const dir = opts.dir ?? "both";
+    const requested = opts.hops ?? 1;
+    const depth = Math.min(requested, MAX_HOPS);
+    const outQ = this.db.prepare("SELECT dst_path AS p FROM edges WHERE type = ? AND src_path = ?");
+    const inQ = this.db.prepare("SELECT src_path AS p FROM edges WHERE type = ? AND dst_path = ?");
+    const metaQ = this.db.prepare("SELECT kind, format FROM nodes WHERE path = ? LIMIT 1");
+    const seen = new Set([id]);
+    /** @type {RelatedNode[]} */
+    const items = [];
+    let frontier = [id];
+    for (let h = 1; h <= depth; h++) {
+      const next = [];
+      for (const node of frontier) {
+        /** @type {[string, "out"|"in"][]} */
+        const neigh = [];
+        if (dir === "out" || dir === "both") for (const r of /** @type {{ p: string }[]} */ (outQ.all(edge, node))) neigh.push([r.p, "out"]);
+        if (dir === "in" || dir === "both") for (const r of /** @type {{ p: string }[]} */ (inQ.all(edge, node))) neigh.push([r.p, "in"]);
+        for (const [p, via] of neigh) {
+          if (seen.has(p)) continue;
+          seen.add(p);
+          const meta = /** @type {{ kind: string, format: string } | undefined} */ (metaQ.get(p));
+          items.push({ id: p, kind: meta?.kind ?? null, format: meta?.format ?? null, hops: h, via });
+          next.push(p);
+        }
+      }
+      frontier = next;
+    }
+    return { items, truncated: requested > MAX_HOPS };
   }
 
   /**

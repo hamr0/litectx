@@ -346,6 +346,34 @@ export class LiteCtx {
   }
 
   /**
+   * Describe one graph node — the substrate accessor (`getNode` returns STRUCTURE; `get` returns the
+   * body). The graph is first-class public API: recall and impact are *views* over it, and so are the
+   * future codegraph/contextgraph. Kind-agnostic — an indexed file's repo-relative path returns a
+   * file node (its symbols as `chunks` + exact import-edge counts), a written-memory id returns a
+   * zero-chunk, zero-edge node. Edge counts are the persisted `import` graph (exact); call
+   * relationships are `impact()`'s on-demand job, never drawn as graph edges. Sync; `null` if unknown.
+   * @param {string} id  an indexed file's repo-relative path, or a written-memory id
+   * @returns {import("./store.js").GraphNode | null}
+   */
+  getNode(id) {
+    return this.store.getNode(id);
+  }
+
+  /**
+   * Walk the edge graph from `id` — the substrate navigator. BFS over persisted `import` edges (the
+   * only persisted type; `call`/blast is `impact()`). `dir`: "out" = what `id` imports, "in" = what
+   * imports it, "both" = the neighbourhood (default). `hops` is the depth (default 1, hard-capped at
+   * 3 — navigation, not ranking; `truncated` flags the cap). Deduped, nearest-hop-wins, excludes the
+   * seed. `edge` is generic so future non-code edges slot in unchanged. Sync.
+   * @param {string} id
+   * @param {{ edge?: string, dir?: "out"|"in"|"both", hops?: number }} [opts]
+   * @returns {{ items: import("./store.js").RelatedNode[], truncated: boolean }}
+   */
+  related(id, opts = {}) {
+    return this.store.related(id, opts);
+  }
+
+  /**
    * Fetch one stored item's full record by id — the body-access counterpart to `recall` (slice 9).
    * Recall returns ranked pointers (paths/ids); `get` returns the thing itself. Any id works:
    * a written-memory id (`"fact:auth-uses-jwt"`) returns the text exactly as remembered, and an
