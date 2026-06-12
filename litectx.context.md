@@ -77,6 +77,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
 | **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (v0.10.0 — RT-3) |
 | **`compress(node, {level})`** — rank-tiered render (R-C7): `verbatim` / `signature` (header + doc, body elided) / `drop`; tree-sitter signature extraction, ~82% bytes saved with the doc kept | ✅ shipped (library API only, like `stash`/`peek`) |
+| **`assemble(units, ctx)`** — RT-1 budget-fit a neutral transcript to a token budget: recency-anchored, `pinned`/`atomic` invariants, `dropped[]`-with-handle, cache-stable order | ✅ shipped (v1 = FIT; SELECT/COMPRESS next) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
@@ -531,6 +532,30 @@ Given a graph node and a `level`, return its text at one of three fidelities:
   but owns none of its logic. Library API only (a render mechanic the host loop runs, like `stash`/`peek`
   — not an MCP verb). `COMPRESS_LEVELS` exports the level vocabulary.
 
+### `assemble(units, ctx?)` → `{ units, dropped, tokens }`
+The **budget-fit** primitive (RT-1) — a free function (`import { assemble } from "litectx"`), the CE
+read-path keystone. A host loop hands litectx a neutral **unit** array (its messages, grammar-stripped)
+plus a token budget; litectx returns the fitted **view** for the next model call. litectx owns *content
++ relevance*, never the provider's transcript grammar — so `role` is opaque to it, and two flags carry
+the contract:
+- `unit`: `{ id, role, content, kind?, pinned?, atomic?, tokensApprox? }` — `pinned` units are never
+  dropped or reordered (system prompt, current task); `atomic` units sharing a group id (a tool-call +
+  its result) are kept-or-dropped **whole**, never split (broken grammar is unrepresentable, not caught).
+  `tokensApprox` is the caller's estimate (falls back to `chars/4`).
+- `ctx`: `{ budget?, task? }` — `budget` in tokens (omitted → keep all); `task` is reserved for the
+  SELECT slice (below) and unused by the fit.
+- **Returns** `{ units, dropped, tokens }`: `units` is the kept view in **original order** (cache-stable —
+  pinned in place, no reordering); `dropped` is `[{ id, reason }]` accounting for **every** elided unit
+  (no silent loss — restorable by `id` from the host's canonical transcript); `tokens` is the view size
+  (best-effort ≤ budget; pinned that alone exceed budget are still kept — never a hard cap).
+- The fit is **recency-anchored** — the constraint the budget-fit POC pinned (`poc/assemble-fit-*.mjs`):
+  re-reads are recency-bound, not topic-bound, so it keeps the newest un-pinned units and never reorders.
+  Pure function, deterministic (no DB, no model, no clock).
+- **Scope:** v1 ships **FIT only** (the gated core). **SELECT** (recall-inject new graph context) and
+  **COMPRESS** (signature-tier large units via `compress`) are the next slice and ride together —
+  COMPRESS needs a parseable `format`, which only recall-injected units carry, so there is nothing to
+  compress until SELECT injects it. Library API only (a host-loop mechanic, like `compress` — not an MCP verb).
+
 ### `liteCtxAsStore(lc, opts?)` → a host `Store`
 Mount an indexed `LiteCtx` as a host's swappable memory backend — the four-method `Store` shape
 (`{ store, search, get, delete }`) a runtime like bareagent's `Memory` expects — so a substring-scan
@@ -559,6 +584,7 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 
 ### Named exports (advanced / extension)
 - `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
+- `assemble(units, { budget, task })` — RT-1 budget-fit a neutral transcript to a token budget (the section above).
 - `liteCtxAsStore(lc, { kind })` — mount litectx as a host `Store` (the section just above).
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,

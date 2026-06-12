@@ -6,15 +6,22 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
-### In progress
-- **`assemble(units, ctx) → units` — the RT-1 context-assembly verb.** Budget-fit POC **cleared**
-  (2026-06-13): replayed 8 real multi-round transcripts (1059 deps) fitted-vs-full and confirmed with
-  a live model — a **recency-anchored** fit @50% budget preserves task success (loses 1.8% of re-read
-  deps; the model produces the correct next action 8/8 with the needed unit present vs 0/8 absent).
-  Constraints carried into the build: the fit is recency-anchored (semantic re-rank of the transcript
-  does not help), and `dropped[]`-with-restorable-handle ships in the same slice (a dropped re-read
-  becomes an explicit re-read, never silent). Evidence: `poc/assemble-fit-poc.mjs`,
-  `poc/assemble-fit-model-poc.mjs`, `poc/RESULTS.md`. The verb is not yet shipped.
+### Added
+- **`assemble(units, ctx) → { units, dropped, tokens }` — the RT-1 budget-fit verb (CE read-path
+  keystone).** A pure free function: a host loop hands litectx a neutral **unit** array (its messages,
+  grammar-stripped — `{ id, role, content, kind?, pinned?, atomic?, tokensApprox? }`) plus a token
+  `budget`, and gets back the fitted **view** for the next model call. litectx owns content + relevance,
+  never the provider's grammar — two flags carry the contract: **`pinned`** units never drop or reorder
+  (system prompt, current task; budget is the un-pinned room), and **`atomic`** units (a tool-call + its
+  result) are kept-or-dropped **whole**, so broken grammar is unrepresentable, not caught. The fit is
+  **recency-anchored** — the one constraint the budget-fit POC pinned (re-reads are recency-bound, not
+  topic-bound; semantic re-rank of the transcript does not help) — so it keeps the newest un-pinned units
+  and never reorders (**cache-stable**, deterministic). `dropped[]` accounts for every elided unit (no
+  silent loss; restorable by `id` from the host's canonical transcript). Best-effort, never a hard cap.
+  **v1 ships FIT only**; SELECT (recall-inject) + COMPRESS (signature-tier) are the next slice (COMPRESS
+  needs a `format` only recall-injected units carry). POC evidence: `poc/assemble-fit-poc.mjs` (structural,
+  1.8% loss @50% over 1059 real deps) + `poc/assemble-fit-model-poc.mjs` (live model, 8/8 present vs 0/8
+  absent), `poc/RESULTS.md`. (Tests `test/assemble.test.js`, 12.)
 
 ## [0.10.0] — 2026-06-12
 
