@@ -176,8 +176,28 @@ const node = await lc.getNode(id);
 const related = await lc.related(id, { edge: "calls", hops: 1 });
 ```
 
-`LiteCtxConfig` (one object, all optional): activation preset/weights, hybrid weights,
-embeddings on/off + provider, ignore patterns, db path, enabled kinds.
+`LiteCtxConfig` — **one object, all optional except `root`. There is no config file** (no
+`.litectxrc`, no env): litectx is an *imported library*, not a service, so an operator sets these as
+constructor args — or as the equivalent **CLI flags / MCP tool args** — and host-app config
+management stays the caller's concern (the "one config, no guardrail/budget layer" doctrine). The
+surface is small enough to live here rather than earn its own doc — eight knobs:
+
+| field | default | knob |
+|---|---|---|
+| `root` | *(required)* | repo root to index |
+| `include` | `.ts .js .mjs .cjs .py .md` | which file extensions to index |
+| `pathspecs` | — | git pathspecs to scope the index |
+| `dbPath` | `<root>/.litectx/index.db` | the single SQLite file (`:memory:` = ephemeral) |
+| `embeddings` | `false` (lib) · **on** (CLI + MCP) | the opt-in semantic tier |
+| `embedWeight` | `1.0` | semantic fusion weight (higher = more semantic) |
+| `embedModel` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id |
+| `embedder` | — | inject a custom/stub embedder (advanced / testing) |
+
+(No activation preset/weights knob — base-level activation as a ranking signal was POC-falsified and
+dropped; the edit signal lives in `recentActivity`, never in config.) The operator-facing subset is
+mirrored as CLI flags and MCP args: see the **CLI / MCP reference**
+(`docs/03-usage/mcp-cli-reference.md`) and the optional **Claude Code integration** — the LSP-free
+pre-edit `impact()` hook + SessionStart index-warmer (`integrations/claude/README.md`).
 
 ### 3.1 Node kinds (memory types) — first-class from day one (DECIDED)
 
