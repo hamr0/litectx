@@ -10,6 +10,20 @@ The lazy-load release. Adds `peek()` — the read-half of `stash()` — and sett
 question for both. No new dependencies; the deterministic BM25 core and every quality gate are unchanged.
 
 ### Added
+- **`compress(node, { level })` — the R-C7 rank-tiered render primitive.** Given a graph node (a code
+  chunk `{ text, format, symbol? }`) and a level, returns its text at one of three fidelities:
+  `verbatim` (the full body), `signature` (the declaration header + its doc, implementation body
+  elided), or `drop` (a `name …` marker). A caller — or a future `assemble()` — picks the level by
+  rank: top-N verbatim, the next tier signature, the long tail dropped. A **pure render view** over the
+  chunk text: no DB, no ranking, no weights (exported from the library, `import { compress }`; not an
+  MCP verb — a render mechanic the host loop performs, like `stash`/`peek`). The signature tier extracts
+  via **tree-sitter** (cut at the def's `body` field), which keeps `export`/`async`/decorators/generics/
+  multiline params where a naive line-slice mangled them (99% vs 32% on 303 real defs); it preserves a
+  JS/TS JSDoc above the header and re-attaches a Python docstring below it, and **wraps a bare method
+  chunk in a synthetic class** so methods — ≈38% of real symbols, which don't parse standalone —
+  compress too. **Measured on 627 real symbols (litectx JS + OpenSpec TS + aurora PY): signature saves
+  ~82% of bytes with the doc kept, 0 unparseable.** Unparseable content (markdown, a preamble chunk)
+  falls back losslessly to verbatim. 16 tests; design validated in `poc/rc7-compress-sig-poc.mjs`.
 - **`peek(id)` — a head+tail preview of a stashed payload, without rehydrating it (R-I3 handle /
   lazy-load).** Where `get(id)` returns the whole parked blob, `peek` returns only
   `{ id, bytes, head, tail, createdAt, truncated }`: a fixed-length prefix *and* suffix (the conclusion

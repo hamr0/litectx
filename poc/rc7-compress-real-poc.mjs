@@ -97,5 +97,8 @@ for (const [fmt, s] of Object.entries(stat)) {
   console.log(`${fmt.toUpperCase().padEnd(3)} ${s.defs} defs · ${docLine} · signature tier saves ${ratio}% bytes`);
 }
 console.log("\nREAD: Python docstrings are IN the body (free). JS/TS JSDoc is ORPHANED into preamble —");
-console.log("indexed but dissociated from its symbol. Recall + embeddings + compress all lose it.");
+console.log("indexed but dissociated from its symbol → compress() loses it (recall/embeddings do NOT —");
+console.log("measured 0/3 lexical, −0.003 semantic; see poc/rc7-doc-embed-poc.mjs + the corrected docs).");
 console.log("→ Fix belongs in the CHUNKER (attach leading doc-comment to its def chunk) = indexing job.");
+console.log("\n⚠️ The 'ratio' above uses a NAIVE slice over only-parseable defs — inflated. The SHIPPED");
+console.log("compress() (signatureOf, methods wrapped) saves ~82% with the doc kept on 627 real symbols.");

@@ -256,6 +256,95 @@ export async function chunkFile(path, body) {
   return (await chunkAndImports(path, body)).chunks;
 }
 
+// ---- R-C7 compress() primitive: signature extraction (the render half assemble composes) ----
+
+// first def-type node in a pre-order walk = the OUTERMOST symbol the chunk represents (a class
+// before its methods, a function before a nested one). Mirrors collectDefs' ordering but stops early.
+function firstDef(node, defTypes) {
+  if (defTypes.has(node.type)) return node;
+  for (let i = 0; i < node.childCount; i++) {
+    const c = node.child(i);
+    if (!c) continue;
+    const found = firstDef(c, defTypes);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Locate the def a chunk body represents, returning the node and the byte offset of the body within
+// whatever text was parsed. A METHOD chunk (`  foo() {…}`, `    def m(self):`) can't parse standalone
+// — `method_definition` is only valid inside a class — so on a miss we re-parse inside a synthetic
+// class wrapper and descend past it. `offset` maps the wrapped node's indices back onto `body`.
+function locateDef(parser, lang, format, body) {
+  const defTypes = new Set(lang.defTypes);
+  let def = firstDef(parser.parse(body).rootNode, defTypes);
+  if (def) return { def, offset: 0 };
+  // retry wrapped — Python is indentation-sensitive but a method chunk keeps its indent, so a bare
+  // `class ɵW:` header makes it a valid suite; JS/TS take a brace block.
+  const pre = format === "py" ? "class ɵW:\n" : "class ɵW {\n";
+  const wrapped = format === "py" ? pre + body : pre + body + "\n}";
+  const wrapper = firstDef(parser.parse(wrapped).rootNode, defTypes); // the synthetic class
+  const inner = wrapper && wrapper.childForFieldName("body");
+  def = inner ? firstDef(inner, defTypes) : null;
+  return def ? { def, offset: pre.length } : null;
+}
+
+/**
+ * The compact signature of a symbol's chunk body, for {@link import("./compress.js").compress}'s
+ * `signature` tier: the declaration header (modifiers, name, params, return type) WITH its doc,
+ * but WITHOUT the implementation body. Extraction is tree-sitter — cut at the def's `body` field —
+ * because a naive line-slice mangled arrows / generics / multiline params (POC `rc7-compress-sig`:
+ * tree-sitter 99% vs naive 32% on 303 real defs). The header is sliced from the chunk start (after
+ * the leading doc-comment) to the body, so `export` / `async` / decorators are kept (they sit OUTSIDE
+ * the inner def node). Doc placement is language-shaped: a JS/TS JSDoc rides ABOVE the header (the
+ * chunker attaches it to the chunk); a Python docstring is the first in-body string, re-attached
+ * BELOW the header. Returns null when nothing parses (markdown, preamble, parse failure) → the
+ * caller falls back to verbatim.
+ * @param {string} format  "py" | "js" | "ts"
+ * @param {string} body    the symbol's source text (a chunk body)
+ * @returns {Promise<{ name: string|null, signature: string } | null>}
+ */
+export async function signatureOf(format, body) {
+  const lang = LANGDEFS[format];
+  if (!lang) return null;
+  let located;
+  try {
+    located = locateDef(await parserFor(lang), lang, format, body);
+  } catch {
+    return null;
+  }
+  if (!located) return null;
+  const { def, offset } = located;
+  const name = def.childForFieldName("name")?.text ?? null;
+  const bodyField = def.childForFieldName("body");
+  // offsets are in the (possibly wrapped) parse text; subtract `offset` to map back onto `body`.
+  const headerEnd = (bodyField ? bodyField.startIndex : def.endIndex) - offset;
+
+  // JS/TS: the doc is a leading comment block at the chunk start (the chunker attaches it ABOVE the
+  // def). Strip it from the header slice and re-prepend, so the header keeps `export`/`async` (which
+  // live between the comment and the body). Python's doc is in-body, so leave its header untouched.
+  const isJsTs = format === "js" || format === "ts";
+  const lead = isJsTs ? body.match(/^\s*(\/\*[\s\S]*?\*\/|(?:[ \t]*\/\/.*\n)+)/) : null;
+  const docEnd = lead ? lead[0].length : 0;
+  const leadingDoc = lead ? lead[0].trim() : "";
+  // strip the newline that connected the doc to the code (keep any code indentation) + trailing space.
+  const header = body.slice(docEnd, headerEnd).replace(/^[ \t]*\n+/, "").replace(/\s+$/, "");
+
+  // Python docstring: the first statement in the body suite, when it's a bare string expression.
+  let pyDoc = "";
+  if (format === "py" && bodyField) {
+    const first = bodyField.namedChild(0);
+    if (first && first.type === "expression_statement" && first.namedChild(0)?.type === "string") {
+      pyDoc = first.namedChild(0).text;
+    }
+  }
+
+  let signature = header;
+  if (leadingDoc) signature = `${leadingDoc}\n${header}`;
+  if (pyDoc) signature = `${header}\n    ${pyDoc}`;
+  return { name, signature };
+}
+
 // ---- impact view (slice 5) primitives — all tree-sitter, no rg here (§7.1) ----
 
 // The called NAME from a call node's `function` field: a bare identifier, or the rightmost

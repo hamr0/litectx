@@ -234,7 +234,7 @@ The first adopter may *fine-tune* these (thresholds, defaults), but it does not 
 
 | Req | Surface | Why it needs no adopter | Validation harness (exists today) |
 |---|---|---|---|
-| **R-C7** | `compress(node,{level})` | Signature tier is a pure fn of `body` (100% of 247 real defs; saves 95–98% bytes). **Docstring tier has an indexing dependency** (below). aurora-calibrated (`decompose.py:243-310`). **De-risks `assemble()` — it's the render half assemble composes.** | `poc/rc7-compress*-poc.mjs` (real aurora/gitdone/litectx fixtures) |
+| **R-C7** | `compress(node,{level})` | ✅ **SHIPPED.** Signature tier = tree-sitter cut at the `body` field (+ method-chunk wrapping); saves **~82% bytes WITH the doc kept** on 627 real symbols (not the earlier naive "95–98%"). aurora-calibrated (`decompose.py:243-310`). **De-risks `assemble()` — it's the render half assemble composes.** | `poc/rc7-compress*-poc.mjs`, `test/compress.test.js` |
 | **R-G7** | `evict(policy)` | **Real present caller, not hypothetical:** `stash` has no eviction → unbounded growth (flagged in R-I3/R-C4 sessions). Policy (age/size/count)→delete. litectx owns it (unclaimed by bareagent). | the shipped `stash` store |
 | **R-S8** | `recall().quality` | litectx-**original** (only we hold the activation scores). Internal to `recall()` (already built). PRD thresholds (≥3 nodes ≥0.3) are *untested priors* → validate, don't assume. | the existing recall bench |
 | **R-G5** | `supersede(old,new)` | Pure graph mechanics on data we own; pairs with shipped fact/episode kinds. Every memory needs fact retirement. | `:memory:` integration tests |
@@ -256,11 +256,18 @@ mechanism now, weight-validation with the adopter.
 (schema migration + a filter on every query) — its shape is obvious but it is **invasive, not
 cheap**. Don't let the label wave it through unmeasured.
 
-**Current pick:** **R-C7 `compress()`** — Tier A, and uniquely it *de-risks* the Tier-B linchpin
-(`assemble` composes it) instead of competing with it. POC-first against real aurora/gitdone/litectx
-fixtures (`poc/rc7-compress*-poc.mjs`). The signature tier ships now (body-only, 95–98% byte
-savings). **The docstring tier surfaced an upstream indexing defect** (below) that the POC traced —
-the fix belongs to the memory engine, not compress.
+**Current pick:** **R-C7 `compress()`** — ✅ **SHIPPED 2026-06-12.** Tier A, and uniquely it
+*de-risks* the Tier-B linchpin (`assemble` composes it) instead of competing with it. `compress(node,
+{level})` → `verbatim` (the body) | `signature` (header + doc, body elided) | `drop` (a name marker).
+A pure render view (no DB/ranking/weights), exported from the library (`import { compress }`). The
+signature tier extracts via tree-sitter (cut at the def's `body` field; a naive slice mangled
+arrows/generics/multiline params — 99% vs 32% on 303 defs) and **wraps a bare method chunk in a
+synthetic class** so methods (≈38% of real symbols) compress too. **Measured on 627 real named
+symbols (litectx JS + OpenSpec TS + aurora PY): signature saves ~82% of bytes WITH the doc/docstring
+kept, 0 unparseable** — correcting the earlier "95–98%" (a naive slice over only the parseable defs,
+silently skipping methods). 16 tests. **The docstring tier surfaced an upstream indexing defect**
+(below) — the chunker fix that attaches a symbol's leading doc to its chunk, which belongs to the
+memory engine, not compress.
 
 **↳ Indexing dependency (memory-engine, not CE) — leading docs are orphaned.** The POC falsified the
 ledger's *"signature/docstring already extracted, render unit is free"*: the chunker persists only

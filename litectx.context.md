@@ -73,6 +73,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
+| **`compress(node, {level})`** — rank-tiered render (R-C7): `verbatim` / `signature` (header + doc, body elided) / `drop`; tree-sitter signature extraction, ~82% bytes saved with the doc kept | ✅ shipped (library API only, like `stash`/`peek`) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
@@ -442,7 +443,27 @@ Indexed document count (file-granularity).
 ### `ctx.close()` → `void`
 Closes the SQLite connection. Call it when done (especially for file-backed DBs).
 
+### `await compress(node, opts?)` → `Promise<string>`
+The **rank-tiered render** primitive (R-C7) — a free function, not a `ctx` method (`import { compress } from "litectx"`).
+Given a graph node and a `level`, return its text at one of three fidelities:
+- `node`: `{ text, format?, symbol? }` — `text` is the symbol's source (a chunk body); `format`
+  (`"js"|"ts"|"py"|…`) is needed for `signature`/`drop`; `symbol` improves the `drop` marker. To get
+  `text` from a `recall` hit: take `hit.chunk.{startLine,endLine}` and slice `get(hit.path).text` to
+  that 0-based inclusive range; `format` is `hit.format`. (`recall`/`nodesForPath` give the line range,
+  not the text — slice the file body yourself.)
+- `opts.level`: `"verbatim"` → the body unchanged · `"signature"` (default) → the declaration header
+  **with its doc**, implementation body elided · `"drop"` → a `"name …"` marker.
+- The **signature** tier is tree-sitter-extracted (cut at the def's `body` field), so it keeps
+  `export`/`async`/decorators/generics/multiline params, prepends a JS/TS JSDoc, re-attaches a Python
+  docstring, and wraps a bare **method** chunk so methods compress too. **~82% byte savings with the doc
+  kept** on real code. Unparseable content (markdown, a preamble chunk, an unknown `format`) falls back
+  **losslessly to verbatim**.
+- A **pure view**: no DB, no ranking, no weights — it composes with `recall` (which ranks the nodes)
+  but owns none of its logic. Library API only (a render mechanic the host loop runs, like `stash`/`peek`
+  — not an MCP verb). `COMPRESS_LEVELS` exports the level vocabulary.
+
 ### Named exports (advanced / extension)
+- `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).

@@ -425,7 +425,10 @@ are designs, not validated borrows.
 - **⚠️ CORRECTION (2026-06-12, POC-measured — `poc/rc7-compress-real-poc.mjs`):** the earlier claim
   *"litectx already extracts signature/docstring, so the render unit is free"* was **FALSE**. The
   chunker persists only the full `body` — no signature/docstring column. **Signature** is derivable
-  from `body` (100% of 247 real defs; signature tier saves **95–98% bytes**). **Docstring** splits by
+  from `body` (shipped via `signatureOf` — tree-sitter cut at the def's `body` field, with a method
+  chunk wrapped in a synthetic class so methods parse; signature tier saves **~82% bytes WITH the doc
+  kept**, measured on 627 real symbols — NOT the earlier "95–98%", a naive slice over only the
+  parseable defs that silently skipped ≈38% methods). **Docstring** splits by
   language: **Python docstrings live inside the body (60/60 free)**; **JS/TS JSDoc is a sibling node
   ABOVE the def → orphaned into the `preamble` chunk (86/86 JS defs orphaned, 0 attached)**. So the
   doc is indexed but **dissociated from its symbol at chunk granularity.** Fix is an **indexing-engine**
