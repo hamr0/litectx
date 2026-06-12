@@ -57,6 +57,11 @@ const STASH_TAIL = 80;
  * @property {ChunkRef | null} [chunk]  the best-matching chunk inside the hit (function pointer >
  *                            file pointer); null when nothing localizes — written memory has no
  *                            chunks (the row IS the unit), and a path-only match names none
+ * @property {string | null} [body]  present ONLY when recall is called with `{ body: true }` (RT-3
+ *                            inline-body): the hit's content inlined. VERBATIM stored text for written
+ *                            memory; the localized chunk's indexed body for a file hit; the whole file
+ *                            (read fresh from disk) when nothing localized; null when the file is gone
+ *                            or the id is unknown. Off by default — recall returns pointers, not payloads.
  * @property {string|null} [provenance]  written memory only (slice 5c): "human" | "agent" — the
  *                            VALIDATION status (signed-off vs the agent's own assertion), NOT a quality
  *                            signal and NEVER scored: an agent fact may be perfectly true, awaiting HITL.
@@ -706,6 +711,22 @@ export class Store {
     return /** @type {any} */ (
       this.db.prepare("SELECT symbol, node_type, start_line, end_line FROM nodes WHERE path = ? ORDER BY id").all(path)
     );
+  }
+
+  /**
+   * The stored body of the chunk at (path, startLine, endLine) — the exact text that was indexed and
+   * ranked, powering `recall({ body: true })` for a localized file hit. Reads the index, not the
+   * current disk, so it is drift-free and matches what scored. `null` if no such chunk row exists.
+   * @param {string} path
+   * @param {number} startLine  0-based, inclusive (matches {@link ChunkRef})
+   * @param {number} endLine    0-based, inclusive
+   * @returns {string | null}
+   */
+  chunkBodyAt(path, startLine, endLine) {
+    const row = /** @type {{ body: string } | undefined} */ (
+      this.db.prepare("SELECT body FROM nodes WHERE path = ? AND start_line = ? AND end_line = ? ORDER BY id LIMIT 1").get(path, startLine, endLine)
+    );
+    return row ? row.body : null;
   }
 
   /**

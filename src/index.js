@@ -253,20 +253,25 @@ export class LiteCtx {
    * `log: false` skips the recall audit log. The log is a **demand signal** — anything that isn't
    * real demand (dashboards, CI checks, batch tooling, read-only-db consumers) must not write to it.
    *
+   * `body: true` inlines each hit's content as `hit.body` (off by default — recall returns pointers,
+   * not payloads). litectx owns this because *where the body lives is kind-dependent*: written memory
+   * comes back VERBATIM; a file hit returns its localized chunk's indexed text, or the whole file when
+   * nothing localized. Opt in when mounting litectx as a memory store or feeding an assembler.
+   *
    * @overload
    * @param {string} query
-   * @param {{ kind: string, n?: number, log?: boolean }} opts
+   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean }} opts
    * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
-   * @param {{ kind?: string[], n?: number, log?: boolean }} [opts]
+   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean }} [opts]
    * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
-   * @param {{ kind?: string | string[], n?: number, log?: boolean }} [opts]
+   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    */
   async recall(query, opts = {}) {
@@ -278,6 +283,7 @@ export class LiteCtx {
       // single kind → one flat ranked list
       const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec), terms);
       if (MEM_KINDS.has(opts.kind)) this.store.attachMemMeta(hits); // slice 5c: surface provenance/use/occurredAt — read, never scored
+      if (opts.body) this._attachBodies(hits); // RT-3 inline-body — content, not a pointer
       if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
       return hits;
     }
@@ -290,9 +296,46 @@ export class LiteCtx {
     for (const k of kinds) {
       grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
       if (MEM_KINDS.has(k)) this.store.attachMemMeta(grouped[k]); // slice 5c: written-memory columns (read, never scored)
+      if (opts.body) this._attachBodies(grouped[k]); // RT-3 inline-body — content, not a pointer
     }
     if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
     return grouped;
+  }
+
+  /**
+   * Fill each hit's `body` with its content (RT-3 inline-body, the opt-in for `recall({ body: true })`).
+   * Kind-routed — the reason this is litectx's job, not an adapter's: written memory (`source:'direct'`)
+   * returns its VERBATIM stored text (the FTS body is a processed search surface, never the deliverable);
+   * an indexed file hit returns its localized chunk's indexed body (drift-free, exactly what ranked) via
+   * {@link Store#chunkBodyAt}; when nothing localized, the whole file is read fresh from disk (matching
+   * {@link get}'s freshness). `null` when the file is gone or the id is unknown. Mutates in place; bounded
+   * disk reads (≤ hits, file-kind only). Note: does NOT log a fetch — body-fill is part of recall, not a
+   * `get`, so it never pollutes the demand signal.
+   * @param {import("./store.js").Hit[]} hits
+   * @returns {import("./store.js").Hit[]}
+   */
+  _attachBodies(hits) {
+    for (const h of hits) {
+      if (h.chunk) {
+        h.body = this.store.chunkBodyAt(h.path, h.chunk.startLine, h.chunk.endLine);
+        continue;
+      }
+      const item = this.store.getItem(h.path);
+      if (!item) {
+        h.body = null;
+        continue;
+      }
+      if (item.source === "direct") {
+        h.body = item.text; // verbatim written memory
+      } else {
+        try {
+          h.body = readFileSync(join(this.root, h.path), "utf8"); // whole-file fallback, fresh from disk
+        } catch {
+          h.body = null; // indexed but gone from disk
+        }
+      }
+    }
+    return hits;
   }
 
   /**
