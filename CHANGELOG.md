@@ -4,6 +4,45 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] — 2026-06-12
+
+The memory socket — litectx now drops in as a host's swappable memory backend (RT-3), with content and
+opaque metadata that travel with a hit.
+
+### Added
+- **`recall(query, { body: true })` — inline-body flag.** Off by default (recall returns ranked
+  *pointers*, not payloads); opt in to get each hit's content as `hit.body` and skip the follow-up
+  `get()`s. litectx owns the routing because *where the body lives is kind-dependent*: written memory
+  comes back **verbatim**; a file hit returns its **localized chunk** (the indexed text that ranked —
+  drift-free, served from the index, survives the file leaving disk) via the new internal
+  `store.chunkBodyAt`; when nothing localized, the whole file is read fresh from disk; `null` when the
+  file is gone or the id is unknown. Body-fill is part of `recall`, not a `get`, so it never logs a
+  fetch / pollutes the demand signal. Pure read-path — no migration. (Tests `test/recall-body.test.js`.)
+- **`remember(id, text, { meta })` — sealed opaque-metadata passthrough.** An arbitrary caller dict
+  (`{ sessionId, tag, … }`) stored verbatim and returned untouched by `get`/`recall` (as `.meta`),
+  so litectx can stand in as a generic key-value memory store. Stored in a **new non-FTS sibling table
+  `mem_meta`**, so it is **sealed by construction** — in no FTS table, hence never tokenized, searched,
+  or scored (a term living only in `meta` can't make the memory recallable). The first memory-tier
+  migration, and the most additive kind: a `CREATE TABLE IF NOT EXISTS` (old DBs gain an empty table,
+  no backfill). Re-`remember`ing without `meta` clears any prior; `forget`/episode-prune drop it.
+  Guidance: small structured tags, not payloads — park large blobs in `stash`. (Tests
+  `test/recall-meta.test.js`, including the seal and the embeddings-tier ranking path.)
+- **`liteCtxAsStore(lc)` — mount litectx as a host `Store`.** A free function adapting a `LiteCtx` to
+  the four-method `{ store, search, get, delete }` shape a runtime (e.g. bareagent's `Memory`) mounts,
+  projecting to `[{ id, content, metadata, score }]` — so swapping a substring-scan backend for litectx
+  is a one-line change, host code unchanged, gaining ranked graph-aware recall. Copies the host shape
+  (no host import). The adapter mints a namespaced id, searches **one kind** for comparable scores
+  (default `fact`), inlines content via the body flag, and round-trips the full metadata dict through
+  the sealed passthrough. Give each sub-agent its own `dbPath` for isolation. (Tests
+  `test/memory-store.test.js`.)
+
+### Fixed
+- **A raw NUL byte in `src/store.js`** (the `chunkKey` separator was authored as a literal `\0` instead
+  of the escape) made the entire file read as **binary** — `grep`/`ripgrep` silently skipped it and
+  `git diff` reported "Binary files differ". Shipped that way since 0.8.0. Replaced with the two-char
+  `\0` escape (runtime-identical); guarded by `test/source-hygiene.test.js` (scans `src/*.js` for raw
+  NUL).
+
 ## [0.9.0] — 2026-06-12
 
 The graph becomes directly addressable — recall and impact were always *views*; now the substrate has accessors.

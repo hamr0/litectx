@@ -159,7 +159,8 @@ await lc.index({ paths: ["src/"] });
 const code = lc.recall("how does auth work", { kind: "code" });     // flat Hit[], default n=10
 const both = lc.recall("how does auth work");                       // grouped { code:[…5], doc:[…5] }
 const more = lc.recall("how does auth work", { kind: "code", n: 30 }); // dig deeper
-// Hit → { path, kind, format, score }  (signals{activation,semantic,git} arrive in slices 4–5)
+const full = lc.recall("how does auth work", { kind: "code", body: true }); // inline each hit's content (RT-3)
+// Hit → { path, kind, format, score, chunk, body?, meta? }  (body only with {body:true}; meta = written-memory opaque dict)
 
 // view 2 — impact
 const blast = await lc.impact({ file: "src/auth.ts", line: 42 });
@@ -169,11 +170,16 @@ const blast = await lc.impact({ file: "src/auth.ts", line: 42 });
 await lc.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact" });
 await lc.remember("faq:refunds", "Refunds within 30 days…", { kind: "doc", format: "md" });
 await lc.remember("ep:2026-06-09-async", "recall() became async.", { kind: "episode", occurredAt: 1717900000 });
+await lc.remember("fact:tagged", "…", { kind: "fact", meta: { sessionId: "s-1", tag: "auth" } }); // RT-3: opaque dict, sealed + verbatim round-trip
 await lc.forget("fact:auth-uses-jwt");                              // update / forget by caller key
 
 // the substrate itself (foundation for codegraph/contextgraph)
 const node = await lc.getNode(id);
 const related = await lc.related(id, { edge: "calls", hops: 1 });
+
+// mount litectx as a host's swappable memory backend (RT-3): the four-method { store, search, get, delete }
+import { liteCtxAsStore } from "litectx";
+const memory = liteCtxAsStore(lc);                                  // drop-in for a substring-scan store; ranked recall
 ```
 
 `LiteCtxConfig` — **one object, all optional except `root`. There is no config file** (no
