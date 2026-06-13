@@ -6,6 +6,10 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-13
+
+The assemble read-path keystone — litectx now budget-fits a neutral transcript for the next model call.
+
 ### Added
 - **`assemble(units, ctx) → { units, dropped, tokens }` — the RT-1 budget-fit verb (CE read-path
   keystone).** A pure free function: a host loop hands litectx a neutral **unit** array (its messages,
