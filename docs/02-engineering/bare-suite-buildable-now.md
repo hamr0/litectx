@@ -25,6 +25,12 @@
 - **R-S8 `recall().quality`** — POC-falsified twice (`poc/confidence-poc.mjs`: AUC 0.92, no usable
   threshold). [[rs8-confidence-label-falsified]]
 - **R-G5 `supersede`** — duplicative (`forget`+`remember` upsert already covers it).
+- **SELECT-as-proactive-inject (auto-inject inside `assemble`)** — POC-killed 2026-06-13
+  (`poc/assemble-select-poc.mjs`, RESULTS.md): in-window-keyed recall re-supply is 25% chunk-level,
+  **0% outside one repo**, flat across query recipes (min/rich/upper), embeddings inert (code recall is
+  BM25-gated, verified live). Reactive `recall`/`get`/`impact` already serve "fetch my own code";
+  proactive injection at 25% precision is net context-rot. See §4.1. (Never-read explicit-query SELECT
+  is untested, not endorsed.)
 
 **The Tier-A well is closed** (CE-PRD §8.1): `compress` (v0.7.0) + `evict` (v0.8.0) shipped, R-S8 +
 R-G5 struck. So "what's next" is no longer a Tier-A scrape — it's the question this doc answers.
@@ -121,6 +127,9 @@ These pass the §8.1 discriminator: **no consumer ambiguity.** Ranked by readine
   warns the "cheap" label is wrong — it touches *every op* (schema migration + a filter on every query).
   Build it deliberately and measured, not waved through. Lower priority than ①–③ unless a multi-tenant
   / sub-agent consumer pulls it.
+- **↳ Now specced (2026-06-13) — see §4.4.** The bare "a column" framing is superseded by the full
+  **Isolate scope model** (`worktree` + `session` + `owner`, kind-aware, research-grounded). Still gated
+  on the *relevance-already-isolates* POC (§4.5) before any column is written — measure, don't assume.
 
 ---
 
@@ -142,5 +151,98 @@ Everything else is `assemble()`-class: **defer until bareagent pins the shape.**
 the first question for each deferred item stays *"does `forget`/`evict`/`remember`/`recall` already
 cover this?"* before adding surface.
 
+---
+
+## 4. Round update — 2026-06-13: the SELECT kill, the CE-primitive audit, and the Isolate scope model
+
+> A design round (no code) that (a) killed proactive SELECT on POC + first-principles, (b) ran every CE
+> primitive through one lens — *does it serve the agent on request, or push work it didn't ask for?* —
+> and (c) settled the **Isolate scope model** the §2④ stub was waiting on. Grounded against the two CE
+> docs ([`ce-tree.md`](../00-context/ce-tree.md) §3.4, [`ctx-ifra.md`](../00-context/ctx-ifra.md)) and
+> a 3-stream web research pass on the field's leaders (§4.4.8).
+
+### 4.0 Summary — what this round settled
+1. **Proactive SELECT is dead** (§4.1). Auto-injecting code the agent didn't ask for fails on evidence *and* principle. Reactive retrieval already covers the real need.
+2. **The four primitives sort cleanly** (§4.2): **Write** = value (HITL facts + ranked memory). **Select** = reactive recall only. **Compress** = FIT (shipped) + one new buildable. **Isolate** = the scope model below.
+3. **Compress gains one principled buildable** (§4.3): **middle-band down-tiering** — pin head, keep tail, down-tier the lost-in-the-middle valley. Deterministic, no LLM.
+4. **The Isolate scope model is `worktree` + `session` + `owner`** (§4.4), with branch as a GC tag, db keyed to repo identity, a two-layer local/global memory split, and the promotion ladder as the only local→global path.
+5. **Two POC gates are owed before any column is written** (§4.5) — same prove-don't-assert discipline that killed SELECT.
+
+### 4.1 SELECT-as-proactive-inject — KILLED
+- **Evidence** (`poc/assemble-select-poc.mjs`, RESULTS.md): on real edit-after-read cases across 8 repos, recall queried with **in-window signal only** re-supplied the needed chunk **25%** of the time, **0% outside the one repo** that carried the average; file-level was 56% but mailproof-dominated. Ablated `min`/`rich`/`upper` query recipes → flat (more signal doesn't help; the bottleneck is the FTS gate + chunk localization). Embeddings **ON ≡ OFF** — code recall is BM25-gated (verified live: 74 stored vectors, reranks NL queries; the misses are gate misses cosine can't recover). Four harness bugs each faked a clean 0% first — all found by re-running. [[prove-dont-assert]] [[verify-shipped-against-poc-data]]
+- **First principles:** agents already fetch their own code — `recall`/`get`/`impact` are shipped and live. There is **no demonstrated demand** (contrast FIT, which fixed a proven 8/8-vs-0/8 failure). And 25%-precise injection means ~75% noise displacing real transcript content inside a fixed budget — `assemble` becoming **context-rot of its own**.
+- **Consequences:**
+  - "Re-supply the file I'm editing" is a **direct path fetch** (`get`/`impact` by path), not lexical recall.
+  - recall-SELECT's only un-refuted value is the **never-read related file** (a callee def never opened) — needs an **explicit, agent-supplied query**, is **untested**, and is methodologically hard to POC (proposed ground-truth proxy: the agent's *own later Read* of a graph-adjacent file, gated by an impact edge — flagged risky, not yet endorsed).
+  - The bareagent **role-boundary decision** (what role an injected unit carries) is **downstream of this** — moot until an injection mode actually ships. Do not spend it yet.
+
+### 4.2 The four CE primitives — value vs. bloat (lens: *no proactive help the agent didn't ask for*)
+
+| Primitive | The part that's real (keep) | The part that's bloat / ceded | Verdict |
+|---|---|---|---|
+| **Write** | durable store + searchable, ranked recall; **HITL human-authored facts/instructions** | the agent's *decision* to auto-memorize (ceded to agent/harness) | **Value — settled.** The HITL author *is* the demand. |
+| **Select** | `recall` on request (shipped) | **proactive auto-inject (killed, §4.1)** | Reactive only. |
+| **Compress** | FIT/budget-fit (shipped); **middle-band down-tiering** (§4.3) | LLM summarization (ceded / opt-in) | FIT + one new buildable. |
+| **Isolate** | a scope model: `worktree`+`session`+`owner` (§4.4) | sub-agent orchestration (ceded to harness) | Designed; POC-gated. |
+
+The left column is one coherent thing — **a searchable store the agent queries on demand, returning the best-ranked, budget-fitted answer**. Every right-column item is agent-policy or harness-runtime.
+
+### 4.3 Compress — middle-band down-tiering (the one new buildable)
+Grounded, not arbitrary: ctx-ifra.md establishes **lost-in-the-middle** (line 46 — U-shaped attention, beginning + end used well, middle missed, 30+ pt drop), **stable-top / recent-bottom** ordering (lines 152/217), and the only **LLM-free** compaction = trim-oldest (line 99). Compose them:
+- **head** (system / rules / first instructions) → **pinned, verbatim** — FIT already does this.
+- **tail** (recent turns) → **kept, verbatim** — FIT's recency anchoring already does this.
+- **middle** (old tool outputs, the U-curve valley) → **down-tier to signature** (`compress()` shipped) **or drop with a rehydrate handle** (R-C4; `stash`/`peek` already park + preview **head+tail**).
+
+So COMPRESS is **positional** — you compress where attention is already wasted, fully deterministic, no LLM. It slots into `assemble` FIT (head-pin + tail-recency exist; add the middle-tiering step). **POC-gated** (§4.5).
+
+### 4.4 The Isolate scope model — SPEC (settled 2026-06-13)
+Supersedes the §2④ "a column + WHERE" sketch and the §1 RT-5 row.
+
+**4.4.1 — Two layers, kept separate.** Workspace isolation and memory isolation are *different problems*:
+- **Workspace → worktree** (ephemeral, filesystem). The code sandbox.
+- **Memory → stable ids, NEVER the workspace.** Durable, survives teardown.
+
+**4.4.2 — The keys.**
+- **`worktree`** — **mandatory** for any code work (sandbox-by-default; you never have to predict "will it diverge"). One branch per worktree (git enforces it); ephemeral; torn down at resolution. Already provided by the orchestrator. litectx does **not** key memory on it.
+- **`session`** — **universal**, harness-supplied. Isolates volatile memory (`stash`, `episode`) between concurrent runs. The *only* key that distinguishes same-branch / same-owner concurrent agents (the "two reviewers of one checkout" case).
+- **`owner`** — scopes/shares durable `fact`s per actor. Fallback chain: `git config user.email` → explicit config → **OS username** → single-tenant default.
+- **`branch`** — **metadata / GC tag, NOT an isolation key** (mutable; fails the same-branch case). Drives retirement and filtering only.
+- **DB location** — keyed to **repo identity** (remote URL / shared `.git`), **never the worktree path** — or memory dies when the worktree is removed (the [`anthropics/claude-code#15776`](https://github.com/anthropics/claude-code/issues/15776) failure mode).
+
+**4.4.3 — Kind-aware scope defaults.**
+
+| Kind | Default scope | Durability | Recall sees |
+|---|---|---|---|
+| `code` / `doc` | per-worktree filesystem index (not in the shared memory db) | ephemeral, branch-correct | the worktree's own files |
+| `stash` (parked agent-context, R-C4/R-I3) | `session` (+ `owner`, `branch` tags) | most transient — dies with the run/worktree | own session |
+| `episode` (trajectory) | `session` (+ `owner`, `branch` tags) | run-scoped; `branch` tag drives GC | own session (± own owner) |
+| `fact` (HITL instructions) | `owner`, or global (`NULL`) | durable, cross-session | own + shared/global |
+
+**4.4.4 — Two-layer memory + the promotion bridge.** **Local/ephemeral** (`stash`, `episode` by `session`) + **global/durable** (`fact` by `owner`/global). The bridge is the **promotion ladder** — reuses the shipped `promotionCandidates` (slice 5b): an `episode` used **> 5×** surfaces as a candidate → **a human** decides `fact` + **local (`owner`) or global (shared)**. Scope is assigned **at promotion, by a person** — agents never self-author global facts.
+
+**4.4.5 — No-repo / non-git automation.** Drop the `worktree`/`branch` rows (no divergent code to sandbox). Core = **`session`** (run id) + **`owner` = OS username**. Workspace un-sandboxed unless a temp-dir/container is added; `fact`s still durable per owner. The model degrades to exactly the two keys that don't depend on git.
+
+**4.4.6 — GC + worktree lifecycle.** One branch per worktree; resolution is a human/orchestrator choice — **merge-all** (complementary streams) or **pick-one** (bake-off). Then `git worktree remove`. Removal is the **GC trigger**: that session's `episode`/`stash` retire; **promoted `fact`s survive** in the `owner` layer (R-G7, author-controlled, never agent-authored). This is *why* memory never lives inside the worktree.
+
+**4.4.7 — Implementation sketch.** Two nullable columns — `owner` (NULL = global) and `session` (NULL = durable/not-run-bound) — a kind-aware default, and one filter:
+`WHERE (owner IS NULL OR owner = :me) AND (session IS NULL OR session = :sid)`.
+Git supplies `owner`; the harness supplies `session`; the db sits at the repo-identity path.
+
+**4.4.8 — Research grounding (the leaders, why the weight landed here).**
+- **LangGraph** — two orthogonal durable dims: `thread_id` (session, checkpointer) **+** `Store` namespace rooted on `user_id` (cross-session). Recommends both.
+- **Google ADK** — four explicit scopes by key prefix: `session` (default) / `user:` / `app:` (global) / `temp:` (the *only* ephemeral one).
+- **Letta** — memory blocks shared across agents by **explicit attach** (global + project-local blocks); sharing is deliberate.
+- **Memary** — per-agent graph isolation, optional `user_id`.
+- **Anthropic multi-agent** — sub-agents are **ephemeral-run** isolated; durable artifact returns as a ~1–2k summary; persistence is opt-in via external store.
+- **claude-code#15776** — direct warning: keying durable memory to the *worktree path* loses it on teardown → key by repo identity.
+- **container-use** — counter-pattern: makes the **branch** the durable key (state as git-notes), worktree is just machinery.
+- **Net:** workspace → **worktree** (ephemeral); durable memory → **session + user**, kept off the workspace. That is exactly `worktree` + `session` + `owner`, branch as a tag.
+
+### 4.5 Gates owed before any column is written (prove-don't-assert)
+1. **Scope isolation — is `session` load-bearing?** litectx recall is **relevance-ranked** (BM25 + activation), not a flat history replay — off-session `episode`s may simply *sink* in the ranking. POC: replay multi-session episode streams, recall **with vs without** other sessions' episodes in the store, measure whether the top results change. No change → the column is bloat; change → build the `owner`+`session` model above.
+2. **Compress middle-tier — does it preserve task success?** POC: down-tier the U-curve middle vs **drop** vs **keep-verbatim** on real transcripts; success preserved at the down-tier?
+3. **(Deferred) never-read explicit-query SELECT** — only if revisited; the ground-truth proxy (agent's later Read of a graph-adjacent file) is methodologically risky and must be pressure-tested before any build.
+
 *Memory pointers: [[litectx-absorbs-all-ce-primitives]] · [[slice-rc7-compress-shipped]] ·
-[[rs8-confidence-label-falsified]] · [[borrow-aurora-dont-restart]].*
+[[rs8-confidence-label-falsified]] · [[borrow-aurora-dont-restart]] · [[prove-dont-assert]] ·
+[[verify-shipped-against-poc-data]] · [[bareagent-rt-seam-contract]].*

@@ -656,3 +656,80 @@ more). This does **not** weaken the verdict — it **strengthens** the load-bear
 exactly what recovers them (the model's `CANNOT_DETERMINE` → re-read path, confirmed by the live-model
 A/B, which is independent of this — it compared PRESENT vs ABSENT directly, not via a fit policy).
 The shipped verb is kept as-is (budget-honest is correct); the number is corrected to 3.8%.
+
+### Track-2 SELECT leg — can recall RE-SUPPLY the off-window chunk? (2026-06-13) — `assemble-select-poc.mjs`
+
+**Question (the unproven SELECT assumption, CE-PRD §8.1).** `assemble` v1 is FIT-only. The FIT
+model POC proved that dropping the unit a later action needs makes the model fail. SELECT's promise
+is that litectx can put that off-window context **back by retrieving it from the graph index** — but
+that only helps if recall can find it. The recall benches use *curated* dev questions; at the
+assemble moment there is no curated query, only **in-window signal** (what the agent is doing now).
+Can recall, queried with that alone, surface the chunk the next action needs?
+
+**Method (prove-don't-assert, no hand-labels).** Reuse the FIT POC's mechanical edit-after-read
+cases (an Edit whose `old_string` ≥24 chars is a real substring of the most-recent Read result of
+that file — the off-window chunk a budget drops). Index each transcript's **live repo** with litectx;
+query recall with **in-window signal only** — target file basename + identifiers from the agent's
+recent text + identifiers from the `new_string` it is writing — **never the `old_string`** (that is
+the answer we test retrieval of; peeking is the crafted-bench cheat). 8 repos, 43 cases.
+- **PRIMARY (drift-robust):** does the target file path appear in top-K? (file-level re-supply)
+- **SECONDARY (strict):** on files that did NOT drift (old_string still on disk), does the chunk
+  **body** holding the needed bytes come back? Drift makes this unscorable elsewhere (the edit
+  already replaced `old_string`), so it is reported only on the unchanged subset.
+
+**Four harness bugs surfaced by *running* (every one printed a clean but false 0%):** (1) on-disk
+cache reused a partial db; (2) transcript `file_path` is **absolute** (and uses the `/Documents`
+symlink) while `hit.path` is repo-relative → path compare + disk read both silently failed; (3) the
+biggest — `new LiteCtx({dbPath})` **creates the db file in its constructor**, so the `existsSync`
+guard was always true → `index()` skipped → every cached db was empty. Each "0%" was a measurement
+bug, not a result. (Reinforces [[prove-dont-assert]] / [[verify-shipped-against-poc-data]].)
+
+**Result (BM25-only; embeddings ON ≡ OFF, see below).**
+
+| metric | rate |
+|---|---|
+| file-level re-supply | **24/43 = 56%** (median rank **1**) |
+| exact-chunk re-supply (unchanged files) | **6/24 = 25%** |
+| …**ex-dominant-repo** (drop the top contributor) | **0/13 = 0%** |
+
+The 56% file-level number is bimodal and **mailproof-dominated** (mailproof 13/13 @100%, latefyi
+75%; dwi 0%, plato 20%, litectx 25%). The strict chunk-level metric — did the bytes the action needs
+actually come back — is **25%, and 0% outside the single repo that carries it**. It does not
+generalize. **Embeddings ON changes nothing** (byte-identical): code recall is **BM25-gated** (cosine
+re-ranks the FTS candidate set, never *nominates* for code — KNN-union is fact/episode only), so the
+misses are lexical-gate misses the in-window query can't anchor, which cosine cannot recover.
+
+**Verdict: auto-SELECT keyed on in-window task text is NOT a dependable re-supply signal** (chunk-level
+~0 outside one repo). Two honest consequences, both shaping the SELECT+COMPRESS slice:
+1. **"Re-supply the file I'm editing" is a DIRECT PATH FETCH** (`get`/`impact` by path — near-100%,
+   no lexical gamble), not lexical recall. SELECT should not route that case through recall.
+2. **recall-SELECT's real value is the NEVER-read related file** (a callee def the agent never opened)
+   — which this mechanical proxy *cannot* label, and which needs an **explicit, agent-supplied query**,
+   not auto-derived task text.
+
+→ **Do NOT build auto-SELECT on in-window signal.** Either scope SELECT to path-fetch re-supply, or
+POC the never-read mode with an explicit query before committing the slice. The role-boundary decision
+with bareagent (#2) is downstream of *this* — there is no point settling "what role injected context
+carries" until we know which injection mode SELECT actually ships. POC throwaway; role= placeholder
+throughout (never handed to a provider — the keystone boundary is untouched).
+
+**Two rigor checks closing self-gloss risks (the verdict is consequential + negative, so it earns
+them):**
+- *Is the embeddings claim asserted or verified?* The emb db holds **74 stored vectors** and recall
+  reranks **measurably differently** from BM25 on NL queries (verified A/B, `/tmp/embverify`). So the
+  tier is **live**; "ON ≡ OFF on these cases" is real FTS-gate-binding (the target isn't in the
+  candidate set for cosine to reorder), not a silently-dead tier. Mechanism now stands on evidence.
+- *Is the negative verdict an artifact of one query recipe?* Ablated `QUERY_MODE` floor→upper:
+  `min` (basename only) 25% / ex-dom 8% · `rich` 25% / 0% · `upper` (full `new_string`, max legit
+  signal) **21% / 0%**. Chunk-level re-supply is **flat across the spectrum** — more in-window signal
+  does not help (the bottleneck is the FTS gate + chunk localization, not query richness; richer query
+  only improves the *rank* of files already gated in, 3→1). The verdict is robust, not recipe-bound.
+
+**Honest limitations (scope, not gloss).** (a) Strict metric n is small — 24 unchanged files, 13
+ex-mailproof; the 0–8% ex-dominant is directionally clear but low-precision. (b) This proxy can only
+measure the **re-supply** mode (edit-after-read has mechanical ground truth). SELECT's actual value —
+injecting a **never-read** related file — has **no mechanical ground truth without hand-labelling**
+(the crafted-bench trap), so this POC *redirects* the slice; it does not settle whether
+explicit-query SELECT is worth building. That is the next POC, and its open methodological question is
+how to label "needed a related file" mechanically (candidate: the agent's *own later Read* of a
+graph-adjacent file — future behavior as the label, gated by a real impact edge).
