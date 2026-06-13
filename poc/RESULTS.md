@@ -787,7 +787,7 @@ session-scoping everything. A retrieval POC can't settle the premise that volati
 real need; that's the scope model's design axiom. Other limits: n is modest (12 sessions, 6–10 scored
 topics); episodes = user turns (a real but partial slice of a trajectory).
 
-## Isolate §4.5 gate #2 — does down-tiering the MIDDLE preserve task success? (2026-06-13) — `compress-middle-poc.mjs`
+## Isolate §4.5 gate #2 — does down-tiering the MIDDLE preserve task success? (2026-06-13) — `compress-middle-poc.mjs` + `lost-in-middle-poc.mjs`
 
 **Question (§4.3 / §4.5.2).** §4.3 proposes a positional compose for `assemble()`: pin head verbatim ·
 keep tail verbatim · **down-tier the middle valley** to signatures (shipped `compress()`), justified by
@@ -816,14 +816,24 @@ elides it). Metric = **RETRIEVED** (model produced the value); abstain/hallucina
   to signature before dropping** — strictly dominates drop for structural units. This composes with the
   shipped FIT: the tier is **rank/recency-driven** (down-tier the units FIT would otherwise drop, recover
   them as signatures), reusing FIT's existing ordering — **no new positional machinery needed.**
-- **Claim 2 NOT CONFIRMED:** lost-in-the-middle **did not manifest** — verbatim retrieved the middle
-  needle **8/8**, no positional penalty at ~4.6 KB. So the "middle valley is poorly attended, compress it
-  there" framing is **unsubstantiated at tested scale**; the design should NOT hinge on a positional
-  middle-band special case. (At small contexts you needn't compress the middle at all — everything's
-  retrieved. The tier earns its keep only at budget pressure, where rank, not position, picks victims.)
+- **Claim 2 REFUTED for this model (`lost-in-middle-poc.mjs`, the proper rebuild):** a position sweep on
+  a large homogeneous haystack — **400 units, ~159 KB (~41k tokens)**, a single distinctive needle the
+  model must find **by attention** (the question never names its unit), swept across **0/25/50/75/100%**.
+  Result: **15/15 found, flat across every position including the middle.** No positional penalty at
+  41k tokens on sonnet. (A first run with "OPERATIONAL OVERRIDE / failover code / encryption salt"
+  markers tripped prompt-injection flagging — confound removed with benign markers; clean after.) So the
+  "middle valley is poorly attended, compress it there" framing is **false for litectx's target model at
+  realistic scale** — the design must NOT hinge on a positional middle-band rule.
 
-**Honest limits.** (a) Small n (8) and a single ~4.6 KB context — confirms the signature-vs-drop
-*mechanism* (robust: it's "is the string present + model-readable"), not a positional or large-context
-claim. (b) Lost-in-the-middle needs a context far larger than `claude -p` made convenient here; the
-positional premise remains **untested**, not refuted. (c) Construction bug found + fixed mid-run
-(needle/question service mismatch made verbatim spuriously fail 5/6) — the numbers above are post-fix.
+**Net verdict: build signature as a rank/recency-driven BUDGET TIER (recover would-be-dropped units as
+signatures); do NOT build positional middle compression.** Claim 1 (signature ≫ drop for structural
+content, 24% bytes, 0 hallucinations) is the buildable; it composes with FIT's existing ordering. Claim 2
+(the positional rationale) is refuted at tested scale.
+
+**Honest limits.** (a) Claim-1 n is small (8) — but the mechanism is near-deterministic ("string present
++ model-readable"), so n isn't load-bearing there. (b) The lost-in-the-middle refutation is **single-fact
+retrieval on one strong model (sonnet) up to ~41k tokens** — it does NOT claim the effect is universally
+absent (it can appear with multi-fact aggregation, weaker models, or 100k+ tokens). The claim is bounded:
+*for litectx's target model and the single-fact retrieval that a budget tier serves, position doesn't
+penalize the middle, so a positional rule is unjustified.* (c) Two construction confounds found + fixed
+mid-run (needle/question service mismatch; injection-triggering markers) — numbers above are post-fix.
