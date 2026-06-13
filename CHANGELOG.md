@@ -6,6 +6,31 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-06-13
+
+The Isolate scope model — written memory scopes to its actor (`owner`) and run (`session`), so a
+long-running / multi-agent host can keep contexts from bleeding.
+
+### Added
+- **`owner` / `session` scope keys — the Isolate scope model (§4.4; gate #1 cleared on real data).**
+  Two optional `LiteCtxConfig` keys that scope written memory so a long-running / multi-agent host can
+  keep contexts from bleeding. `owner` = the actor that owns durable `fact`s; `session` = the run that
+  owns volatile `episode`s. **Kind-aware at write:** a `fact` is owner-scoped (durable, cross-session),
+  an `episode` is owner + session (volatile, own-run); `code`/`doc` are never scoped (they are the
+  per-worktree file index, not shared memory). **`recall` filters both ranking paths** (BM25 *and* the
+  embeddings/KNN nominator): `(:me IS NULL OR owner IS NULL OR owner = :me) AND (:sid IS NULL OR session
+  IS NULL OR session = :sid)` — an **unset** reader sees everything (single-tenant default, byte-
+  identical to pre-scope behavior), a **set** reader sees its own + global (`NULL`) memory only. Stored
+  in a new non-FTS sibling table `mem_scope` (mirrors `mem_meta`: a `CREATE TABLE IF NOT EXISTS`, no
+  backfill — old DBs read as fully unscoped/visible; the `mem` FTS5 table takes no new columns).
+  `forget` and the episode-prune drop the scope row, so a reused id never inherits a ghost scope.
+  **Load-bearing, not bloat:** gate #1 (`poc/scope-session-poc.mjs`, 12 real Claude Code session
+  transcripts) showed a run's own episodes get **buried by more-relevant older sessions** — rank-1
+  stolen 5/6 (BM25) / 9/10 (embeddings) — because recency is not a ranking term; only an explicit
+  `session` filter recovers them (`poc/RESULTS.md` §4.5 gate #1). Identity is the host's to resolve and
+  thread (git email / OS user / run id); litectx stores + filters, never sniffs. (Tests
+  `test/scope.test.js`, 6.)
+
 ## [0.11.0] — 2026-06-13
 
 The assemble read-path keystone — litectx now budget-fits a neutral transcript for the next model call.

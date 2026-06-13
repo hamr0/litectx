@@ -143,7 +143,7 @@ compression (LLMLingua) — opt-in tier behind the embeddings line.
 
 | ID | What | Derives-from | Surface | Det. | Delta |
 |---|---|---|---|---|---|
-| **R-I1 Namespacing / scope** | a scope key (agent/session/user) + filtered queries so contexts don't bleed | Memary/Letta (survey); ADK scope-by-default [ADK] | `scope` on every op | 🟢 | net-new (cheap) |
+| **R-I1 Namespacing / scope** | a scope key (agent/session/user) + filtered queries so contexts don't bleed | Memary/Letta (survey); ADK scope-by-default [ADK] | `owner`/`session` on `LiteCtx` (kind-aware) | ✅ **SHIPPED** (§4.4; gate #1) | net-new; **built** |
 | **R-I2 State partitioning** | expose one field of state to the LLM, isolate the rest | LangChain state [LC] | `state.view(fields)` | 🟢 | follows R-W3 |
 | **R-I3 Handle / lazy-load** | return a lightweight handle; fetch raw only on explicit request, then offload | ADK handle pattern [ADK]; Manus | `peek(id)` (`{id,bytes,head,tail,createdAt,truncated}`) vs `get(id)` (= load) | 🟢 | ✅ **SHIPPED** (stash-only) — `peek` previews **head+tail** via SQL first-N/last-N `substr` + octet `length`; `load`==`get` already. **Win = bounded RESULT** (only ~head+tail bytes reach the caller → payload stays out of the context/token budget), **NOT** bounded compute — grounding measured peek wall-time *scales* with payload (≈`get`, slower past a few MB; SQLite reads the column to slice it). An O(1) peek would need byte-size stored at write (deferred column). **Head+tail, not head-only**: the conclusion (exit code, failing frame, closing structure) lives at the END — borrows SmartCrusher's start+end split (study §4, R-C7 prior), but *only* the cheap structural slice, NOT the anomaly-keep (full-scan → stays in R-C7). **POC-validated** (`poc/ri3-handle-poc.mjs`, 17 assertions): byte-length via `CAST(text AS BLOB)` not `length(text)`; tail via negative `substr`. `summary`/`scope` columns stay **deferred** — head+tail covers logs/traces/text/code; opaque blobs would need a caller-supplied summary, added only when a real caller passes one. (pairs with R-C4; [study §2](../02-engineering/copy-pattern-studies.md)) |
 
@@ -219,17 +219,17 @@ litectx (one importable lib, one config, safe defaults)
 
 ## 8.1 Build order — adopter-pulled vs factory-independent
 
-The [software factory](software-factory-prd.md) is litectx's first adopter and validation harness
-(the ON-vs-OFF A/B). The standing doctrine is *adoption-first*: don't speculatively grind an API —
-let a real consumer pull its contract. **But that doctrine governs *ambiguous shapes*, not
-*universal primitives*.** The factory is **one** adopter exercising one or two flows; it will not
-surface every CE need. Conflating the two would make primitives whose shape is already fixed wait
+The [validation bench](benches-prd.md) (the ON-vs-OFF A/B) and the optional factory spike that
+harvests its traces are litectx's first adopter. The standing doctrine is *adoption-first*: don't
+speculatively grind an API — let a real consumer pull its contract. **But that doctrine governs
+*ambiguous shapes*, not *universal primitives*.** The factory spike is **one** adopter exercising
+one or two flows; it will not surface every CE need. Conflating the two would make primitives whose shape is already fixed wait
 on a consumer that adds nothing to their design — procrastination dressed as discipline.
 
 The discriminator: **does the contract depend on knowing how a specific consumer drives it, or is
 it self-evident from litectx's own data model and falsifiable on litectx's own bench?**
 
-**Tier A — factory-independent (build now; shape fixed by our data + validated on existing benches).**
+**Tier A — factory-independent (build now; shape fixed by our data + validated on [existing benches](benches-prd.md)).**
 The first adopter may *fine-tune* these (thresholds, defaults), but it does not *define* their shape.
 
 | Req | Surface | Why it needs no adopter | Validation harness (exists today) |
@@ -324,7 +324,7 @@ RT-1's hard questions (tool-call/result pairing; system-prompt protection) disso
 | **RT-3 #3** | **`meta` sealed passthrough** on write-path rows (`remember` only; null for indexed code/doc). | ✅ **SHIPPED** (`5402a6e`, 6 tests) — *first memory-tier migration* | Shipped as a **new non-FTS sibling table `mem_meta`** (not an `mem`/`docs` column) — sealed *by construction* (in no FTS table → never tokenized, searched, or scored), and a `CREATE TABLE IF NOT EXISTS` is the most additive migration possible (old dbs gain an empty table, no backfill). Chosen over a narrow "refuse unknown keys" contract (would break drop-in `Store` replacement). Guidance ships with it: *small structured tags, not payloads — big things go in `stash`*. Grades the migration path RT-5 reuses. |
 | **RT-3 adapter** | **`liteCtxAsStore(lc)`** — the `{store,search,get,delete}` socket composing #2+#3. | ✅ **SHIPPED** (`1b57e77`, 8 tests) — *closes RT-3* | Free function, copies the host `Store` shape (no host import). Mints namespaced ids (#1), `recall({body:true})` content (#2), full metadata round-trip via the sealed passthrough (#3), single-kind comparable scores (#5), default kind `fact` (#4). |
 | **RT-4** | sub-agent toolbox (mount `litectx-mcp` read verbs into a spawned child). | **ZERO NEW litectx CODE** (adapter ready) | `litectx-mcp` already curates to model-reasoning verbs (§10.5). Child default = **read-only** (`recall`/`get`/`impact`/`recent` allow; `remember`/`forget` opt-in; `index`/`promotions` deny). Opted-in writes land in the **child's own `dbPath`** (physical isolation, memory-PRD §3.2, **no schema** — decouples RT-4 from RT-5). Promotion to the parent store = explicit parent-orchestrated `recall`(child)→`remember`(parent), existing verbs, never an automatic bleed. |
-| **RT-5** | **`scope TEXT`** column (R-I1) — logical partitioning of one shared store. | **DEFERRED** | Separate `dbPath` per child (RT-4) covers spawn isolation **today**, zero schema. Trip-wire: un-defers only for the **shared-db multi-tenant case** — many/ephemeral children in one store, or cross-child union queries (`WHERE scope=` for isolation, omit for union). Threads a scope predicate through *every* read/write/knn/access-log path (the §8.1 "invasive, not cheap" caution) — backward-compatible (default = single global scope) and **reuses RT-3's additive-column migration**. |
+| **RT-5** | **`owner`/`session` scope keys** (R-I1) — logical partitioning of one shared store. | litectx predicate ✅ **BUILT**; harness threading **DEFERRED** | The litectx-side filter shipped (`owner`/`session` config, sibling table `mem_scope`, BM25 + KNN paths — §4.4). What's deferred is the **harness threading** + the shared-db multi-tenant trip-wire: separate `dbPath` per child (RT-4) covers spawn isolation **today**. Un-defers for many/ephemeral children in one store, or cross-child union queries (set `owner`/`session` for isolation, omit for union). Backward-compatible (unset = single global scope); used a `mem_meta`-style sibling table (the `mem` FTS5 table can't `ALTER`), not RT-3's row column. |
 
 **Recording rule applied:** build-now obligations live here as requirements; the settled
 *why/deferrals* are mirrored one-line in project memory (`bareagent-rt-seam-contract.md`) so the two

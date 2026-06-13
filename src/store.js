@@ -164,6 +164,19 @@ const SCHEMA = [
   // migration possible (old dbs gain an empty table, no backfill). Guidance: small structured tags,
   // not payloads — a big blob inflates every hit; park those in `stash`.
   "CREATE TABLE IF NOT EXISTS mem_meta(path TEXT PRIMARY KEY, meta TEXT NOT NULL)",
+  // scope keys for written memory (§4.4 Isolate; gate #1 cleared 2026-06-13): two nullable dims —
+  // `owner` (NULL = global / not-actor-bound) and `session` (NULL = durable / not-run-bound) — that
+  // filter recall so a run's volatile context isn't buried by other sessions, and a shared store
+  // isolates per actor. Kind-aware at write (`writeMemory`): `fact` = owner-scoped (durable,
+  // cross-session); `episode` = owner + session (volatile, own-run). A SIBLING table, not columns on
+  // `mem`: the `mem` FTS5 table takes no `ALTER ADD COLUMN`, so this mirrors `mem_meta` — a
+  // `CREATE TABLE IF NOT EXISTS` (old DBs gain an empty table, no backfill; a missing row LEFT-JOINs to
+  // NULL/NULL = global/durable = visible, so the filter is byte-identical to today when unset). The
+  // read filter (`search`/`knnCandidates`) is `(:me IS NULL OR owner IS NULL OR owner=:me) AND
+  // (:sid IS NULL OR session IS NULL OR session=:sid)` — an unset reader (`owner`/`session` = NULL on
+  // the Store) sees everything (single-tenant default). One row per scoped written id; refreshed on
+  // re-write, dropped by `forgetMemory`. `code`/`doc` are the per-worktree FS index, never scoped here.
+  "CREATE TABLE IF NOT EXISTS mem_scope(path TEXT PRIMARY KEY, owner TEXT, session TEXT)",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
   // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
@@ -206,8 +219,17 @@ function blobToVec(buf) {
 }
 
 export class Store {
-  /** @param {string} dbPath path to the SQLite file, or ":memory:" */
-  constructor(dbPath) {
+  /**
+   * @param {string} dbPath path to the SQLite file, or ":memory:"
+   * @param {{ owner?: string|null, session?: string|null }} [scope]  this instance's identity (§4.4):
+   *   `owner` = the actor (NULL = unscoped → sees all owners); `session` = the run (NULL = durable →
+   *   sees all sessions). Drives both the write-time scope of new memory and the recall read filter.
+   */
+  constructor(dbPath, scope = {}) {
+    /** @type {string|null} */
+    this.owner = scope.owner ?? null;
+    /** @type {string|null} */
+    this.session = scope.session ?? null;
     /** @type {any} */
     this.db = new Database(dbPath);
     // Write/throughput pragmas (aurora-borrowed; ledger §12). The index is rebuildable, so
@@ -401,6 +423,17 @@ export class Store {
         this.db
           .prepare("INSERT INTO mem(path, kind, format, provenance, occurred_at, body) VALUES (@path, @kind, @format, @provenance, @occurred_at, @body)")
           .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+        // scope (§4.4): scope is runtime IDENTITY (who wrote it, in which run), not caller content — so
+        // it comes from THIS Store instance, not `m`. `fact` is owner-scoped (durable, cross-session);
+        // `episode` adds the session (volatile, own-run). Refresh by delete-then-insert (mirrors meta);
+        // a row only when actually scoped — NULL/NULL is identical to absent under the recall LEFT JOIN.
+        const sSession = m.kind === "episode" ? this.session : null;
+        this.db.prepare("DELETE FROM mem_scope WHERE path = ?").run(m.id);
+        if (this.owner != null || sSession != null) {
+          this.db
+            .prepare("INSERT INTO mem_scope(path, owner, session) VALUES (?, ?, ?)")
+            .run(m.id, this.owner, sSession);
+        }
       } else {
         this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
         this.db
@@ -546,9 +579,10 @@ export class Store {
       // split out so a bulk age/size sweep can never reach a durable fact — see §10.5 / CE-PRD R-G7.
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
+      const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -665,9 +699,10 @@ export class Store {
       const removed = this.db.prepare("DELETE FROM mem WHERE kind = 'episode' AND occurred_at < ?").run(before).changes;
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
+      const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -885,10 +920,21 @@ export class Store {
     // (kinds never share a ranking, so no BM25 score ever merges across the two tables). No
     // spreading: facts/episodes have no edges. Shape matches `docs` hits (`git` → null).
     if (MEM_KINDS.has(kind)) {
+      // scope filter (§4.4): LEFT JOIN the sidecar so an unscoped row (no `mem_scope` row → NULL/NULL)
+      // stays visible. An unset reader (`owner`/`session` = NULL on the Store) sees everything; a set
+      // reader sees its own + global (NULL) only. Named params throughout (SQLite forbids mixing `?`).
       const rows = /** @type {Hit[]} */ (
         this.db
-          .prepare("SELECT path, kind, format, -bm25(mem) AS score FROM mem WHERE mem MATCH ? AND kind = ? ORDER BY score DESC LIMIT ?")
-          .all(match, kind, limit)
+          .prepare(
+            // No alias on `mem`: fts5's bm25()/MATCH take the real table name, not an alias.
+            "SELECT mem.path AS path, mem.kind AS kind, mem.format AS format, -bm25(mem) AS score " +
+              "FROM mem LEFT JOIN mem_scope s ON s.path = mem.path " +
+              "WHERE mem MATCH :match AND mem.kind = :kind " +
+              "AND (:me IS NULL OR s.owner IS NULL OR s.owner = :me) " +
+              "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid) " +
+              "ORDER BY score DESC LIMIT :limit"
+          )
+          .all({ match, kind, me: this.owner, sid: this.session, limit })
       );
       return this.attachGit(rows);
     }
@@ -1122,8 +1168,13 @@ export class Store {
     if (!MEM_KINDS.has(kind)) return [];
     const rows = /** @type {{ path: string, kind: string, format: string, vec: Buffer }[]} */ (
       this.db
-        .prepare("SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN file_embeddings e ON e.path = m.path WHERE m.kind = ?")
-        .all(kind)
+        .prepare(
+          "SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN file_embeddings e ON e.path = m.path " +
+            "LEFT JOIN mem_scope s ON s.path = m.path WHERE m.kind = :kind " +
+            "AND (:me IS NULL OR s.owner IS NULL OR s.owner = :me) " +
+            "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid)"
+        )
+        .all({ kind, me: this.owner, sid: this.session })
     );
     return rows
       .filter((r) => !exclude.has(r.path))

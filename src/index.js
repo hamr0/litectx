@@ -81,6 +81,17 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {string} [embedModel]         transformers.js model id (default Xenova/all-MiniLM-L6-v2)
  * @property {{ embed(text: string): Promise<Float32Array> }} [embedder]  inject a custom/stub embedder
  *                                         (advanced/testing); overrides the built-in model loading
+ * @property {string} [owner]              scope key (§4.4) — the actor that owns durable `fact`s (and
+ *                                         tags `episode`s). Default unset = global/unscoped: recall
+ *                                         sees & writes are owner-blind. A multi-tenant / shared-db host
+ *                                         sets it (e.g. git email or OS user, resolved host-side) so a
+ *                                         shared store isolates per actor; recall then returns own +
+ *                                         global (NULL-owner) memory only.
+ * @property {string} [session]            scope key (§4.4) — the run that owns volatile `episode`s.
+ *                                         Default unset = durable/unscoped: recall sees all sessions'
+ *                                         episodes. A host running concurrent agents sets it so a run's
+ *                                         own episodes aren't buried by more-relevant other sessions
+ *                                         (gate #1, 2026-06-13). `fact`s ignore it (always cross-session).
  */
 
 /**
@@ -116,7 +127,12 @@ export class LiteCtx {
     this.pathspecs = config.pathspecs;
     this.dbPath = config.dbPath ?? join(this.root, ".litectx", "index.db");
     if (this.dbPath !== ":memory:") mkdirSync(dirname(this.dbPath), { recursive: true });
-    this.store = new Store(this.dbPath);
+    // scope keys (§4.4 Isolate): the actor + run this instance acts as. Default null = unscoped
+    // (global / durable) → recall sees everything and writes are unscoped, byte-identical to the
+    // pre-scope behavior. A host threads identity in to isolate (owner = actor; session = run).
+    this.owner = config.owner ?? null;
+    this.session = config.session ?? null;
+    this.store = new Store(this.dbPath, { owner: this.owner, session: this.session });
 
     // embeddings tier (slice 6) — off by default. The embedder is lazy: built on first use only when
     // the tier is on (or injected for tests), so the default path never imports the ML dependency.
