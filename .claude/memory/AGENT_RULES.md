@@ -44,6 +44,7 @@
 - **Graduation criteria:** POC validates logic and covers most common scenarios → stop, design properly, then build with structure, tests, and error handling. Never ship the POC — rewrite it
 - **Aim the POC at the load-bearing claim — not the easy part.** Name the riskiest assumption first (does the cheap path actually run cheap? does the library really do X? does the perf hold?), then point the spike straight at *that*. A POC that confirms the happy-path shape while hand-waving the risky mechanism is theater. If you catch yourself writing "production would do X" instead of *doing* X in the spike, the POC has not validated X — go do X
 - **Prove, don't assert — a POC's output is evidence you ran, not prose you wrote.** Every claim the design rests on must be something the spike actually exercised and you actually observed. **Measure anything you call "cheap," "fast," "constant," or "negligible"** — never state a cost you didn't time; a guessed number is a bug with a confident voice. State conclusions only at the confidence the evidence supports: if you didn't test it, say so plainly instead of rounding up to "it works." Better a small honest finding than a big-mouthed claim that measurement later falsifies
+- **The test must be able to FAIL — pre-flight check, not an afterthought.** Before trusting a POC's numbers, ask three things: **(1) Can this test produce the negative?** If you authored the fixture/corpus to *contain* the phenomenon (overlapping sessions, queries coupled to the hypothesis, a needle where the thing you're testing keeps it), a "pass" is your authoring talking, not a finding — **prefer real, uncrafted data** (production logs, real transcripts, real repos) over synthetic fixtures; if synthetic is unavoidable, build it so it *could* return "no effect." **(2) Is the harness clean of confounds?** A wrong result can be an artifact, not a finding — stale timestamps that decay everything to zero, prompts that trip safety/injection flags, small-corpus IDF collapse. When a result looks degenerate, debug the harness before believing it. **(3) Did it actually exercise the variable?** If two regimes that should differ give identical output, the variable isn't wired in — that's a finding about the system, not noise to average over. This trap recurs (it's bitten R-C7 *and* the Isolate gates) — run the checklist every time
 - **Build incrementally.** After POC graduates, break the work into small, independent modules. Focus on one at a time. Each piece must work on its own before integrating with the next
 
 ### Dependency Hierarchy
@@ -87,6 +88,7 @@ Before adding any external dependency, all of these must be true:
 - Vendor-specific implementations when open alternatives exist
 - Skipping POC validation for unproven ideas
 - POC-ing only the easy part while hand-waving the risky mechanism, or claiming a cost ("cheap"/"fast"/"constant") you never measured
+- Authoring a fixture/corpus that *guarantees* the result (a test that can't return the negative), or trusting a degenerate-looking number without auditing the harness for confounds — use real uncrafted data; the test must be able to fail
 
 ---
 
@@ -229,7 +231,7 @@ Copy this to any project's CLAUDE.md. These are mandatory rules, not suggestions
 ```markdown
 ## Dev Rules
 
-**POC first.** Always validate logic with a ~15min proof-of-concept before building. Cover happy path + common edges. POC works → design properly → build with tests. Never ship the POC. **Aim the spike at the riskiest assumption, not the easy part; prove, don't assert — measure anything you call "cheap"/"fast"/"constant," and claim only what the evidence supports (no big-mouthed conclusions measurement can falsify).**
+**POC first.** Always validate logic with a ~15min proof-of-concept before building. Cover happy path + common edges. POC works → design properly → build with tests. Never ship the POC. **Aim the spike at the riskiest assumption, not the easy part; prove, don't assert — measure anything you call "cheap"/"fast"/"constant," and claim only what the evidence supports (no big-mouthed conclusions measurement can falsify). The test must be able to FAIL: prefer real uncrafted data over a fixture you authored to contain the result, audit a degenerate number for harness confounds before believing it, and treat two should-differ regimes that match as a finding.**
 
 **Build incrementally.** Break work into small independent modules. One piece at a time, each must work on its own before integrating.
 
