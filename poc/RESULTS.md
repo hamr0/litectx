@@ -733,3 +733,86 @@ injecting a **never-read** related file — has **no mechanical ground truth wit
 explicit-query SELECT is worth building. That is the next POC, and its open methodological question is
 how to label "needed a related file" mechanically (candidate: the agent's *own later Read* of a
 graph-adjacent file — future behavior as the label, gated by a real impact edge).
+
+## Isolate §4.5 gate #1 — is `session` load-bearing? (2026-06-13) — `scope-session-poc.mjs`
+
+**Question (bare-suite-buildable-now.md §4.5.1):** the Isolate scope model wants a `session` column to
+isolate volatile `episode`/`stash` between concurrent runs. But litectx recall is **relevance-ranked**
+(BM25 + ACT-R activation + optional embeddings) — so maybe off-session episodes just **sink** on their
+own, and the column is **bloat**. Test it before writing the column (prove-don't-assert).
+
+**Method.** The column doesn't exist yet, so simulate it: tag every episode `meta:{session}`, store all
+sessions in one `:memory:` db, recall a query issued "in" one home session, and inspect the top-5 the
+agent would act on — does it contain **foreign-session** episodes (intrusion), and do they **displace**
+own-session episodes that would otherwise fill those slots? 18 agent episodes across 5 sessions, two
+regimes: **DISTINCT** (`da` auth-rollout · `db` billing · `dc` search) and **OVERLAP** (`oa`+`ob` — two
+agents on the *same* auth-middleware refactor, near-identical wording = the "two reviewers of one
+checkout" case). `occurredAt` interleaved across sessions within the last ~40 min (concurrent-run
+reality — recency can't proxy for session). Run both BM25-only and embeddings-ON.
+
+**Result.** Foreign-session episodes appear in top-5 in **7/8 queries (BM25)** and **8/8 (embeddings)**,
+and **displace** an own-session episode in **7/8 (BM25) / 6/8 (embeddings)**:
+- **OVERLAP: 0/4 clean** under both rankers — when two sessions do the same task, ranking *cannot*
+  separate them; the other agent's trajectory is mixed into yours on every query.
+- **DISTINCT: mostly dirty too** (BM25 1/4 clean, embeddings 0/4) — but for a more interesting reason:
+  sessions that merely **share a vocabulary domain** bleed. `da` (auth *rollout*) pulled in `oa`/`ob`
+  (auth *middleware*) episodes because both speak "auth/token". Only `dc` (search — genuinely
+  orthogonal) stayed clean under BM25 (3 own, 0 foreign). Embeddings widened the bleed (semantic
+  neighbours of *any* topic surface), though for the low-volume own-sets (`db`/`dc`) it surfaced **all**
+  own episodes and foreign ones merely rode the spare slots (present, not displacing).
+
+**Verdict: `session` is LOAD-BEARING — build the `owner`+`session` model (§4.4) when the slice comes.**
+Off-session episodes do **not** reliably sink: relevance isolates only *genuinely orthogonal* topics,
+and you can't assume orthogonality (the scope model's own "never predict will-it-diverge" rule). The
+volatile-isolation guarantee the model wants — a concurrent run not seeing another run's episodes — is a
+**correctness property ranking does not provide**. The column earns its place.
+
+**Honest limits.** (a) Synthetic 18-episode corpus — the *rates* (7/8, 8/8) are directional, not
+precise; the *mechanism* (content-similar episodes from other sessions rank together) is robust and the
+orthogonal-`dc` control demonstrates it cleanly. (b) "Intrusion" ≠ proven "harm": a related session's
+episode can sometimes *help*. The load-bearing claim rests on the **isolation guarantee** for volatile
+concurrent runs, not on a measured task-success drop. (c) Methodology bug found + fixed mid-run
+(prove-don't-assert): a fixed 2023 `BASE` timestamp put episodes ~2.5 yr in the past, so ACT-R decay
+zeroed all activation and recall returned ~nothing — the first "everything sinks" read was an artifact;
+real recent `occurredAt` (via `Date.now()`) gives the result above.
+
+## Isolate §4.5 gate #2 — does down-tiering the MIDDLE preserve task success? (2026-06-13) — `compress-middle-poc.mjs`
+
+**Question (§4.3 / §4.5.2).** §4.3 proposes a positional compose for `assemble()`: pin head verbatim ·
+keep tail verbatim · **down-tier the middle valley** to signatures (shipped `compress()`), justified by
+lost-in-the-middle. FIT already pins head + keeps tail. Two claims hide in this: **(1)** signature-tier
+preserves a middle answer where **drop** loses it, and **(2)** the *middle specifically* is the safe band
+(poorly attended). The byte saving is settled (R-C7). This POC tests task success.
+
+**Method.** A ~4.6 KB context of 12 JS service handlers (head 0–2 + tail 9–11 verbatim; middle 3–8 is
+the down-tier band). Plant one answerable needle in a **middle** unit, render the middle three ways —
+**verbatim / signature / drop** — and ask `claude -p --tools ""` (sonnet, tools off → must answer from
+context) the matching question. Needle and question both name the **same** host service (a first run
+that mismatched them is why verbatim "failed" — caught + fixed, prove-don't-assert). Two needle kinds:
+**doc** (fact in the JSDoc — signature keeps it) and **body** (fact in the function body — signature
+elides it). Metric = **RETRIEVED** (model produced the value); abstain/hallucination tracked separately.
+
+**Result.**
+- **Doc-needles (6, rotating middle positions 3–8):** verbatim **6/6**, signature **6/6**, drop **0/6**.
+  Signature retrieves the middle answer at *every* position, indistinguishable from verbatim, at **24%
+  bytes saved**; drop loses all six (honestly abstains — info simply gone). **0 hallucinations** anywhere.
+- **Body-needles (2):** verbatim 2/2, signature **0/2**, drop 0/2 — the honest limit: signature elides
+  the body, so for deep body detail it tracks **drop**, not verbatim.
+
+**Verdict: PARTIAL PASS — build signature as an intermediate BUDGET TIER, not a positional middle rule.**
+- **Claim 1 CONFIRMED + useful:** signature-tier preserves doc/structural answers (6/6) where dropping
+  destroys them (0/6), never hallucinates, saves 24%. So when `assemble()` must shed bytes, **down-tier
+  to signature before dropping** — strictly dominates drop for structural units. This composes with the
+  shipped FIT: the tier is **rank/recency-driven** (down-tier the units FIT would otherwise drop, recover
+  them as signatures), reusing FIT's existing ordering — **no new positional machinery needed.**
+- **Claim 2 NOT CONFIRMED:** lost-in-the-middle **did not manifest** — verbatim retrieved the middle
+  needle **8/8**, no positional penalty at ~4.6 KB. So the "middle valley is poorly attended, compress it
+  there" framing is **unsubstantiated at tested scale**; the design should NOT hinge on a positional
+  middle-band special case. (At small contexts you needn't compress the middle at all — everything's
+  retrieved. The tier earns its keep only at budget pressure, where rank, not position, picks victims.)
+
+**Honest limits.** (a) Small n (8) and a single ~4.6 KB context — confirms the signature-vs-drop
+*mechanism* (robust: it's "is the string present + model-readable"), not a positional or large-context
+claim. (b) Lost-in-the-middle needs a context far larger than `claude -p` made convenient here; the
+positional premise remains **untested**, not refuted. (c) Construction bug found + fixed mid-run
+(needle/question service mismatch made verbatim spuriously fail 5/6) — the numbers above are post-fix.
