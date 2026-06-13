@@ -76,7 +76,7 @@ path read **fresh from disk**.
 
 ```bash
 litectx get src/index.js
-litectx get docs/02-engineering/aurora-borrow-ledger.md
+litectx get docs/02-engineering/build-studies.md
 litectx get fact:auth-uses-jwt
 ```
 

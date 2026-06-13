@@ -4,7 +4,7 @@
 > it indexes a repository (code + docs) into a queryable **code+context graph** and serves
 > two read-views over it — **recall** (ranked search) and **impact** (blast-radius / risk).
 > Published as an importable **npm library** (Node; pure ESM JS + JSDoc). It is the realization of
-> the "context economy" axis sketched in [`barecontext-prd.md`](barecontext-prd.md),
+> the "context economy" axis sketched in [`barecontext-prd.md`](../archive/barecontext-prd.md),
 > rebuilt from the lessons of the AURORA engine (`~/PycharmProjects/aurora`).
 >
 > **Not part of the "bare" suite.** litectx is a real ~3–4k-LOC library, not a ≤150-LOC
@@ -12,7 +12,7 @@
 > suite *consumes* (§10). Its discipline is *lite / local-first / no-service /
 > deterministic-core / optional-tiers*.
 >
-> **New home (DECIDED):** this PRD and [`barecontext-prd.md`](barecontext-prd.md) both
+> **New home (DECIDED):** this PRD and [`barecontext-prd.md`](../archive/barecontext-prd.md) both
 > **move to the new `litectx` repo once settled.** They incubate here only until then; the
 > bareguard repo retains only the boundary reference it needs (bareguard ↔ litectx, §10).
 >
@@ -30,7 +30,7 @@
 > | Doc | Role |
 > |---|---|
 > | **`litectx-memory-prd.md`** (this) | the authority — decisions, scope, build order, module map (§2.1) |
-> | `docs/02-engineering/aurora-borrow-ledger.md` | calibration **appendix** — exact constants + aurora `file:line`; referenced, not duplicated |
+> | `docs/02-engineering/build-studies.md` **Part A** (aurora borrow ledger) | calibration **appendix** — exact constants + aurora `file:line`; referenced, not duplicated |
 > | `docs/01-product/litectx-ce-prd.md` | the **other half** (CE primitives) — a *separate, still-forming* track, **not** part of this memory-engine build |
 > | `barecontext-prd.md` | **superseded** — folded into this line of work |
 > | `.claude/stash/*`, `CLAUDE.md` | session history / doctrine — never source of truth |
@@ -497,7 +497,7 @@ doesn't exist yet (the biggest IOU).
 > the access log exists; code is just v1's content.
 
 ACT-R total activation, reimplemented in JS (grounding: aurora `activation/*`,
-`docs/02-engineering/aurora-borrow-ledger.md`):
+`docs/02-engineering/build-studies.md` Part A):
 
 ```
 A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
@@ -524,7 +524,7 @@ A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
 
 Ship AURORA's 5 presets as config presets. All formulas are pure functions → near-verbatim
 JS port, unit-testable. **Every constant above is source-verified in
-`docs/02-engineering/aurora-borrow-ledger.md` (aurora `@ 750a39d`)** — that ledger, not this
+`docs/02-engineering/build-studies.md` Part A (aurora `@ 750a39d`)** — that ledger, not this
 summary, is the calibration source of truth; start at aurora's tested defaults, re-validate any
 change on both repos before it earns weight. **Scope note (POC-corrected):** of these, only
 **spreading** ships as a v1 *ranking* term (slice 4, over edges). The base-level terms (BLA,
@@ -1287,7 +1287,7 @@ package** (§7).
 
 > **The actual tuned constants** (formulas + every coefficient, with aurora `file:line`
 > provenance, mapped to the slice that consumes them) live in
-> **`docs/02-engineering/aurora-borrow-ledger.md`** — the written borrow contract for slices 3–6.
+> **`docs/02-engineering/build-studies.md` Part A** (the aurora borrow ledger) — the written borrow contract for slices 3–6.
 > Source-verified; re-verify if aurora moves off `750a39d`.
 
 ---

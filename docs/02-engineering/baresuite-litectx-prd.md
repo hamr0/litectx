@@ -1,9 +1,10 @@
-# litectx — what's buildable NOW for bareagent/bareguard (distilled 2026-06-12)
+# litectx ↔ baresuite — the integration contract (buildable-now + the adopter guide)
 
-> **What this is.** A grounded distillation of the two PRDs ([`litectx-ce-prd.md`](../01-product/litectx-ce-prd.md)
-> §8 rollup + §10 lift; [`litectx-memory-prd.md`](../01-product/litectx-memory-prd.md) §3 API)
-> answering one question: **of the litectx primitives the bare suite depends on, which can I build
-> now — without waiting on a consumer to define the shape?**
+> **What this is — the single canonical litectx↔baresuite contract.** Merges two former docs: the
+> *buildable-now distillation* (§0–§4 below) and the *integration guide* (the orientation preamble +
+> §5–§9, folded in from the retired `litectx-for-baresuite.md` 2026-06-13). It answers, in one place:
+> **what litectx is, why your suite consumes it, exactly what you build and what stays litectx's job,
+> and — of the primitives the suite depends on — which can be built now vs. which wait on you.**
 >
 > **Method = the §8.1 discriminator.** Does a primitive's contract *depend on knowing how a specific
 > consumer drives it* (→ adopter-pulled, **defer**), or is it *self-evident from litectx's own data
@@ -11,7 +12,50 @@
 > Every "build now" claim is grounded at file:line, not asserted.
 >
 > **Grounded against live source 2026-06-12** (HEAD `9ac64c8`, `litectx@0.8.0`): the litectx facade,
-> `../bareagent/types/index.d.ts`, `../bareguard/src/gate.js`.
+> `../bareagent/types/index.d.ts`, `../bareguard/src/gate.js`. **Sources of truth (litectx side):**
+> [`litectx-ce-prd.md`](../01-product/litectx-ce-prd.md) §10 (the lift), §8/§8.1 (the surface + build
+> order); [`litectx-memory-prd.md`](../01-product/litectx-memory-prd.md) §3 (the API).
+>
+> > **Stable anchors — do not renumber.** §4.1 and §4.4 are cited cross-repo (bareagent
+> > `docs/01-product/prd.md`) and by `litectx-ce-prd.md`. The integration-guide material is appended as
+> > §5–§9 precisely so §0–§4 keep their numbers.
+
+---
+
+## Orientation — what litectx is & why baresuite consumes it
+
+litectx is a **lite, local-first, importable memory library** for AI agents. It indexes a repo
+(code + docs) and accepts written knowledge (facts/episodes) into one **code+context graph** stored
+in a single SQLite file, and serves views over it:
+
+- **`recall(query, {kind})`** — ranked search (BM25 + 1-hop import-spreading; embeddings optional).
+- **`impact(symbol)`** — blast radius: callers/callees → risk bucket (low/med/high).
+- **the write path** — `remember(id, text, {kind, by})` / `forget(id)` for facts/episodes/docs that
+  have no file on disk; survives across sessions.
+- **context-engineering verbs** — `compress(node, {level})`, `stash`/`peek`/`get`/`evict` (park a
+  big payload out of the window, restore on demand).
+
+**The lite line (binds everything):** no service/daemon, no external graph DB, no LLM-on-write,
+single-file SQLite, one prod dep (`better-sqlite3`), embeddings/LLM are opt-in tiers. If a capability
+can't live within that line, litectx **cedes** it rather than bending — which is exactly where *you*
+come in (§6–§7).
+
+**Why baresuite consumes litectx — and the direction.** baresuite serves **lightweight, one-shot
+automation**; litectx serves **long-running, specialized agents that need persistent, ranked,
+relationship-aware memory.** Your suite reaches for litectx when a loop needs to *remember across
+turns/sessions*, *retrieve the right context*, or *park context out of the window* — heavier than the
+thin `Memory` passthrough you ship today (`bareagent/src/memory.js`). **The dependency direction is
+fixed: baresuite consumes litectx, never the reverse** — litectx is standalone and never imports
+baresuite. So everything below is *you adapting to litectx's surface*, or litectx *copying/adapting a
+shape from your repos* into its own standalone implementation — never a runtime dependency onto you.
+
+**Two distinct relationships (don't conflate):**
+1. **bareagent *imports* litectx** for its own orchestration (assemble context → run loop → persist).
+   Use the **direct API** (`import { LiteCtx }`) — real types, in-process, no JSON-RPC.
+2. **bareagent *mounts litectx's MCP server*** into the toolbox of the **sub-agent it drives** — so the
+   *model* can call `recall`/`remember`/`impact` mid-reasoning. This is the only legitimate MCP use:
+   equipping the model in the loop, **not** easing bareagent's own consumption (wrapping a function call
+   in JSON-RPC only removes capability). litectx-CE-PRD §10.5.
 
 ---
 
@@ -158,7 +202,7 @@ cover this?"* before adding surface.
 > A design round (no code) that (a) killed proactive SELECT on POC + first-principles, (b) ran every CE
 > primitive through one lens — *does it serve the agent on request, or push work it didn't ask for?* —
 > and (c) settled the **Isolate scope model** the §2④ stub was waiting on. Grounded against the two CE
-> docs ([`ce-tree.md`](../00-context/ce-tree.md) §3.4, [`ctx-ifra.md`](../00-context/ctx-ifra.md)) and
+> docs ([`litectx-ce-prd.md` Appendix CE-T §3.4](../01-product/litectx-ce-prd.md), [`build-studies.md` Part E](build-studies.md)) and
 > a 3-stream web research pass on the field's leaders (§4.4.8).
 
 ### 4.0 Summary — what this round settled
@@ -188,7 +232,7 @@ cover this?"* before adding surface.
 The left column is one coherent thing — **a searchable store the agent queries on demand, returning the best-ranked, budget-fitted answer**. Every right-column item is agent-policy or harness-runtime.
 
 ### 4.3 Compress — middle-band down-tiering (the one new buildable)
-Grounded, not arbitrary: ctx-ifra.md establishes **lost-in-the-middle** (line 46 — U-shaped attention, beginning + end used well, middle missed, 30+ pt drop), **stable-top / recent-bottom** ordering (lines 152/217), and the only **LLM-free** compaction = trim-oldest (line 99). Compose them:
+Grounded, not arbitrary: the CE-29min transcript (`build-studies.md` Part E) establishes **lost-in-the-middle** (U-shaped attention, beginning + end used well, middle missed, 30+ pt drop), **stable-top / recent-bottom** ordering, and the only **LLM-free** compaction = trim-oldest. Compose them:
 - **head** (system / rules / first instructions) → **pinned, verbatim** — FIT already does this.
 - **tail** (recent turns) → **kept, verbatim** — FIT's recency anchoring already does this.
 - **middle** (old tool outputs, the U-curve valley) → **down-tier to signature** (`compress()` shipped) **or drop with a rehydrate handle** (R-C4; `stash`/`peek` already park + preview **head+tail**).
@@ -260,3 +304,138 @@ Git supplies `owner`; the harness supplies `session`; the db sits at the repo-id
 *Memory pointers: [[litectx-absorbs-all-ce-primitives]] · [[slice-rc7-compress-shipped]] ·
 [[rs8-confidence-label-falsified]] · [[borrow-aurora-dont-restart]] · [[prove-dont-assert]] ·
 [[verify-shipped-against-poc-data]] · [[bareagent-rt-seam-contract]].*
+
+---
+
+## 5. The ask — what you build, grouped by repo and readiness
+
+> The integration guide, folded in 2026-06-13. The Store adapter (① below) and bareguard write-gate (②)
+> restate §2①/§2② from the adopter's side — see §2 for the §8.1 "build-now" justification and file:line
+> grounding; this section is the per-repo *task* framing.
+
+### 5A. bareagent — integration wiring (buildable now; contracts already frozen)
+
+**(a) Mount litectx as a `Memory` backend.** Your `Memory` is a thin wrapper over a swappable store
+and already invites *"Bring your own: implement { store, search, get, delete }"*
+(`bareagent/src/memory.js`; interface at `bareagent/types/index.d.ts:58-62`). You ship two backends
+(`store-jsonfile.js`, `store-sqlite.js`) — **litectx is a third**. The ask: a `store-litectx.js`
+adapter mapping the four methods onto litectx:
+
+| `Store` method | litectx call | notes |
+|---|---|---|
+| `store(content, metadata)` | `remember(id, content, {kind, by})` | `id` from metadata or hashed; `kind` defaults `fact` |
+| `search(query, options)` | `recall(query, options)` | project hits → `[{id, content, metadata, score}]` |
+| `get(id)` | `get(id)` | body text, verbatim |
+| `delete(id)` | `forget(id)` | memory-only (litectx `forget` never touches files/stash) |
+
+*Who ships it:* per CE-PRD §10.2 litectx ships the projection shim so it stays decoupled from your
+version — **but the wiring that selects litectx as the active backend is yours.** Coordinate so it isn't
+built twice.
+
+**(b) Assemble → run → persist *around* the loop (loop unchanged).** `Loop.run()`
+(`bareagent/src/loop.js:212`) never auto-reads memory — its `store` is validate-only (`:130`). So
+context assembly + persistence stay in caller space, exactly where litectx plugs in:
+```
+context = litectx.assemble(units, ctx)   // ← RT-1 FIT shipped v0.11.0; SELECT/COMPRESS are the next slice
+result  = loop.run(context.messages, tools)
+litectx.remember(...harvest(result.msgs))       // persist what the turn produced
+```
+**Zero changes to `loop.run`.** litectx sits on both sides of it.
+
+**(c) Scoped store per spawned child.** `spawnChild()` (`bareagent/tools/spawn.js:74`) hands children
+no scoped context today. The ask: pass each child a **namespaced litectx view** through its config, so
+sibling sub-agents don't bleed context. bareagent keeps fork + lifecycle; litectx owns the child's
+context boundary. (The Isolate scope model is **built** — `owner`/`session`, §4.4.7; `worktree`/`branch`
+keys + the db-at-repo-identity path stay the harness's job.)
+
+### 5B. bareguard — gate the memory write (buildable now; net-new action types)
+
+litectx emits a gate-able action when memory is written or injected:
+`{ type: "memory.write" | "memory.inject", kind, provenance, text }`. **bareguard does not recognize
+these types yet** (confirmed: no `memory.write`/`injectionRisk` references in `bareguard/src`). The ask:
+
+- **Recognize + gate** the two action types in `Gate#check(action)` (`bareguard/src/gate.js:220` →
+  `{outcome, severity, rule, reason}`), by **shape** — `denyArgPatterns` / content regex over
+  `provenance`, `injectionRisk`, `text`.
+- **Preserve floor supremacy.** Your fixed 6-step eval order (`gate.js` — denies/asks *before* the
+  allowlist) already gives the invariant *"a memory write may never relax the floor"*. Keep that ordering
+  when you add the new types — don't special-case memory above the floor.
+- **Audit stays yours.** Every check/record emits a JSONL line via `primitives/audit.js`. litectx reuses
+  *your* audit when embedded; it only ships its own when standalone.
+
+**The §6 line — do NOT take this on:** the **content verdict** (is this fact a prompt-injection? does it
+semantically conflict with the floor?) is litectx's job (or an opt-in guardrails tier), reduced to a
+**shape flag** on the action (`provenance:"untrusted"`, `injectionRisk:"high"`). bareguard gates the
+*flag by shape*; it never renders the content judgment. Fixed (CE-PRD §10.1).
+
+### 5C. bareagent — *pull* the deferred primitives (specify so litectx can build)
+
+These are **adopter-pulled** (CE-PRD §8.1 Tier-B, restated in §1) — blocked on **you answering**, not on
+litectx coding. (`assemble`'s FIT half is now shipped via the RT-1 seam — see §1; what remains below is
+genuinely consumer-shaped.)
+
+| Primitive | What litectx needs you to pin |
+|---|---|
+| **`session` / `state` / `state.view`** | The state **schema** — which fields exist, which are LLM-visible vs isolated? |
+| **`clear` / `trim` / `summaryWindow`** | The **policy** — *when* does your loop clear a spent tool-result / trim old turns / roll a summary? (litectx supplies mechanism; timing is your loop's.) |
+| **`selectTools` / `recordUseful`** | A real tool corpus to rank for / the loop's success-verdict (the recall-rerank use was falsified topic-blind — §1). |
+
+## 6. What litectx will NOT do — so you don't wait on it
+
+Ceded to you/the harness by design (CE-PRD §7, §10). Build them on your side; litectx only defines the seam:
+
+- **The agent loop, tool dispatch, sub-agent fork/lifecycle, sandboxes, phase control** → bareagent.
+- **The content-trust *judgment*** (injection / secret / semantic floor-conflict) → bareguard renders the
+  verdict; litectx carries the provenance label + a shape flag.
+- **The LLM step** in fact-extraction, summarization, auto-compaction → opt-in tier / harness. litectx
+  feeds these deterministically; it never requires an LLM on the write/index path.
+- **Budget *enforcement*** (per-tier $ caps, soft/hard gates) → bareguard. litectx does budget-*aware
+  assembly*, not budget *policing*.
+- **Any GUI / rendering / visualization.** litectx ships graph *data* (`getNode`/`related`, in design);
+  the click/highlight/render is a consumer's.
+
+## 7. Hand-off summary — who owns what
+
+| Capability | litectx (standalone) | baresuite (when present) |
+|---|---|---|
+| recall / impact / graph / write path / compress / stash-evict | **owns** | — |
+| memory-write **shape** gate + floor supremacy + audit | label + content-flag | **bareguard** (gate.js) |
+| content-trust verdict (injection / semantic conflict) | **owns** (or guardrails tier) | — |
+| agent loop / tool dispatch | assembles `messages` around it | **bareagent** (loop.js) |
+| sub-agent fork / lifecycle | scoped store per child (`owner`/`session`, §4.4) | **bareagent** (spawn.js) |
+| per-task FSM / human-approval checkpoint | — | **bareagent** (state.js / checkpoint.js) |
+| memory backend behind `Store {store,search,get,delete}` | **adapter shim** | bareagent **selects + wires** |
+
+## 8. Start-here checklist for bareagent/bareguard
+
+1. **Read** CE-PRD §10 (the full lift, file:line into your repos) + §8.1 (why Tier-B waits on you).
+2. **bareagent:** scaffold `store-litectx.js` against `{store,search,get,delete}` (5A-a); the
+   assemble→run→persist seam (5A-b) is live now that RT-1 FIT shipped.
+3. **bareguard:** add `memory.write` / `memory.inject` recognition to `Gate#check`, gated by shape,
+   floor-supremacy preserved (5B).
+4. **bareagent (design, not code):** answer the `session` / `clear` / `selectTools` questions (5C) and
+   send them back — that unblocks litectx's remaining Tier-B build.
+5. **Coordinate the adapter seam** so the Store shim isn't built on both sides.
+
+## 9. Reference — litectx surface you can call today
+
+| Method | One line |
+|---|---|
+| `index({paths?})` | incremental, git-aware repo index |
+| `recall(query, {kind, n, log})` | ranked search; grouped by kind or flat |
+| `impact(symbol)` | blast radius → `{usedBy, risk, callers, callees}` |
+| `remember(id, text, {kind, by, occurredAt})` | upsert a fact/episode/direct-doc |
+| `forget(id)` | hard-delete written memory (never files/stash) |
+| `get(id, {log})` | body text — memory verbatim, files fresh from disk |
+| `stash(id, text)` | park a payload out of the window (recall-invisible) |
+| `peek(id)` | head+tail preview of a stashed payload (bounded result) |
+| `evict(id \| {olderThan, maxCount})` | delete stashed payloads (stash-only) |
+| `compress(node, {level})` | `verbatim` \| `signature` \| `drop` render |
+| `assemble(units, ctx)` | budget-fit a neutral unit array → `{units, dropped, tokens}` (RT-1 FIT, v0.11.0) |
+| `reviewCandidates(threshold)` | agent facts recalled ≥N → human promote/kill |
+| `promotionCandidates(threshold)` | episodes earning promotion |
+| `recentActivity({...})` | recently-edited chunks (captured, not ranked) |
+
+*In design (the substrate for codegraph/contextgraph views): `getNode(id)` + `related(id, {edge, dir,
+hops})` — describe a node, walk its edges. Generic `edge` type so future CE edges
+(`derived_from`/`supersedes`) slot in without migration.*

@@ -6,6 +6,19 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Changed
+- **Docs consolidation (repo-only — no package, API, or behavior change).** The `docs/` set was merged
+  into fewer canonical homes, with every inbound reference repointed and **zero dangling links** (incl.
+  the cross-repo bareagent PRD citation):
+  - `02-engineering/` (5 → 2): `bare-suite-buildable-now.md` + `litectx-for-baresuite.md` →
+    **`baresuite-litectx-prd.md`** (the litectx↔baresuite integration contract; §4.1/§4.4 anchors kept
+    for cross-repo citations); `aurora-borrow-ledger.md` + `copy-pattern-studies.md` +
+    `ce-eval-harness-scenario.md` → **`build-studies.md`** (Parts A–C, internal section numbers kept).
+  - `00-context/`: `ce-flow.md` + `ctx-ifra.md` → `build-studies.md` (Parts D–E); `ce-tree.md` →
+    **`litectx-ce-prd.md` Appendix CE-T** (headers namespaced `CE-T.*` so `§N` citations still resolve).
+    `00-context/README.md` rewritten as the CE doc-set index/map.
+  - `barecontext-prd.md` (superseded SEED) → `docs/archive/`.
+
 ## [0.12.0] — 2026-06-13
 
 The Isolate scope model — written memory scopes to its actor (`owner`) and run (`session`), so a

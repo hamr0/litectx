@@ -100,4 +100,5 @@ on trustworthy data.
 - Channel: **API-only** for now (MCP only if a model-caller ever needs graph navigation — §10.5).
 
 *Memory: [[litectx-absorbs-all-ce-primitives]]. Pairs with the baresuite handoff
-(`docs/02-engineering/litectx-for-baresuite.md`).*
+(`docs/02-engineering/baresuite-litectx-prd.md`, the integration contract — formerly
+`litectx-for-baresuite.md`).*

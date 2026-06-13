@@ -2,12 +2,12 @@
 
 > **⚠ SUPERSEDED (2026-06-05) — do not build from this doc.** This SEED's axis (the *context
 > economy*) is now **litectx's**, and litectx documents it as **two live PRDs**:
-> - **memory engine** → [`litectx-memory-prd.md`](litectx-memory-prd.md) — recall, impact, the
+> - **memory engine** → [`litectx-memory-prd.md`](../01-product/litectx-memory-prd.md) — recall, impact, the
 >   code+context graph, ACT-R, kinds, indexing, storage.
-> - **CE primitives (Write / Select / Compress / Isolate)** → [`litectx-ce-prd.md`](litectx-ce-prd.md),
+> - **CE primitives (Write / Select / Compress / Isolate)** → [`litectx-ce-prd.md`](../01-product/litectx-ce-prd.md),
 >   which carries this doc's **§4 primitives** (now first-class requirements), turns its **§6
 >   "bare test" into the "lite line,"** and points its **§7 Aurora-port notes** at
->   [`../02-engineering/aurora-borrow-ledger.md`](../02-engineering/aurora-borrow-ledger.md).
+>   [`../02-engineering/build-studies.md`](../02-engineering/build-studies.md) (Part A).
 >
 > Two framings below are now **wrong** and kept only for history: (1) barecontext is **not** a
 > future bare-suite *sibling* — it is litectx, a **standalone** library that baresuite
