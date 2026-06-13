@@ -77,7 +77,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
 | **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (v0.10.0 — RT-3) |
 | **`compress(node, {level})`** — rank-tiered render (R-C7): `verbatim` / `signature` (header + doc, body elided) / `drop`; tree-sitter signature extraction, ~82% bytes saved with the doc kept | ✅ shipped (library API only, like `stash`/`peek`) |
-| **`assemble(units, ctx)`** — RT-1 budget-fit a neutral transcript to a token budget: recency-anchored, `pinned`/`atomic` invariants, `dropped[]`-with-handle, cache-stable order | ✅ shipped (v1 = FIT; SELECT/COMPRESS next) |
+| **`await assemble(units, ctx)`** — RT-1 budget-fit a neutral transcript to a token budget: recency-anchored, `pinned`/`atomic` invariants, `dropped[]`-with-handle, cache-stable order; a would-be-dropped `code`/`doc` unit is recovered as its `compress()` signature (COMPRESS tier) | ✅ shipped (FIT + COMPRESS; SELECT POC-killed; async) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
@@ -543,29 +543,38 @@ Given a graph node and a `level`, return its text at one of three fidelities:
   but owns none of its logic. Library API only (a render mechanic the host loop runs, like `stash`/`peek`
   — not an MCP verb). `COMPRESS_LEVELS` exports the level vocabulary.
 
-### `assemble(units, ctx?)` → `{ units, dropped, tokens }`
+### `await assemble(units, ctx?)` → `Promise<{ units, dropped, tokens }>`
 The **budget-fit** primitive (RT-1) — a free function (`import { assemble } from "litectx"`), the CE
 read-path keystone. A host loop hands litectx a neutral **unit** array (its messages, grammar-stripped)
 plus a token budget; litectx returns the fitted **view** for the next model call. litectx owns *content
 + relevance*, never the provider's transcript grammar — so `role` is opaque to it, and two flags carry
 the contract:
-- `unit`: `{ id, role, content, kind?, pinned?, atomic?, tokensApprox? }` — `pinned` units are never
-  dropped or reordered (system prompt, current task); `atomic` units sharing a group id (a tool-call +
-  its result) are kept-or-dropped **whole**, never split (broken grammar is unrepresentable, not caught).
-  `tokensApprox` is the caller's estimate (falls back to `chars/4`).
-- `ctx`: `{ budget?, task? }` — `budget` in tokens (omitted → keep all); `task` is reserved for the
-  SELECT slice (below) and unused by the fit.
+- `unit`: `{ id, role, content, kind?, format?, symbol?, pinned?, atomic?, tokensApprox? }` — `pinned`
+  units are never dropped or reordered (system prompt, current task); `atomic` units sharing a group id
+  (a tool-call + its result) are kept-or-dropped **whole**, never split (broken grammar is unrepresentable,
+  not caught). `tokensApprox` is the caller's estimate (falls back to `chars/4`). `format`/`symbol` on an
+  injected `kind:"code"|"doc"` unit enable the COMPRESS tier (below).
+- `ctx`: `{ budget?, task? }` — `budget` in tokens (omitted → keep all); `task` is reserved (the SELECT
+  slice was POC-killed — see Scope) and unused by the fit.
 - **Returns** `{ units, dropped, tokens }`: `units` is the kept view in **original order** (cache-stable —
-  pinned in place, no reordering); `dropped` is `[{ id, reason }]` accounting for **every** elided unit
-  (no silent loss — restorable by `id` from the host's canonical transcript); `tokens` is the view size
-  (best-effort ≤ budget; pinned that alone exceed budget are still kept — never a hard cap).
+  pinned in place, no reordering); a unit down-tiered by COMPRESS carries `compressed: true` and its
+  `content` is the signature (full body recoverable by `id`, like a drop). `dropped` is `[{ id, reason }]`
+  accounting for **every** elided unit (no silent loss — restorable by `id` from the host's canonical
+  transcript); `tokens` is the view size (best-effort ≤ budget; pinned that alone exceed budget are still
+  kept — never a hard cap).
 - The fit is **recency-anchored** — the constraint the budget-fit POC pinned (`poc/assemble-fit-*.mjs`):
   re-reads are recency-bound, not topic-bound, so it keeps the newest un-pinned units and never reorders.
-  Pure function, deterministic (no DB, no model, no clock).
-- **Scope:** v1 ships **FIT only** (the gated core). **SELECT** (recall-inject new graph context) and
-  **COMPRESS** (signature-tier large units via `compress`) are the next slice and ride together —
-  COMPRESS needs a parseable `format`, which only recall-injected units carry, so there is nothing to
-  compress until SELECT injects it. Library API only (a host-loop mechanic, like `compress` — not an MCP verb).
+  Deterministic & cache-stable (no DB, no model, no clock); **async** because the COMPRESS tier awaits the
+  tree-sitter render (a pure parse — still reproducible).
+- **COMPRESS budget tier (shipped):** when the fit would **drop** a parseable `code`/`doc` unit, it is
+  instead recovered as its `compress()` **signature** (header + doc, body elided) — rank/recency-driven
+  (reuses the fit's order, *not* a positional rule), fires only when the signature both saves bytes and
+  fits. Validated on real functions through this verb: signature retrieval **8/8** vs drop **0/8**, mean
+  saving **81%** (`poc/assemble-compress-seam-poc.mjs`).
+- **Scope:** ships **FIT + COMPRESS**. **SELECT** (recall-inject new graph context) is *not* here —
+  auto-SELECT on in-window signal was POC-killed (`poc/assemble-select-poc.mjs`); fetch your own code with
+  `recall`/`get`/`impact` and pass injected `code`/`doc` units in explicitly (COMPRESS then tiers them).
+  Library API only (a host-loop mechanic, like `compress` — not an MCP verb).
 
 ### `liteCtxAsStore(lc, opts?)` → a host `Store`
 Mount an indexed `LiteCtx` as a host's swappable memory backend — the four-method `Store` shape
