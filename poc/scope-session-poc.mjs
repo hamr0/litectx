@@ -1,158 +1,194 @@
-// THROWAWAY POC — §4.5 gate #1: is `session` load-bearing for episode recall?
+// THROWAWAY POC — §4.5 gate #1, REBUILT on REAL data (2026-06-13): is `session` load-bearing?
 //
-// The Isolate scope model (bare-suite-buildable-now.md §4.4) wants a `session` column to
-// isolate volatile `episode`/`stash` between concurrent runs. But litectx recall is
-// RELEVANCE-RANKED (BM25 + ACT-R activation + optional embeddings) — so off-session
-// episodes might simply SINK on their own, making the column bloat. This POC tests that.
+// The first version of this POC used a corpus I crafted to overlap — which made intrusion a property
+// of my authoring, not a finding (a rigged bench; see git history / the user's challenge). This rebuild
+// uses REAL, uncrafted data: episodes extracted from this repo's actual Claude Code session transcripts
+// (~/.claude/projects/<repo>/*.jsonl) — ~13 real multi-turn work sessions spanning 06-05..06-13, all on
+// litectx (so naturally high vocabulary overlap), each with its own real sub-topics and real timestamps.
 //
-// Method (the column does not exist yet, so simulate it): tag every episode with
-// meta:{session}, store ALL sessions in one db, recall a query issued "in" one session,
-// and compare the top-K the agent would act on:
-//   - UNFILTERED  (all sessions present — today's behaviour)
-//   - SESSION      (filtered to the home session — what the column would give)
-// If the two top-Ks match → relevance already isolates → the column is BLOAT.
-// If foreign-session episodes INTRUDE and DISPLACE own-session ones → LOAD-BEARING.
+// The literal §4.5.1 test: recall a query (a) over ONLY the current session's episodes vs (b) over ALL
+// sessions' episodes. Do the current session's top results CHANGE when other sessions are present?
+//   - no change → other sessions sank → the column is BLOAT
+//   - foreign episodes displace the current session's → LOAD-BEARING
+// Two regimes: A = real timestamps (sequential/solo — litectx's actual deployment, current session is
+// newest), B = concurrent (current + foreign stamped co-recent — the multi-agent stress where recency
+// can't separate). The query is drawn from the CURRENT session's own topics, so own-session is the
+// correct answer by construction AND the test is conservative (biased toward the current session holding,
+// i.e. toward "bloat" — load-bearing only shows if foreign displaces despite that bias).
 //
-// Riskiest case (aimed at, per prove-don't-assert): CONCURRENT sessions on the SAME topic
-// ("two reviewers of one checkout") — relevance cannot separate them; only a session key can.
-// We also test DISTINCT-topic sessions (the easy case) to show the contrast.
-//
-// Run: node poc/scope-session-poc.mjs   (embeddings ON — the realistic memory config)
+// Run: node poc/scope-session-poc.mjs   ( --debug to inspect extraction/recall )
 
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { LiteCtx } from "../src/index.js";
 
-const MIN = 60_000;
-const NOW = Date.now(); // episodes are from the *current* concurrent runs — minutes old, not years
+const DEBUG = process.argv.includes("--debug");
+const MIN = 60_000, HOUR = 3_600_000;
+const NOW = Date.now();
 const TOPK = 5;
+const N_SESSIONS = 12; // most recent completed real sessions
+const MAX_EP_PER_SESSION = 25;
 
-// ── episode corpus ────────────────────────────────────────────────────────────────────────
-// Each entry: [session, text]. occurredAt is assigned INTERLEAVED across sessions below, so
-// recency cannot stand in for session (the concurrent-run reality).
-//
-// Regime DISTINCT: sessions da/db/dc work on unrelated areas.
-// Regime OVERLAP:  sessions oa/ob BOTH work the same auth-refactor task, similar wording.
-const EPISODES = [
-  // -- DISTINCT: da = auth, db = billing, dc = search --
-  ["da", "started the auth rollout; flipped the login feature flag on for 10% of users"],
-  ["da", "found a null-pointer in the session-token refresh and added a guard"],
-  ["da", "auth rollout held overnight; bumped the flag to 50%"],
-  ["da", "wrote a regression test for the expired-token refresh path"],
-  ["db", "reconciled the monthly billing run; three invoices were double-charged"],
-  ["db", "patched the proration math for mid-cycle plan upgrades"],
-  ["db", "added a billing webhook retry with exponential backoff"],
-  ["dc", "reindexed the search corpus after the schema change"],
-  ["dc", "tuned BM25 k1/b on the search relevance benchmark"],
-  ["dc", "fixed a crash when the search query was empty"],
+const PROJ = join(homedir(), ".claude", "projects", "-home-hamr-PycharmProjects-litectx");
 
-  // -- OVERLAP: oa and ob are two agents on the SAME auth-refactor checkout, same topic --
-  ["oa", "refactoring the auth middleware to pull the user from the JWT claims"],
-  ["oa", "moved token validation into a shared verifyToken() helper"],
-  ["oa", "the auth middleware now rejects expired tokens with a 401"],
-  ["oa", "added a test: middleware passes the decoded claims downstream"],
-  ["ob", "refactoring auth middleware so the JWT claims populate the request user"],
-  ["ob", "extracted token checks into a reusable verifyToken function"],
-  ["ob", "middleware returns 401 on an expired auth token now"],
-  ["ob", "covered the claims-passthrough behaviour of the middleware with a test"],
+// ── extract real episodes (substantive user turns) per real session, with real timestamps ──────────
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((b) => b.text || "").join(" ");
+  return "";
+}
+function isSubstantive(t) {
+  if (!t || t.length < 20) return false;
+  if (/^[/<]/.test(t)) return false; // slash-cmds, system tags, file paths
+  if (/^Caveat:/.test(t)) return false;
+  if (t.startsWith("/**")) return false; // POC-spawned ledger-pipeline prompts
+  if (/Handles the \w+ pipeline/.test(t)) return false;
+  return true;
+}
+function loadSessions() {
+  const files = readdirSync(PROJ)
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => ({ f, p: join(PROJ, f), m: statSync(join(PROJ, f)).mtimeMs }))
+    .sort((a, b) => b.m - a.m);
+  const sessions = [];
+  for (const { f, p } of files) {
+    let lines;
+    try { lines = readFileSync(p, "utf8").split("\n").filter(Boolean); } catch { continue; }
+    const eps = [];
+    for (const l of lines) {
+      let o; try { o = JSON.parse(l); } catch { continue; }
+      if (o.message?.role !== "user" || !o.timestamp) continue;
+      const t = textOf(o.message.content).replace(/\s+/g, " ").trim();
+      if (!isSubstantive(t)) continue;
+      eps.push({ text: t.slice(0, 400), ts: Date.parse(o.timestamp) });
+      if (eps.length >= MAX_EP_PER_SESSION) break;
+    }
+    if (eps.length >= 5) sessions.push({ id: f.slice(0, 8), eps, newest: Math.max(...eps.map((e) => e.ts)) });
+    if (sessions.length >= N_SESSIONS + 1) break;
+  }
+  // drop the most-recent session (this live, in-progress one) so we don't test against partial state
+  sessions.sort((a, b) => b.newest - a.newest);
+  return sessions.slice(1, 1 + N_SESSIONS);
+}
+
+// real repo topics that genuinely recur across sessions (grounded in observed transcript content)
+const TOPIC_QUERIES = [
+  "assemble budget fit verb token transcript",
+  "embeddings paraphrase recall model transformers",
+  "memory socket store adapter liteCtxAsStore",
+  "compress signature tier render bytes",
+  "impact blast radius callers risk",
+  "mcp server versus direct function call",
+  "prd update validate delivery claims",
+  "scope session isolation worktree owner",
+  "promotion ladder episode to fact candidate",
+  "publish release npm version tag",
 ];
 
-// queries: [homeSession, queryText, regimeLabel]
-const QUERIES = [
-  ["da", "how far did we get on the auth rollout flag", "DISTINCT"],
-  ["da", "what did we do about the token refresh bug", "DISTINCT"],
-  ["db", "the double-charged invoice fix", "DISTINCT"],
-  ["dc", "search relevance tuning work", "DISTINCT"],
-  ["oa", "how does the auth middleware get the user from the token", "OVERLAP"],
-  ["oa", "where did token validation move", "OVERLAP"],
-  ["ob", "what happens on an expired token in the middleware", "OVERLAP"],
-  ["ob", "the claims passthrough test", "OVERLAP"],
-];
+// shift real timestamps into a recent window preserving relative spacing (so ACT-R decay doesn't nuke
+// old sessions purely by absolute age — we want the *relative* recency of real history, near "now").
+function shiftTs(sessions, mode, currentId) {
+  const all = sessions.flatMap((s) => s.eps.map((e) => e.ts));
+  const max = Math.max(...all);
+  const out = {};
+  for (const s of sessions) {
+    out[s.id] = s.eps.map((e) => {
+      if (mode === "concurrent") {
+        // B: current + all foreign stamped co-recent (last 15 min, interleaved) — true concurrency
+        return NOW - (5 + Math.random() * 10) * MIN;
+      }
+      // A: preserve TRUE real spacing — newest ≈ now-5min, older sessions at their real age (days),
+      //    so ACT-R old-age decay applies realistically (the solo-sequential reality).
+      return NOW - 5 * MIN - (max - e.ts);
+    });
+  }
+  return out;
+}
 
-async function run(embeddings) {
-  const root = mkdtempSync(join(tmpdir(), "litectx-scope-poc-"));
+async function build(sessions, includeForeign, currentId, tsMap, embeddings) {
+  const root = mkdtempSync(join(tmpdir(), "litectx-scope-real-"));
   const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings });
-  try {
-    // interleave occurredAt across sessions: episode i happened i*2min ago (newest = last index),
-    // all within the last ~40min — the concurrent-runs reality, so recency can't stand in for session.
-    for (let i = 0; i < EPISODES.length; i++) {
-      const [session, text] = EPISODES[i];
-      await ctx.remember(`ep:${i}`, text, {
-        kind: "episode",
-        by: "agent",
-        occurredAt: NOW - (EPISODES.length - i) * 2 * MIN,
-        meta: { session },
+  for (const s of sessions) {
+    if (!includeForeign && s.id !== currentId) continue;
+    for (let i = 0; i < s.eps.length; i++) {
+      await ctx.remember(`${s.id}:${i}`, s.eps[i].text, {
+        kind: "episode", by: "agent", occurredAt: tsMap[s.id][i], meta: { session: s.id },
       });
     }
+  }
+  return { ctx, root };
+}
+async function recall(store, q) {
+  const hits = await store.ctx.recall(q, { kind: "episode", n: TOPK });
+  return hits.map((h) => ({ id: h.path, sess: h.meta?.session, score: +(h.score ?? 0).toFixed(2) }));
+}
+function close(store) { store.ctx.close(); rmSync(store.root, { recursive: true, force: true }); }
 
-    let bloatCount = 0; // queries where UNFILTERED top-K == SESSION top-K (column changes nothing)
-    let intrusionTotal = 0; // foreign-session hits appearing in unfiltered top-K, summed
-    let displaceCount = 0; // queries where a foreign hit pushed an own-session episode out of top-K
-    const perRegime = { DISTINCT: { n: 0, bloat: 0, intrusion: 0 }, OVERLAP: { n: 0, bloat: 0, intrusion: 0 } };
+async function runRegime(sessions, mode, embeddings) {
+  const currentId = sessions[0].id; // most recent of the test set = the "current run"
+  const tsMap = shiftTs(sessions, mode, currentId);
+  const all = await build(sessions, true, currentId, tsMap, embeddings);
+  const isoStore = await build(sessions, false, currentId, tsMap, embeddings);
 
-    console.log(`\n========== embeddings: ${embeddings ? "ON" : "OFF (BM25-only)"} ==========`);
-    for (const [home, q, regime] of QUERIES) {
-      const hits = await ctx.recall(q, { kind: "episode", n: TOPK });
-      const sessions = hits.map((h) => h.meta?.session ?? "?");
-      const topUnfiltered = sessions.slice(0, TOPK);
-      const ownInTop = topUnfiltered.filter((s) => s === home).length;
-      const foreignInTop = topUnfiltered.filter((s) => s !== home).length;
-
-      // SESSION-filtered top-K = the same ranked list, keep only home-session hits, take K
-      const sessionFiltered = sessions.filter((s) => s === home).slice(0, TOPK);
-      // total own-session episodes that exist (the ceiling the agent could see)
-      const ownTotal = EPISODES.filter(([s]) => s === home).length;
-
-      // "answer changes" if the agent's own-session view differs: did foreign hits occupy slots
-      // that own-session episodes would otherwise fill?
-      const ownAvailableButCrowdedOut = Math.min(ownTotal, TOPK) - ownInTop;
-      const changed = foreignInTop > 0 && ownAvailableButCrowdedOut > 0;
-
-      if (foreignInTop === 0) bloatCount++;
-      if (changed) displaceCount++;
-      intrusionTotal += foreignInTop;
-      perRegime[regime].n++;
-      if (foreignInTop === 0) perRegime[regime].bloat++;
-      perRegime[regime].intrusion += foreignInTop;
-
-      console.log(
-        `[${regime}] home=${home}  "${q}"\n` +
-          `   top-${TOPK} sessions: [${topUnfiltered.join(", ")}]  own=${ownInTop} foreign=${foreignInTop}` +
-          `  ${changed ? "← FOREIGN DISPLACED OWN" : foreignInTop ? "(foreign present, no own crowded out)" : "(clean — own only)"}`,
-      );
+  let scored = 0, displaced = 0, foreignTotal = 0, ownSurvivedTotal = 0, ownPossibleTotal = 0, rank1Foreign = 0;
+  const rows = [];
+  for (const q of TOPIC_QUERIES) {
+    const iso = await recall(isoStore, q);     // current-session-only (what the column gives)
+    if (iso.length === 0) continue;            // current session didn't work on this topic → skip (own-correct only)
+    const full = await recall(all, q);         // all sessions (today's behaviour)
+    scored++;
+    const foreignInFull = full.filter((h) => h.sess !== currentId).length;
+    const ownSurvived = iso.filter((h) => full.some((f) => f.id === h.id)).length;
+    const r1Foreign = full.length > 0 && full[0].sess !== currentId;
+    foreignTotal += foreignInFull;
+    ownSurvivedTotal += ownSurvived;
+    ownPossibleTotal += iso.length;
+    if (r1Foreign) rank1Foreign++;
+    if (foreignInFull > 0 && ownSurvived < iso.length) displaced++;
+    rows.push({ q: q.slice(0, 34), isoN: iso.length, foreign: foreignInFull, ownSurv: `${ownSurvived}/${iso.length}`, r1: r1Foreign ? full[0].sess : currentId });
+    if (DEBUG) {
+      console.log(`  Q "${q.slice(0, 40)}"`);
+      console.log(`     iso(${currentId}): ${iso.map((h) => h.id + ":" + h.score).join(", ")}`);
+      console.log(`     full:           ${full.map((h) => h.sess + ":" + h.score).join(", ")}`);
     }
+  }
+  close(all); close(isoStore);
+  return { mode, embeddings, currentId, scored, displaced, foreignTotal, ownSurvivedTotal, ownPossibleTotal, rank1Foreign, rows };
+}
 
-    const n = QUERIES.length;
-    console.log(`\n  -- aggregate (embeddings ${embeddings ? "ON" : "OFF"}) --`);
-    console.log(`  queries where column changes NOTHING (no foreign in top-${TOPK}): ${bloatCount}/${n}`);
-    console.log(`  queries where foreign episode DISPLACED an own-session one:        ${displaceCount}/${n}`);
-    console.log(`  total foreign intrusions across all top-${TOPK}s:                  ${intrusionTotal}`);
-    for (const [r, v] of Object.entries(perRegime)) {
-      console.log(`    ${r}: ${v.bloat}/${v.n} clean, ${v.intrusion} foreign intrusions`);
-    }
-    return { embeddings, bloatCount, displaceCount, intrusionTotal, perRegime, n };
-  } finally {
-    ctx.close();
-    rmSync(root, { recursive: true, force: true });
+// ── run ─────────────────────────────────────────────────────────────────────────────────────────
+const sessions = loadSessions();
+console.log(`Loaded ${sessions.length} real sessions: ${sessions.map((s) => `${s.id}(${s.eps.length})`).join(" ")}`);
+console.log(`Current ("asking") session = ${sessions[0].id} (most recent of the set)\n`);
+
+const results = [];
+for (const mode of ["real", "concurrent"]) {
+  for (const emb of [false, true]) {
+    const r = await runRegime(sessions, mode, emb);
+    results.push(r);
+    const ownHold = r.ownPossibleTotal ? (100 * r.ownSurvivedTotal / r.ownPossibleTotal).toFixed(0) : "—";
+    console.log(`\n===== regime=${mode.toUpperCase().padEnd(10)} embeddings=${emb ? "ON " : "OFF"} =====`);
+    if (DEBUG) for (const row of r.rows) console.log(`   ${row.q.padEnd(36)} foreign=${row.foreign} ownHeld=${row.ownSurv} rank1=${row.r1}`);
+    console.log(`   scored topics: ${r.scored}  · current session = ${r.currentId}`);
+    console.log(`   own-session top-${TOPK} HELD when foreign added: ${r.ownSurvivedTotal}/${r.ownPossibleTotal} (${ownHold}%)`);
+    console.log(`   foreign episodes intruding top-${TOPK} (summed): ${r.foreignTotal}`);
+    console.log(`   queries where rank-1 became a FOREIGN session: ${r.rank1Foreign}/${r.scored}`);
+    console.log(`   queries where foreign DISPLACED an own episode: ${r.displaced}/${r.scored}`);
   }
 }
 
-const off = await run(false);
-const on = await run(true);
-
 console.log(`\n================= VERDICT =================`);
-for (const r of [off, on]) {
-  const tag = r.embeddings ? "embeddings ON " : "embeddings OFF";
-  const od = r.perRegime.OVERLAP;
-  console.log(
-    `${tag}: DISTINCT ${r.perRegime.DISTINCT.bloat}/${r.perRegime.DISTINCT.n} clean · ` +
-      `OVERLAP ${od.bloat}/${od.n} clean (${od.intrusion} intrusions) · displaced ${r.displaceCount}/${r.n}`,
-  );
+for (const r of results) {
+  const hold = r.ownPossibleTotal ? (100 * r.ownSurvivedTotal / r.ownPossibleTotal).toFixed(0) : "—";
+  console.log(`${r.mode.padEnd(10)} emb=${r.embeddings ? "ON " : "OFF"}: own-held ${hold}%  · rank1-stolen ${r.rank1Foreign}/${r.scored}  · displaced ${r.displaced}/${r.scored}`);
 }
-const onOverlapDirty = on.perRegime.OVERLAP.n - on.perRegime.OVERLAP.bloat;
 console.log(
-  `\nRead: if DISTINCT is clean but OVERLAP intrudes/displaces, relevance isolates ONLY when\n` +
-    `topics differ — the concurrent same-topic case needs the session key (LOAD-BEARING).\n` +
-    `If OVERLAP is also clean, the column is BLOAT. (embeddings-ON OVERLAP dirty queries: ${onOverlapDirty}/${on.perRegime.OVERLAP.n})`,
+  `\nRead: REAL regime = litectx's solo sequential deployment (current session newest). If own-session\n` +
+  `top-${TOPK} HOLDS there (foreign sinks via recency), the column is REDUNDANT for solo use. CONCURRENT\n` +
+  `regime = the multi-agent stress (foreign co-recent). If own-held collapses there, the column is\n` +
+  `LOAD-BEARING only for true concurrency. If own-held stays high in BOTH → BLOAT. If it's low in\n` +
+  `REAL too → LOAD-BEARING everywhere.`,
 );

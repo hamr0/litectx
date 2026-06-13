@@ -734,47 +734,58 @@ explicit-query SELECT is worth building. That is the next POC, and its open meth
 how to label "needed a related file" mechanically (candidate: the agent's *own later Read* of a
 graph-adjacent file — future behavior as the label, gated by a real impact edge).
 
-## Isolate §4.5 gate #1 — is `session` load-bearing? (2026-06-13) — `scope-session-poc.mjs`
+## Isolate §4.5 gate #1 — is `session` load-bearing? (2026-06-13, REBUILT on real data) — `scope-session-poc.mjs`
 
-**Question (bare-suite-buildable-now.md §4.5.1):** the Isolate scope model wants a `session` column to
-isolate volatile `episode`/`stash` between concurrent runs. But litectx recall is **relevance-ranked**
-(BM25 + ACT-R activation + optional embeddings) — so maybe off-session episodes just **sink** on their
-own, and the column is **bloat**. Test it before writing the column (prove-don't-assert).
+**Question (§4.5.1):** the scope model wants a `session` column to isolate volatile `episode`/`stash`.
+litectx recall is relevance-ranked, so maybe off-session episodes just **sink** and the column is bloat.
 
-**Method.** The column doesn't exist yet, so simulate it: tag every episode `meta:{session}`, store all
-sessions in one `:memory:` db, recall a query issued "in" one home session, and inspect the top-5 the
-agent would act on — does it contain **foreign-session** episodes (intrusion), and do they **displace**
-own-session episodes that would otherwise fill those slots? 18 agent episodes across 5 sessions, two
-regimes: **DISTINCT** (`da` auth-rollout · `db` billing · `dc` search) and **OVERLAP** (`oa`+`ob` — two
-agents on the *same* auth-middleware refactor, near-identical wording = the "two reviewers of one
-checkout" case). `occurredAt` interleaved across sessions within the last ~40 min (concurrent-run
-reality — recency can't proxy for session). Run both BM25-only and embeddings-ON.
+> **First version was a rigged bench (corrected).** v1 used a corpus I authored to overlap (two sessions
+> on the *same* task, near-identical wording) — so the "intrusion" was a property of my authoring, not a
+> finding. Replaced with the real-data test below. (The lesson is [[prove-dont-assert]]; the rebuild is
+> the point of this entry.)
 
-**Result.** Foreign-session episodes appear in top-5 in **7/8 queries (BM25)** and **8/8 (embeddings)**,
-and **displace** an own-session episode in **7/8 (BM25) / 6/8 (embeddings)**:
-- **OVERLAP: 0/4 clean** under both rankers — when two sessions do the same task, ranking *cannot*
-  separate them; the other agent's trajectory is mixed into yours on every query.
-- **DISTINCT: mostly dirty too** (BM25 1/4 clean, embeddings 0/4) — but for a more interesting reason:
-  sessions that merely **share a vocabulary domain** bleed. `da` (auth *rollout*) pulled in `oa`/`ob`
-  (auth *middleware*) episodes because both speak "auth/token". Only `dc` (search — genuinely
-  orthogonal) stayed clean under BM25 (3 own, 0 foreign). Embeddings widened the bleed (semantic
-  neighbours of *any* topic surface), though for the low-volume own-sets (`db`/`dc`) it surfaced **all**
-  own episodes and foreign ones merely rode the spare slots (present, not displacing).
+**Method (real, uncrafted).** Episodes are real user turns extracted from this repo's actual Claude Code
+transcripts (`~/.claude/projects/<repo>/*.jsonl`) — **12 real multi-turn work sessions**, 06-05..06-13,
+all on litectx (so naturally high vocabulary overlap), each with its own real sub-topics and real
+timestamps. (POC-spawned 1-turn transcripts and the live session are filtered out.) The literal §4.5.1
+test: recall a topic query over **only the current session's episodes** vs over **all sessions'**, and
+ask whether the current session's top-5 *changes*. Current session = the most recent of the set (the
+"asking run"); queries are drawn from the current session's **own** topics, so own-session is the correct
+answer by construction **and the test is conservative** (biased toward the current session holding).
+Two timing regimes: **REAL** (true spacing — current newest, older sessions at real 1–8-day age, so
+ACT-R decay applies as in solo use) and **CONCURRENT** (current + foreign stamped co-recent).
 
-**Verdict: `session` is LOAD-BEARING — build the `owner`+`session` model (§4.4) when the slice comes.**
-Off-session episodes do **not** reliably sink: relevance isolates only *genuinely orthogonal* topics,
-and you can't assume orthogonality (the scope model's own "never predict will-it-diverge" rule). The
-volatile-isolation guarantee the model wants — a concurrent run not seeing another run's episodes — is a
-**correctness property ranking does not provide**. The column earns its place.
+**Result.** The current run's episodes are **buried by more-relevant older sessions** — on real data:
 
-**Honest limits.** (a) Synthetic 18-episode corpus — the *rates* (7/8, 8/8) are directional, not
-precise; the *mechanism* (content-similar episodes from other sessions rank together) is robust and the
-orthogonal-`dc` control demonstrates it cleanly. (b) "Intrusion" ≠ proven "harm": a related session's
-episode can sometimes *help*. The load-bearing claim rests on the **isolation guarantee** for volatile
-concurrent runs, not on a measured task-success drop. (c) Methodology bug found + fixed mid-run
-(prove-don't-assert): a fixed 2023 `BASE` timestamp put episodes ~2.5 yr in the past, so ACT-R decay
-zeroed all activation and recall returned ~nothing — the first "everything sinks" read was an artifact;
-real recent `occurredAt` (via `Date.now()`) gives the result above.
+| regime | ranker | own top-5 held | rank-1 stolen by foreign | foreign displaced own |
+|---|---|---|---|---|
+| REAL | BM25 | 38% (5/13) | **5/6** | 4/6 |
+| REAL | embeddings | 8% (4/50) | **9/10** | 10/10 |
+| CONCURRENT | BM25 | 38% | 5/6 | 4/6 |
+| CONCURRENT | embeddings | 8% | 9/10 | 10/10 |
+
+**REAL ≡ CONCURRENT — identical.** That is the key finding: **recency is not a ranking term.** A direct
+check confirms it — two *identical-text* episodes aged **8 days vs 1 minute** score **identically (5.615)**;
+decay only *gates* very-old entries out, it doesn't fine-rank within the live window (consistent with the
+slice-4 result that activation ships at zero for recall). So the current run gets **no recency advantage**:
+older sessions that worked a topic *more* are simply more relevant and outrank it (e.g. "prd update
+validate" → an older session scores 10.08 vs the current session's best 2.91).
+
+**Verdict: `session` is LOAD-BEARING for own-run episode retrieval — and even in SOLO use, not just
+concurrency.** This *corrects my earlier guess* that recency would protect the solo case: it doesn't,
+because recency isn't a ranking factor at all. Relevance is session-blind; nothing else isolates; only an
+explicit `session` filter can keep a run's volatile context from being buried by history → **build the
+`session` scope for `episode`/`stash`** (§4.4).
+
+**Honest scope of the claim (the residual assumption, stated not buried).** The POC proves *ranking is
+session-blind and buries the current run's episodes* — a fact. Whether that's a **problem** rests on one
+premise: that an agent retrieving episodes wants **its own run's** volatile context (self-reflection:
+"what have *I* tried"). For **knowledge** retrieval ("what's the best answer about X") cross-session
+ranking is a *feature*, and isolation would hurt — which is exactly why the scope model scopes
+`episode`/`stash` to `session` but `fact` to `owner`/global. So this validates the model's *split*, not
+session-scoping everything. A retrieval POC can't settle the premise that volatile self-reflection is a
+real need; that's the scope model's design axiom. Other limits: n is modest (12 sessions, 6–10 scored
+topics); episodes = user turns (a real but partial slice of a trajectory).
 
 ## Isolate §4.5 gate #2 — does down-tiering the MIDDLE preserve task success? (2026-06-13) — `compress-middle-poc.mjs`
 
