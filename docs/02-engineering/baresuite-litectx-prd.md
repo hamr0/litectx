@@ -136,33 +136,37 @@ These pass the §8.1 discriminator: **no consumer ambiguity.** Ranked by readine
   adapter is the glue, but it earns its keep only once a bareagent flow consumes it. Cheap and
   low-risk either way (contract frozen, blast radius zero).
 
-### ② bareguard write-gate seam (CE-PRD §10.1)
-- **What:** litectx emits a gate-able action `{type:"memory.write"|"memory.inject", kind, provenance,
-  text}` and exposes a minimal optional **write-gate hook** so the action is checkable standalone;
-  inside baresuite, bareguard *is* the gate (zero bareguard change).
-- **Why buildable now:** the gate contract is **frozen sibling code** — `Gate#check(action) →
-  {outcome, severity, rule, reason}` at `../bareguard/src/gate.js:220`, with the 6-step floor-supremacy
-  eval order at `gate.js` (denies/asks before allowlist). litectx copies/adapts that contract; the only
-  net-new thing is the *action shape* litectx emits, which is litectx's own to define.
-- **Scope discipline (the §6/§7 line):** litectx carries the **provenance label** (R-G3) and reduces any
-  content verdict to a **shape flag** (`provenance:"untrusted"`, `injectionRisk:"high"`); bareguard
-  gates by shape. litectx must **not** push content judgment into bareguard.
+### ② bareguard write-gate seam (CE-PRD §10.1) — **the one net-new bareguard primitive (see §5B)**
+- **What:** litectx emits gate-able actions `{type:"memory.write"|"memory.inject", kind, provenance,
+  text, …}` and exposes a minimal optional **write-gate hook** so the action is checkable standalone;
+  inside baresuite, bareguard *is* the gate.
+- **Zero-change covers the SHAPE half only.** bareguard's 6-step floor (`gate.js:140-176`) is
+  **type-generic** — a `{type:"memory.write"}` already routes through denylist → content → allowlist
+  with no new code (proven in `bareguard/test/seam-contract.test.js`). The earlier "recognize the two
+  action types" framing is **retired** (§5B): no type recognition is owed.
+- **The one real ask — a structured shape-flag gate.** The §6 line says "bareguard gates the flag by
+  shape," but bareguard can only read `action.type` (allowlist) or `JSON.stringify(action)` (content
+  regex) — it has **no path that reads a structured field**. So litectx needs a small generic `flags`
+  primitive that gates on a named field's value (`provenance`, `injectionRisk`) **before the allowlist**
+  (floor supremacy). Full spec, action-field contract, and seam-test swap in **§5B**.
+- **Scope discipline (the §6/§7 line):** litectx carries the **source** label (R-G3, e.g.
+  `provenance:"web"`) — *not* a trust verdict; the `flags` policy decides which sources escalate.
+  litectx must **not** push content judgment into bareguard.
 - **Pairs with:** a small own audit-log + `redact` (adapt from `bareguard/primitives/audit.js`,
   `secrets.js`) — the inject paper-trail. Build only the standalone hook now; reuse bareguard's audit
   when embedded.
 
-### ③ `getNode(id)` / `related(id, {edge, hops})` — the promised graph substrate (R-G1/R-G2)
-- **What:** the typed node + edge accessors. CE-PRD §1.1 and memory-PRD §3 both list these as
-  first-class public API ("the graph is the product"); they are **genuinely absent** from the facade
-  today (verified: only doc-comment mentions in `impact.js`/`tsalias.js`).
-- **Why buildable now:** shape is **self-evident from the existing data model** and falsifiable on
-  litectx's own data — no consumer needed. The store already holds typed nodes and `imports` edges
-  (1-hop spreading already traverses them internally in `recall`); `related` is exposing that traversal,
-  `getNode` is a row fetch by id. This is the cleanest factory-independent build — closer in spirit to
-  Tier-A than Tier-B.
-- **Net-new sliver to scope:** R-G2 also reserves non-code edge types (`supersedes`/`derived_from`/
-  `references`/`belongs_to`). Ship `getNode`/`related` over the **existing** `imports`/`calls` edges
-  first; add new edge types only when a primitive needs them (none does yet).
+### ③ `getNode(id)` / `related(id, {edge, dir, hops})` — the graph substrate ✅ **SHIPPED 2026-06-12**
+- **Status:** **BUILT** (`src/index.js:440` `getNode`, `:454` `related`; `src/store.js:831/867`;
+  `test/graph.test.js`). `getNode` = kind-agnostic structure (chunks + exact import-edge counts; written
+  memory = zero-chunk/zero-edge node); `related` = BFS over persisted `import` edges (`dir` out/in/both,
+  hops capped at 3). Seam invariant held: `getNode.edges.imports === related(out,1).length`. *(This
+  section formerly read "genuinely absent" — that predated the graph-substrate build; corrected
+  2026-06-13.)*
+- **Net-new sliver still open:** R-G2 reserves non-code edge types (`supersedes`/`derived_from`/
+  `references`/`belongs_to`). `related`'s `edge` is already a generic type so they slot in with **no
+  migration once a producer emits them** — but **no producer exists yet** (building them now would be
+  speculative). Calls stay `impact()`'s job (over-counts by design — off the exact graph).
 
 ### ④ `scope` / namespacing (R-I1) — buildable, but flagged *invasive, not cheap*
 - **What:** a scope key (agent/session/user) + a filter on every op so contexts don't bleed; the
@@ -180,16 +184,23 @@ These pass the §8.1 discriminator: **no consumer ambiguity.** Ranked by readine
 ## 3. Recommendation
 
 **Honest bottom line:** there is no large backlog of buildable-now litectx work — the §8.1 doctrine
-already pushed the bulk (assemble, session/state, clear/trim) behind the adopter on purpose, and that
-call holds. The genuinely buildable-now residue is **integration glue + the promised substrate**:
+already pushed the bulk (session/state, clear/trim) behind the adopter on purpose, and that call holds.
+The factory-independent residue is now **almost entirely shipped** (status 2026-06-13):
 
-1. **`getNode`/`related` (③)** — build first. Zero consumer ambiguity, completes the public graph
-   substrate the PRDs promised, validatable on litectx's own data today.
-2. **bareagent `Store` adapter (①)** — build when a bareagent flow is ready to mount it (contract is
-   frozen, so it's ready whenever you are; just confirm a live consumer so it's glue, not shelfware).
-3. **bareguard write-gate seam (②)** — build alongside ① if/when memory-write gating is on the table;
-   contract frozen, scope-disciplined (label + shape-flag only, never content judgment in bareguard).
-4. **`scope` (④)** — only when a multi-tenant / sub-agent consumer needs it; invasive, measure it.
+1. ~~**`getNode`/`related` (③)**~~ ✅ **SHIPPED 2026-06-12** — public graph substrate complete.
+2. **bareagent `Store` adapter (①)** ✅ **SHIPPED + MOUNTED** — `liteCtxAsStore` (litectx) + bareagent
+   RT-3 consumer (v0.13.0). No longer pending.
+3. **`assemble()` (R-G6)** ✅ **SHIPPED** — FIT (v0.11.0) + **COMPRESS tier (Build B, 2026-06-13)**;
+   SELECT killed. bareagent RT-1 adapter consumes it (awaits → async-compatible).
+4. **bareguard write-gate seam (②)** — the **one factory-independent piece still unbuilt**: litectx's
+   write-gate **emitter** (emits `{type:"memory.write"|"memory.inject",…}`). bareguard's `flags`
+   field-gate is built (§5B); the seam is **producer-less** until this ships. **Demand-gated** — no
+   consumer emits gate actions yet, so building it now lights up a seam nobody drives.
+5. **`scope` (④)** — `owner`/`session` predicate ✅ **SHIPPED** (R-I1, §4.4); harness threading deferred.
+
+So the litectx critical path is no longer this seam list (mostly done) — it's the **Tier-B adopter-pulled
+set** (session/state, clear/trim, summaryWindow, selectTools), each blocked on bareagent answering its
+shape question (§5C), plus the demand-gated write-gate emitter (item 4).
 
 Everything else is `assemble()`-class: **defer until bareagent pins the shape.** When bareagent exists,
 the first question for each deferred item stays *"does `forget`/`evict`/`remember`/`recall` already
@@ -348,25 +359,80 @@ sibling sub-agents don't bleed context. bareagent keeps fork + lifecycle; litect
 context boundary. (The Isolate scope model is **built** — `owner`/`session`, §4.4.7; `worktree`/`branch`
 keys + the db-at-repo-identity path stay the harness's job.)
 
-### 5B. bareguard — gate the memory write (buildable now; net-new action types)
+### 5B. bareguard — gate the memory write/inject by **structured shape flag** (2026-06-13 regrounding)
 
-litectx emits a gate-able action when memory is written or injected:
-`{ type: "memory.write" | "memory.inject", kind, provenance, text }`. **bareguard does not recognize
-these types yet** (confirmed: no `memory.write`/`injectionRisk` references in `bareguard/src`). The ask:
+> **Correction to the prior framing.** This section used to read *"bareguard does not recognize these
+> types yet → recognize + gate the two action types … by `denyArgPatterns`/content regex."* Both halves
+> are **retired**, source-grounded against `bareguard/src/gate.js` + `test/seam-contract.test.js`:
+> (a) bareguard's 6-step floor is **type-generic** — a `{type:"memory.write"}` already routes through
+> denylist → content → allowlist with **zero new code** (the seam test proves it), so no type
+> *recognition* is owed; (b) "content regex over `provenance`/`injectionRisk`" is the **wrong
+> mechanism** — it forces litectx to serialize its verdict into matchable text, violating the §8.2
+> boundary (litectx never encodes a verdict as the consumer's grammar). The corrected ask is below.
 
-- **Recognize + gate** the two action types in `Gate#check(action)` (`bareguard/src/gate.js:220` →
-  `{outcome, severity, rule, reason}`), by **shape** — `denyArgPatterns` / content regex over
-  `provenance`, `injectionRisk`, `text`.
-- **Preserve floor supremacy.** Your fixed 6-step eval order (`gate.js` — denies/asks *before* the
-  allowlist) already gives the invariant *"a memory write may never relax the floor"*. Keep that ordering
-  when you add the new types — don't special-case memory above the floor.
-- **Audit stays yours.** Every check/record emits a JSONL line via `primitives/audit.js`. litectx reuses
-  *your* audit when embedded; it only ships its own when standalone.
+**The real gap.** The §6 line says litectx reduces a content verdict to a **shape flag** and
+*"bareguard gates that flag by shape."* But bareguard has **no path that reads a structured field** — it
+gates on `action.type` (allowlist, `tools.js:61`) or on `JSON.stringify(action)` via regex
+(`content.js:38`). So today the flag half of the seam is **asserted, not implemented** (the seam test
+only exercises allowlist + content-text).
 
-**The §6 line — do NOT take this on:** the **content verdict** (is this fact a prompt-injection? does it
-semantically conflict with the floor?) is litectx's job (or an opt-in guardrails tier), reduced to a
-**shape flag** on the action (`provenance:"untrusted"`, `injectionRisk:"high"`). bareguard gates the
-*flag by shape*; it never renders the content judgment. Fixed (CE-PRD §10.1).
+**The one ask — a structured field-value gate primitive.** Mirror `primitives/content.js`'s two-function
+shape; read **named fields** off the action:
+
+```js
+flags: {
+  provenance:    { web: "ask", subagent: "ask" },   // field → { value → outcome }
+  injectionRisk: { high: "deny", medium: "ask" },
+}
+```
+- Reads `action[field]` **directly** (never `JSON.stringify`) — lets litectx pass a structured verdict, not text.
+- Outcome ∈ `deny` | `ask` only (a flag restricts, never grants; `allow` stays the default fall-through).
+- **Floor supremacy preserved:** deny-arm co-located with step 2 (content-deny), ask-arm with step 4
+  (content-ask) — **both before the allowlist (step 5)**, so a flagged inject is blocked *even if
+  `memory.inject` is allowlisted*. That *is* "a memory may never relax the floor."
+- Audit `rule = flags.<field>` (e.g. `flags.injectionRisk`), not a misleading `content.denyPatterns`.
+- Absent/unconfigured field = no-op (like `net`/`bash` on a non-matching `type`).
+~25–30 lines + one `types.js` config type + two wire-points in `_stepEval`. Generic — **not**
+memory-specific, **no** `memory.*` type recognition.
+
+**The action shapes litectx emits** (Build B / SELECT mints `memory.inject`; the write path mints `memory.write`):
+```js
+{ type:"memory.write",  kind, provenance, text, id, meta? }
+{ type:"memory.inject", kind, provenance, text, sourceId, injectionRisk? }
+```
+| field | enum | set by |
+|---|---|---|
+| `kind` | `code \| doc \| fact \| episode` | litectx |
+| `provenance` | `human \| agent \| doc \| subagent \| web` — the **source** (extends today's `human\|agent`, `index.js:103`) | litectx |
+| `text` | content (`recall({body:true})`) | litectx |
+| `id` / `sourceId` | node id (audit / restore handle) | litectx |
+| `injectionRisk` | **optional** `low \| medium \| high`; absent unless a guardrails tier set it | guardrails tier (not litectx core); litectx passes through |
+
+**Refinement to the §10.1 example, on purpose.** §10.1 shows `provenance:"untrusted"`. litectx will
+**not** emit `"untrusted"` — that's a *trust verdict*, and which sources are untrusted is **policy**, not
+litectx's content job. litectx emits the **source** (`provenance:"web"`); the `flags` config maps
+source→outcome. This is *more* faithful to §6 than the PRD's own wording: litectx states the source,
+bareguard's policy renders the verdict.
+
+**Swap the seam test onto the real shape.** Replace `seam-contract.test.js:30`'s synthetic
+`memoryWrite()` with litectx's real emitter and add the flag-path rows the current test can't express:
+`provenance:"web"` + `flags:{provenance:{web:"ask"}}` → **ask**, `rule:"flags.provenance"`;
+`injectionRisk:"high"` + `flags:{injectionRisk:{high:"deny"}}` → **deny even when allowlisted**
+(floor-supremacy proof). The existing secret/text rows stay green untouched.
+
+**Preserve floor supremacy & keep audit yours** — unchanged: the 6-step eval order holds; every
+check/record still emits a JSONL line via `primitives/audit.js`; litectx reuses *your* audit when
+embedded, ships its own only when standalone.
+
+**The §6 line — do NOT take this on:** the **content verdict** (is this a prompt-injection? does it
+semantically conflict with the floor?) stays litectx's job (or an opt-in guardrails tier). bareguard
+only *reads* the flag; it never scans inject `text` and never renders the content judgment. Fixed
+(CE-PRD §10.1).
+
+**Dependency direction (neither side blocks).** Build B (`assemble` SELECT/COMPRESS) **ships standalone,
+no bareguard change** — the gate is compose-time inside baresuite. The `flags` primitive + swapped seam
+test land on bareguard's timeline; when both are in, the seam test flips from synthetic to real and
+either stays green (coverage confirmed) or fails at the exact `rule` line.
 
 ### 5C. bareagent — *pull* the deferred primitives (specify so litectx can build)
 
@@ -411,8 +477,9 @@ Ceded to you/the harness by design (CE-PRD §7, §10). Build them on your side; 
 1. **Read** CE-PRD §10 (the full lift, file:line into your repos) + §8.1 (why Tier-B waits on you).
 2. **bareagent:** scaffold `store-litectx.js` against `{store,search,get,delete}` (5A-a); the
    assemble→run→persist seam (5A-b) is live now that RT-1 FIT shipped.
-3. **bareguard:** add `memory.write` / `memory.inject` recognition to `Gate#check`, gated by shape,
-   floor-supremacy preserved (5B).
+3. **bareguard:** add the generic **`flags` field-value gate** to `_stepEval` (reads `provenance` /
+   `injectionRisk` off the action, deny/ask **before** the allowlist) + swap `seam-contract.test.js`
+   onto litectx's real emitter. **Not** `memory.*` type recognition — the floor is already type-generic (5B).
 4. **bareagent (design, not code):** answer the `session` / `clear` / `selectTools` questions (5C) and
    send them back — that unblocks litectx's remaining Tier-B build.
 5. **Coordinate the adapter seam** so the Store shim isn't built on both sides.

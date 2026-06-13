@@ -6,7 +6,30 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **`assemble()` COMPRESS budget tier (Build B).** When the budget-fit would drop a parseable code/doc
+  unit, it is now recovered as its `compress()` **signature** (header + doc, body elided) before being
+  evicted — marked `compressed: true` on the kept unit, full body still recoverable by id like a drop.
+  The tier is **rank/recency-driven** (reuses FIT's existing order; *not* a positional middle rule —
+  lost-in-the-middle was refuted at realistic scale) and fires only when the signature both **saves**
+  bytes and **fits** the remaining budget. Grounded in two POCs: `poc/compress-middle-poc.mjs` (the
+  rendering decision — signature 6/6 vs drop 0/6 for structural content, 0 hallucination) and
+  **`poc/assemble-compress-seam-poc.mjs` — the integration, on REAL functions through the SHIPPED verb
+  with a live model**: seam mechanic 8/8, **PARAMS retrieval signature 8/8 vs drop 0/8** (the signature
+  preserves the API that eviction loses, even for doc-less bare-header functions), mean real byte saving
+  **81%** (51–97%).
+- SELECT (recall-inject) is **deliberately not** part of `assemble()` — auto-SELECT on in-window signal
+  was POC-killed (`assemble-select-poc.mjs`); the path-fetch case is served by `get`/`impact` and the
+  never-read mode needs its own POC. `ctx.task` stays reserved.
+
 ### Changed
+- **`assemble()` is now `async`** (returns `Promise<AssembleResult>`). The only await is `compress()`,
+  a pure tree-sitter render — the verb stays deterministic and cache-stable. **Signature change, but
+  compatible with the one live consumer:** bareagent's adapter already `await`s the assembler
+  (`bareagent/src/context-units.js:217`, typed `(units, ctx) => any | Promise<any>`), so awaiting a now-
+  async return is transparent. Consumers pinning `litectx ^0.11.0` (bareagent does) need a minor-version
+  bump to receive COMPRESS — additive, no code change. The FIT path is byte-identical post-change
+  (verified 19% @25% / 3.8% @50% on 1059 real deps, `poc/assemble-verify-shipped.mjs`).
 - **Docs consolidation (repo-only — no package, API, or behavior change).** The `docs/` set was merged
   into fewer canonical homes, with every inbound reference repointed and **zero dangling links** (incl.
   the cross-repo bareagent PRD citation):

@@ -837,3 +837,44 @@ absent (it can appear with multi-fact aggregation, weaker models, or 100k+ token
 *for litectx's target model and the single-fact retrieval that a budget tier serves, position doesn't
 penalize the middle, so a positional rule is unjustified.* (c) Two construction confounds found + fixed
 mid-run (needle/question service mismatch; injection-triggering markers) — numbers above are post-fix.
+
+## COMPRESS tier — SEAM validation on REAL functions (2026-06-13) — `assemble-compress-seam-poc.mjs`
+
+**Why (gap closed).** `compress-middle-poc` validated the *rendering decision* (signature ≫ drop) on a
+crafted handler corpus. It did **not** validate the **integration**: when the SHIPPED `assemble()` is
+the thing choosing the tier, on REAL code, does it (a) emit the right tier at a real budget, and (b)
+recover an answer that drop loses? The Build-B COMPRESS tier had shipped fixture-tested only — this is
+the missing real-data, model-in-loop seam test.
+
+**Method.** 8 real production functions (≥2 params, extracted from `litectx/src` + `bareguard/src` — code
+not authored for this test) are each fed through the **exported `assemble()`** at three budgets, and the
+emitted view (the tier the verb actually chose, ASSERTED) becomes a `claude -p --tools "" ` (sonnet)
+context. Metric = **PARAMS retrieval**: "list the parameters of `<name>`" — RETRIEVED iff every real param
+name appears in the answer (signature keeps the header → should retrieve; drop reduces to `name …` → should
+lose). Mechanical, can-fail.
+
+**Result.**
+- **Seam mechanic holds 8/8** — at the verbatim budget `assemble` keeps the unit whole; at the signature
+  budget it emits `compressed:true` (the `compress()` signature); at the tight budget it drops it.
+- **PARAMS: verbatim 8/8 · signature 8/8 · drop 0/8.** Signature preserves the API the model needs;
+  **drop destroys it.** Holds even for the **5/8 doc-LESS** functions whose signature is a bare
+  `function foo(a, b)` header — the model reads params off the bare header as well as off the full body.
+- **Real byte saving 51–97%, mean 81%** (doc-less → near-bare header, 90%+; doc'd → 51–67%). *Higher*
+  than `compress-middle`'s 24% because that corpus was doc-heavy (the doc is kept, so less is shed).
+
+**Verdict: PASS — the COMPRESS tier earns its place at the seam on real data.** Down-tiering a would-be-
+dropped code unit to its signature preserves its API shape (params + purpose) that eviction loses, and the
+SHIPPED verb selects the tier correctly at real budgets.
+
+**Honest process note (prove-don't-assert — a bug caught, not glossed).** The **first run scored 6/8
+signature**, with the two failures being the *most-compressed* cases. Inspecting one (not assuming) showed
+the model had been handed the **wrong function's signature**: a lazy-regex extractor (`/** … */ [\s\S]*?
+function NAME`) captured **multi-definition spans**, so `signatureOf` described the *first* def in the blob,
+not the target — and that also inflated the "saving" (the discarded v1 reported 57%/94% off these blobs).
+Fixed by anchoring extraction on the declaration + grabbing only an immediately-adjacent doc + a
+one-`function`-per-unit guard; re-verified every signature names its own function; **re-ran → 8/8.** The
+too-good saving number is what triggered the recheck. **Limits:** (a) n=8, JS only, 2 repos; (b) PARAMS is
+an easy metric (string-present) — but that is exactly what the budget tier sells (keep the API cheaply),
+and `drop 0/8` proves eviction loses it; (c) the **body-detail limit** (signature elides bodies) is *not*
+re-measured here — a first body-needle mis-scored (ambiguous "the string literal", verbatim 0/8) and was
+dropped; `compress-middle`'s body-needle (signature 0/2 = drop) already establishes it cleanly.

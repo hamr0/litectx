@@ -14,12 +14,19 @@
 // the consumer's canonical transcript (the invariant bareagent guarantees): a dropped re-read becomes an
 // explicit agent re-read, not lost data.
 //
-// SCOPE (v1 = the gated core). This ships **FIT only**. SELECT (recall-inject of new graph context) and
-// COMPRESS (signature-tier large units) are the next slice and ride together: COMPRESS needs a parseable
-// `format`, which pass-through transcript units don't carry — only recall-injected units do. So there is
-// nothing to compress until SELECT injects it. FIT is what the budget-fit POC gated; it builds alone.
+// SCOPE. Ships **FIT + the COMPRESS budget tier**. **SELECT (recall-inject) is deliberately NOT here** —
+// auto-SELECT on in-window signal was POC-killed (`assemble-select-poc.mjs`: chunk-level re-supply ~0
+// outside one repo); "re-supply the file I'm editing" is a direct `get`/`impact` path-fetch, and the
+// never-read related-file mode needs an explicit agent query + its own POC. So `ctx.task` stays reserved.
+// The caller injects code/doc units explicitly (its own `recall`/`get`); assemble's job is to FIT them
+// and, when budget is tight, **down-tier the would-be-dropped ones to their SIGNATURE before evicting**
+// (`compress-middle-poc`: signature ≫ drop for structural content, ~24% bytes, 0 hallucination; NOT a
+// positional rule — lost-in-the-middle refuted at scale, so the tier is rank/recency-driven, reusing FIT).
 //
-// Pure function — no DB, no model, no `Date`/random → deterministic & cache-stable by construction.
+// Async + deterministic: the only await is `compress()` (a pure tree-sitter render — no DB/model/Date/
+// random), so the fitted view stays cache-stable & reproducible by construction.
+
+import { compress } from "./compress.js";
 
 /**
  * @typedef {Object} Unit
@@ -29,9 +36,14 @@
  * @property {string} content         the unit's text
  * @property {string|null} [kind]     litectx node kind ("code"|"doc"|"fact"|"episode") for injected units;
  *                                     null for pass-through transcript turns (role and kind are orthogonal)
+ * @property {string} [format]        "js"|"ts"|"py"|… — the parseable language of an injected code/doc node;
+ *                                     enables the COMPRESS signature tier (absent on transcript turns)
+ * @property {string} [symbol]        the node's symbol name (used for the compressed marker when present)
  * @property {boolean} [pinned]       never dropped or reordered; budget is computed over the un-pinned rest
  * @property {string|null} [atomic]   group id — units sharing one are kept-or-dropped together, never split
  * @property {number} [tokensApprox]  approximate token cost (the consumer's estimate; we fall back to chars/4)
+ * @property {boolean} [compressed]   set by assemble on a unit down-tiered to its signature to fit budget
+ *                                     (its `content` is the signature; full body recoverable by id, like a drop)
  */
 
 /**
@@ -56,12 +68,13 @@ const tokOf = (u) => {
 };
 
 /**
- * Fit `units` to `ctx.budget`, recency-anchored, preserving `pinned`/`atomic` invariants.
+ * Fit `units` to `ctx.budget`, recency-anchored, preserving `pinned`/`atomic` invariants; a would-be-
+ * dropped code/doc unit is recovered as its `compress()` signature before being evicted (COMPRESS tier).
  * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
  * @param {AssembleCtx} [ctx]
- * @returns {AssembleResult}
+ * @returns {Promise<AssembleResult>}
  */
-export function assemble(units, ctx = {}) {
+export async function assemble(units, ctx = {}) {
   if (!Array.isArray(units)) throw new TypeError("assemble: units must be an array");
   const budget = Number.isFinite(ctx?.budget) ? /** @type {number} */ (ctx.budget) : Infinity;
 
@@ -101,12 +114,36 @@ export function assemble(units, ctx = {}) {
     if (it.forced || used + it.tokens <= budget) { for (const id of it.ids) keep.add(id); used += it.tokens; }
   }
 
+  // COMPRESS budget tier (the rescue pass): a unit FIT would DROP, if it's a parseable code/doc node, is
+  // recovered as its compress() SIGNATURE instead of evicted — header+doc kept, body elided. Strictly
+  // dominates drop for structural content (compress-middle-poc: signature 6/6 vs drop 0/6, 0 hallucination,
+  // ~24% bytes). Reuses FIT's recency order (newest stay verbatim; older code nodes demote before
+  // vanishing) — NOT positional (lost-in-the-middle refuted at scale). Skips pinned/atomic/transcript
+  // units: no parseable `format` → nothing to extract (compress would verbatim-fall-back to no saving).
+  /** @type {Map<string, {content:string, tokens:number}>} */ const rescued = new Map();
+  const candidates = units
+    .map((u, i) => ({ u, i }))
+    .filter(({ u }) => u && !keep.has(u.id) && !u.pinned && !u.atomic
+      && (u.kind === "code" || u.kind === "doc") && u.format && u.content)
+    .sort((a, b) => b.i - a.i); // newest-first — same priority the fit uses
+  for (const { u } of candidates) {
+    const sig = await compress({ text: u.content, format: u.format, symbol: u.symbol }, { level: "signature" });
+    const sigTok = Math.ceil(sig.length / 4);
+    if (sigTok < tokOf(u) && used + sigTok <= budget) { // only when the signature both SAVES and FITS
+      rescued.set(u.id, { content: sig, tokens: sigTok });
+      keep.add(u.id);
+      used += sigTok;
+    }
+  }
+
   // Emit in ORIGINAL order (cache-stable); account for every non-kept unit in `dropped` (no silent loss).
   /** @type {Unit[]} */ const kept = [];
   /** @type {{id:string, reason:"budget"}[]} */ const dropped = [];
   let tokens = 0;
   for (const u of units) {
-    if (keep.has(u.id)) { kept.push(u); tokens += tokOf(u); }
+    const r = rescued.get(u.id);
+    if (r) { kept.push({ ...u, content: r.content, tokensApprox: r.tokens, compressed: true }); tokens += r.tokens; }
+    else if (keep.has(u.id)) { kept.push(u); tokens += tokOf(u); }
     else dropped.push({ id: u.id, reason: "budget" });
   }
   return { units: kept, dropped, tokens };

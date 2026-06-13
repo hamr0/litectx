@@ -87,13 +87,13 @@ function pick(maxN) {
 }
 
 // ── replay through the SHIPPED assemble() ────────────────────────────────────────────────────────
-function violations(units, deps, frac) {
+async function violations(units, deps, frac) {
   const full = units.reduce((a, u) => a + u.tokensApprox, 0);
   const budget = Math.round(full * frac);
   let viol = 0;
   for (const d of deps) {
     const prefix = units.filter((u) => u.seq < d.consumerSeq);
-    const { units: kept } = assemble(prefix, { budget });   // ← the exported verb, not a POC copy
+    const { units: kept } = await assemble(prefix, { budget });   // ← the exported verb, not a POC copy
     if (!kept.some((u) => u.id === d.neededId)) viol++;
   }
   return { viol, deps: deps.length };
@@ -106,7 +106,7 @@ console.log(`${"transcript".padEnd(12)} ${"deps".padStart(5)}   ${"@25%".padStar
 const agg = { 0.25: { v: 0, d: 0 }, 0.5: { v: 0, d: 0 } };
 for (const { proj, units, deps } of picks) {
   const row = [proj.replace("-home-hamr-PycharmProjects-", "").padEnd(12), String(deps.length).padStart(5)];
-  for (const f of FRACS) { const r = violations(units, deps, f); agg[f].v += r.viol; agg[f].d += r.deps; row.push(`${(r.viol / r.deps * 100).toFixed(0)}%`.padStart(6)); }
+  for (const f of FRACS) { const r = await violations(units, deps, f); agg[f].v += r.viol; agg[f].d += r.deps; row.push(`${(r.viol / r.deps * 100).toFixed(0)}%`.padStart(6)); }
   console.log(`${row[0]} ${row[1]}   ${row[2]}  ${row[3]}`);
 }
 console.log(`\nAggregate (SHIPPED verb):`);

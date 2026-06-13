@@ -78,7 +78,7 @@ to requirement, unified with the existing code+context graph (`litectx-memory-pr
 | **R-G3 Provenance** | every node knows its source (tool · doc · sub-agent · session) + a trust label | `node.source`, `node.trust?` | 🟢 / ⊘ content-verdict | label = litectx; shape-gate = **bareguard** (§10.1) | new |
 | **R-G4 Salience** | relevance-to-intent score driving assembly (ACT-R activation generalized beyond code) | internal; surfaced in `recall().signals` | 🟢 | ledger §2–6 (ACT-R) | generalize activation to all kinds |
 | **R-G5 Freshness / supersession** | recency + "v2 replaces v1" so stale facts retire deterministically | `supersede(oldId,newId)`; freshness in salience | 🟢 | ledger §3 (decay/churn) | **net-new supersession path** |
-| **R-G6 Assembly (read path)** ✅ **SHIPPED (v1=FIT)** | given a step + budget, select the minimal relevant subgraph, ordered for cache reuse | `assemble(units, ctx)` → `{ units, dropped, tokens }` | 🟢 | §5 below | **SHIPPED v0.11.0 (2026-06-13)** — the CE headline API, **FIT** half first: budget-fits a neutral unit array (grammar-stripped `{id,role,content,kind?,pinned?,atomic?,tokensApprox?}`) recency-anchored + cache-stable, `pinned`/`atomic` invariants, `dropped[]`-with-handle (no silent loss). SELECT (recall-inject) **KILLED** this round (§4.1 of `baresuite-litectx-prd.md` — agents already fetch own code, no demand, ~75% noise); COMPRESS (signature-tier, R-C7 render) is the next composable. `poc/assemble-fit-*.mjs` + `test/assemble.test.js` (12). |
+| **R-G6 Assembly (read path)** ✅ **SHIPPED (v1=FIT)** | given a step + budget, select the minimal relevant subgraph, ordered for cache reuse | `assemble(units, ctx)` → `{ units, dropped, tokens }` | 🟢 | §5 below | **SHIPPED v0.11.0 (2026-06-13)** — the CE headline API, **FIT** half first: budget-fits a neutral unit array (grammar-stripped `{id,role,content,kind?,pinned?,atomic?,tokensApprox?}`) recency-anchored + cache-stable, `pinned`/`atomic` invariants, `dropped[]`-with-handle (no silent loss). SELECT (recall-inject) **KILLED** this round (§4.1 of `baresuite-litectx-prd.md` — agents already fetch own code, no demand, ~75% noise). **COMPRESS budget tier SHIPPED (2026-06-13):** a code/doc unit FIT would drop is recovered as its `compress()` **signature** before eviction (`compressed:true`, body recoverable by id) — rank/recency-driven (reuses FIT's order, NOT positional: lost-in-the-middle refuted at scale, `lost-in-middle-poc.mjs`), fires only when the signature both saves and fits. validated by **two** POCs — `compress-middle-poc.mjs` (rendering: signature 6/6 vs drop 0/6, 0 hallucination) **and `assemble-compress-seam-poc.mjs`, the integration on REAL functions through the SHIPPED verb + live model** (seam mechanic 8/8; **PARAMS retrieval signature 8/8 vs drop 0/8** — signature preserves the API eviction loses, even for doc-less bare-header functions; mean real saving **81%**, 51–97%). assemble is now **async** (the only await is the pure tree-sitter render). FIT path verified byte-identical post-change (19%/3.8% on 1059 real deps, `assemble-verify-shipped.mjs`). `poc/assemble-{fit,compress-seam}-*.mjs` + `test/assemble.test.js` (17). |
 | **R-G7 Eviction / decay (forget path)** | what leaves/archives the graph, author-controlled | `evict(policy)` | 🟢 | ledger §3 | net-new explicit policy |
 
 > **Retention is author-owned, never agent-authored** (barecontext §6 #4; the M1 lesson). The
@@ -397,10 +397,14 @@ action-vs-content thesis both hold.
 - **The §6 line — do NOT push into bareguard:** the **content** half of the verdict (is this
   fact a prompt-injection? does it *semantically* conflict with the floor?) is content
   judgment bareguard refuses (`bareguard.context.md:313`). **Division:** litectx (or a
-  guardrails tier) computes a content verdict and **reduces it to a shape flag** on the action
-  (`provenance:"untrusted"`, `injectionRisk:"high"`); bareguard gates that flag **by shape**
-  (`denyArgPatterns` / `content` regex). → R-G3 label = litectx · R-X2 shape-verdict + floor =
-  bareguard (lift) · R-X2 content-verdict = litectx/guardrails tier (opt-in).
+  guardrails tier) computes a content verdict and **reduces it to a structured shape flag** on the
+  action — litectx emits the **source** (`provenance:"web"|"subagent"|…`, *not* a trust verdict) plus an
+  optional guardrails-set `injectionRisk:"high"`; bareguard gates that flag **by structured field**, via
+  a small generic `flags` field-value gate (reads `action.provenance`/`injectionRisk` directly, **not**
+  `JSON.stringify` regex — the regex route would force litectx to encode its verdict as matchable text,
+  violating §8.2). Full spec + action-field contract: [baresuite-litectx-prd §5B](../02-engineering/baresuite-litectx-prd.md).
+  → R-G3 label = litectx · R-X2 shape-verdict + floor = bareguard (lift) · R-X2 content-verdict =
+  litectx/guardrails tier (opt-in).
 
 ### 10.2 bareagent — insert *around* the loop, plug *under* the store (R-W*, R-I*)
 - **Around the loop (⊘ loop unchanged):** `Loop.run(messages, tools, opts)`
