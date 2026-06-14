@@ -84,7 +84,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
-| **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; demand-gated, no producer for `memory.inject`) |
+| **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; `writeAudit` records a JSONL line per write **standalone (gate-independent)**; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; gate demand-gated, no producer for `memory.inject`; audit usable now without a gate) |
 | **contextgraph** (`observe`/`ContextGraph` exports; `trace` config; `PRIMITIVE`/`VERBS_BY_PRIMITIVE` taxonomy) — wrap a `LiteCtx` and every CE verb call is recorded into `ctx.trace`: a pipeline graph (`.json()` + agent-readable `.mermaid()`). The CE-**pipeline** view over the same data — sibling to `codegraph`'s content view (`getNode`/`related`/`impact`) | ✅ shipped (observability primitive; SVG + interactive renders in `examples/contextgraph`; setup in `docs/03-usage/graphs.md`) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
 | **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
@@ -142,7 +142,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. `code`/`doc` are never scoped. |
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
-| `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** paired with `writeGate` — records one JSONL decision line per write. Ships **no** secret patterns: a host-supplied `redact(action)` on it scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
+| `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** — records one JSONL decision line per `remember()`. Fires whether or not a `writeGate` is wired: with a gate it logs the gate's decision; **without one it logs a synthetic `allow` (`reason: "no-gate"`)**, so a sink alone gives a complete write paper-trail. The sink (`opts.sink`) defaults to an in-memory `this.lines` array — the host wires a file/db writer. Ships **no** secret patterns: a host-supplied `redact(action)` scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
 | `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
 
 There is **one** config object and no global state. No environment variables, no
@@ -406,9 +406,30 @@ builds a gate-able action `{ type: "memory.write", kind, provenance: by, text, i
 (via the exported `toWriteAction`) and `await`s `writeGate.check(action)` **before any side effect**. A
 `deny` outcome throws `WriteDeniedError` (carrying `.id` + `.decision`) and **nothing persists** — a denied
 write is a true no-op (no embedding computed, no episode prune, no row written); `allow`/`ask` proceed to
-the write. If a `writeAudit` is also wired, one decision line is recorded
-(host `redact` scrubs). litectx states the **source** (`provenance`) + an optional `injectionRisk` flag;
-the gate renders deny/ask — litectx never makes the content verdict. Default (no `writeGate`) is unchanged.
+the write. litectx states the **source** (`provenance`) + an optional `injectionRisk` flag; the gate
+renders deny/ask — litectx never makes the content verdict. Default (no `writeGate`) is unchanged.
+
+**Audit is decoupled from the gate.** A `writeAudit` records one decision line per `remember()` whenever
+it is set — gate or not. With a gate it logs the gate's decision (and `deny` still blocks); **without a
+gate every write is logged as a synthetic `allow` with `reason: "no-gate"`**, so you get a complete
+write paper-trail from a sink alone (no need to stand up a permissive gate). Host `redact` scrubs in both
+cases. This makes `WriteAudit` usable as the standalone paper-trail its name implies.
+
+```js
+import { LiteCtx, WriteAudit } from "litectx";
+import fs from "node:fs";
+
+const lc = new LiteCtx({
+  root,
+  writeAudit: new WriteAudit({
+    sink:   (line)   => fs.appendFileSync("memory-audit.jsonl", JSON.stringify(line) + "\n"), // default: in-memory `audit.lines`
+    redact: (action) => ({ ...action, text: scrub(action.text) }),  // litectx ships NO patterns — you supply them
+  }),
+  // writeGate: someGate,   // OPTIONAL — add only for deny/ask (e.g. bareguard); the audit works without it
+});
+// every remember() now appends one JSONL line — AND so does every liteCtxAsStore(lc).store(),
+// since the adapter writes through remember() (below). Wire the sink once on `lc`; consumers stay transparent.
+```
 
 Content is stored **whole** — one searchable unit, no tree-sitter/section chunking. You
 control granularity by how you split before writing (ten atomic facts beat one blob).
@@ -652,6 +673,9 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
   `remember`s. `metadata.kind` (default `"fact"`) and `metadata.by` drive the write; **every other key
   rides the sealed `meta` passthrough** and round-trips verbatim. The adapter is the store, so *it* owns
   the id — the host never supplies one.
+  - **Adapter writes are gated + audited.** Because `store()` calls `lc.remember()`, any `writeGate` /
+    `writeAudit` wired on `lc` applies to writes made through the adapter too — the consumer (e.g.
+    bareagent's `Memory`) stays transparent; you wire the gate/sink **once on `lc`**, not per consumer.
 - **`search(query, options?)` → `Promise<[{ id, content, metadata, score }]>`** — ranked recall with
   `{ body: true }` (content inlined). Targets **one kind** (`options.kind`, default `"fact"`) so scores
   stay comparable; `options.limit` caps results. `metadata` comes back whole (kind/by reassembled +

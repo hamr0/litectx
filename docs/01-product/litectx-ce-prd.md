@@ -385,6 +385,10 @@ action-vs-content thesis both hold.
 > no consumer emits gate actions yet; `memory.inject` reserved in the type but has no producer (SELECT killed).
 > Standalone built-in *floor* gate deferred (speculative — no standalone consumer needs gating without
 > bareguard yet). Next on bareguard's side: swap `seam-contract.test.js` onto this real emitter (§5B).
+> **Audit decoupled from the gate (Path B, 2026-06-14):** `WriteAudit` records a JSONL line per
+> `remember()` whenever a sink is set — **gate or not** (un-gated writes log a synthetic `allow`,
+> `reason:"no-gate"`), so it is the standalone paper-trail its name implies; previously the emit lived
+> inside the `writeGate` branch and a trail required also wiring a gate. Strictly additive; `test/writegate.test.js`.
 - **Gate decision contract — [copy → adapt]:** `Gate#check(action)` → `Decision{outcome:"allow"
   |"deny", severity, rule, reason}` (`bareguard/src/gate.js:215`, `types.js:40`); an action is an
   open dict keyed by `type` (`types.js:24`). litectx **copies this contract** and **adapts** it

@@ -140,7 +140,9 @@ These pass the §8.1 discriminator: **no consumer ambiguity.** Ranked by readine
 > **litectx EMITTER SHIPPED 2026-06-14.** The write-gate hook is built: `remember()` emits
 > `{type:"memory.write", kind, provenance, text, id, meta?, injectionRisk?}` via the exported
 > `toWriteAction` and checks it through an opt-in `writeGate` (duck-typed `.check`) before committing;
-> deny throws `WriteDeniedError`, nothing persists. `WriteAudit`/`WriteDeniedError` also exported. POC
+> deny throws `WriteDeniedError`, nothing persists. `WriteAudit`/`WriteDeniedError` also exported. **Audit
+> decoupled from the gate (Path B, 2026-06-14):** `WriteAudit` logs a line per write standalone — no gate
+> needed (un-gated = synthetic `allow`/`no-gate`), so the "own audit-log" below is usable on its own. POC
 > 13/13 on the REAL bareguard `Gate` (`poc/write-gate-emitter-poc.mjs`). **bareguard is now unblocked** to
 > swap `seam-contract.test.js` onto the real emitter (the producer-less seam in §1 item 4 now has a
 > producer). `memory.write` only — `memory.inject` has no producer (SELECT killed).

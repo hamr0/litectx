@@ -544,13 +544,16 @@ export class LiteCtx {
     }
     const by = opts.by ?? "agent";
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
-    // write-gate (§10.1) — when wired, check BEFORE any side effect (no embedding spent, no episode prune,
-    // no write), so a denied write is a true no-op. litectx states the SOURCE (`provenance:by`) + passes
-    // through an optional guardrails `injectionRisk` shape flag; the gate renders deny/ask. A deny throws
-    // and nothing persists (the §6 line: litectx never makes the content judgment, only carries the facts).
-    if (this.writeGate) {
+    // write-gate + audit (§10.1) — runs when EITHER a gate or an audit sink is wired. The gate (when
+    // present) checks BEFORE any side effect (no embedding spent, no episode prune, no write), so a denied
+    // write is a true no-op. litectx states the SOURCE (`provenance:by`) + passes through an optional
+    // guardrails `injectionRisk` shape flag; the gate renders deny/ask, a deny throws and nothing persists
+    // (the §6 line: litectx never makes the content judgment). The audit is the standalone paper-trail
+    // (`WriteAudit`) — it fires whenever a sink is set, gate or not; an un-gated write records a synthetic
+    // `allow` (reason "no-gate") so the trail is complete without forcing a gate to exist.
+    if (this.writeGate || this.writeAudit) {
       const action = toWriteAction(id, text, { kind, provenance: by, meta: opts.meta, injectionRisk: opts.injectionRisk });
-      const decision = await this.writeGate.check(action);
+      const decision = this.writeGate ? await this.writeGate.check(action) : { outcome: "allow", reason: "no-gate" };
       if (this.writeAudit) this.writeAudit.emit(action, decision, Date.now());
       if (decision.outcome === "deny") throw new WriteDeniedError(id, decision);
     }

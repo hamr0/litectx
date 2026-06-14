@@ -103,3 +103,35 @@ test("default WriteAudit ships NO patterns — a bare audit logs the secret verb
   await lc.remember("fact:creds2", "key is sk-xyz789", { by: "agent" });
   assert.ok(JSON.stringify(audit.lines[0]).includes("sk-xyz789"));
 });
+
+// ── Path B: audit decoupled from the gate — a sink alone yields the standalone paper-trail ───────────
+
+test("audit WITHOUT a gate records every write as a synthetic 'allow' (reason no-gate); write still commits", async () => {
+  const audit = new WriteAudit();
+  const lc = fresh({ writeAudit: audit }); // NO writeGate
+  await lc.remember("fact:nogate", "remembered with audit only", { by: "human" });
+  assert.equal(lc.get("fact:nogate").text, "remembered with audit only", "audit never blocks the write");
+  assert.equal(audit.lines.length, 1);
+  const line = audit.lines[0];
+  assert.equal(line.phase, "memory.write");
+  assert.equal(line.decision, "allow");
+  assert.equal(line.reason, "no-gate");
+  assert.equal(line.action.id, "fact:nogate");
+  assert.equal(line.action.provenance, "human");
+});
+
+test("audit-only honors the host redactor — scrubbing needs no gate", async () => {
+  const audit = new WriteAudit({ redact: (a) => ({ ...a, text: a.text.replace(/sk-[a-z0-9]+/gi, "[REDACTED]") }) });
+  const lc = fresh({ writeAudit: audit }); // NO writeGate
+  await lc.remember("fact:nogate-creds", "token sk-abc999 here", { by: "agent" });
+  assert.ok(!JSON.stringify(audit.lines[0]).includes("sk-abc999"), "redactor applies even without a gate");
+});
+
+test("audit-only logs one line per write across multiple remembers", async () => {
+  const audit = new WriteAudit();
+  const lc = fresh({ writeAudit: audit }); // NO writeGate
+  await lc.remember("fact:a", "one", { by: "agent" });
+  await lc.remember("fact:b", "two", { by: "agent" });
+  assert.equal(audit.lines.length, 2);
+  assert.deepEqual(audit.lines.map((l) => l.action.id), ["fact:a", "fact:b"]);
+});

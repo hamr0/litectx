@@ -6,6 +6,17 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-06-14
+
+### Changed
+- **`WriteAudit` is decoupled from `writeGate`.** A `writeAudit` sink now records a JSONL decision line
+  for **every** `remember()` whenever it is set — previously the emit lived inside the `writeGate` branch,
+  so a write audit required also wiring a gate. Without a gate, each write is logged as a synthetic
+  `allow` (`reason: "no-gate"`); with a gate, behavior is unchanged (the gate's decision is logged and
+  `deny` still blocks). This makes `WriteAudit` usable as the standalone paper-trail its docstring
+  describes — wire a sink, get an audit trail, no permissive gate needed. Strictly additive (audit-
+  without-gate previously did nothing). `test/writegate.test.js` (+3).
+
 ## [0.16.0] — 2026-06-14
 
 ### Added
