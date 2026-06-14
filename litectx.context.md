@@ -84,6 +84,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
 | **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; demand-gated, no producer for `memory.inject`) |
+| **contextgraph** (`observe`/`ContextGraph` exports; `trace` config; `PRIMITIVE`/`VERBS_BY_PRIMITIVE` taxonomy) — wrap a `LiteCtx` and every CE verb call is recorded into `ctx.trace`: a pipeline graph (`.json()` + agent-readable `.mermaid()`). The CE-**pipeline** view over the same data — sibling to `codegraph`'s content view (`getNode`/`related`/`impact`) | ✅ shipped (observability primitive; SVG + interactive renders in `examples/contextgraph`; setup in `docs/03-usage/graphs.md`) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
 | **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
 | Trust/stability as a recall *tie-breaker* (use/churn/provenance → search order) | ⊘ dropped (POC-falsified — no-ops on exact ties, pollutes on any band, and buries fresh/better matches; trust ships as columns, ranking stays pure relevance — slice 5c) |
@@ -141,6 +142,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
 | `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** paired with `writeGate` — records one JSONL decision line per write. Ships **no** secret patterns: a host-supplied `redact(action)` on it scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
+| `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
 
 There is **one** config object and no global state. No environment variables, no
 config files — the adopter passes everything in.
@@ -649,6 +651,10 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
   (the `{ type: "memory.write", … }` action shape); `WriteAudit` → standalone JSONL audit sink (ships no
   secret patterns; takes a host `redact`); `WriteDeniedError` → thrown when a wired `writeGate` denies a
   write (carries `.id` + `.decision`). See the `writeGate` config + `remember` write-gate note above (§10.1).
+- `observe(ctx)` → wrap a `LiteCtx` so every CE verb call is recorded into `ctx.trace` (the **contextgraph**
+  pipeline view); `ctx.tap(verb, fn)` folds in free-function verbs; or just set `trace: true` on the config.
+  `ContextGraph` → the recorder (`.json()` + agent-readable `.mermaid()`); `PRIMITIVES`/`VERBS_BY_PRIMITIVE`/
+  `PRIMITIVE` → the Write/Select/Compress/Isolate verb taxonomy. Renders + full setup: `docs/03-usage/graphs.md`.
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).

@@ -13,34 +13,35 @@
   consumer would build. Zero deps, offline — open via `python3 -m http.server` in this folder.
 -->
 <style>
-  :root { --bg:#0d1117; --fg:#c9d1d9; --dim:#30363d; --hub:#d29922; --out:#3fb950; --in:#f85149; }
+  /* light off-white theme (sibling of ../contextgraph). Semantic edge colours kept: green=imports, red=imported-by. */
+  :root { --bg:#f7f5ef; --fg:#2a261f; --dim:#e2dccc; --hub:#b8860b; --out:#2e9e4f; --in:#d83a32; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 ui-monospace,Menlo,monospace; display:flex; height:100vh; }
   #stage { flex:1; position:relative; }
   svg { width:100%; height:100%; }
-  .edge { stroke:#21262d; stroke-width:1; }
+  .edge { stroke:#dcd6c8; stroke-width:1; }
   .edge.out { stroke:var(--out); stroke-width:2; }
   .edge.in { stroke:var(--in); stroke-width:2; }
-  .node circle { fill:var(--dim); stroke:#484f58; cursor:pointer; transition:fill .1s; }
+  .node circle { fill:#fff; stroke:#c2b9a6; cursor:pointer; transition:fill .1s; }
   .node.sel circle { fill:var(--hub); stroke:var(--hub); }
   .node.out circle { fill:var(--out); }
   .node.in circle { fill:var(--in); }
-  .node.faded { opacity:.18; }
+  .node.faded { opacity:.2; }
   .node text { fill:var(--fg); font-size:11px; pointer-events:none; }
-  #panel { width:340px; border-left:1px solid var(--dim); padding:16px; overflow:auto; }
-  h1 { font-size:13px; margin:0 0 4px; color:#8b949e; font-weight:600; letter-spacing:.04em; }
-  #search { width:100%; padding:6px 8px; background:#161b22; border:1px solid var(--dim); color:var(--fg); border-radius:6px; margin-bottom:14px; }
+  #panel { width:340px; border-left:1px solid var(--dim); padding:16px; overflow:auto; background:#fffdf8; }
+  h1 { font-size:13px; margin:0 0 4px; color:#8c8473; font-weight:600; letter-spacing:.04em; }
+  #search { width:100%; padding:6px 8px; background:#fffdf8; border:1px solid var(--dim); color:var(--fg); border-radius:6px; margin-bottom:14px; }
   .sel-id { color:var(--hub); font-weight:600; word-break:break-all; margin-bottom:8px; }
   .badge { display:inline-block; padding:4px 10px; border-radius:6px; font-weight:600; font-size:13px; }
-  .badge.low { background:#2d333b; color:#8b949e; } .badge.medium { background:#9e6a03; color:#fff; } .badge.high { background:#8b2c2c; color:#fff; }
-  .row { display:flex; justify-content:space-between; padding:2px 0; border-bottom:1px solid #21262d; }
-  .k { color:#8b949e; }
+  .badge.low { background:#efece3; color:#7c7565; } .badge.medium { background:#c8860b; color:#fff; } .badge.high { background:#c0392b; color:#fff; }
+  .row { display:flex; justify-content:space-between; padding:2px 0; border-bottom:1px solid #e7e2d6; }
+  .k { color:#8c8473; }
   .grp { margin:14px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
   .grp.out { color:var(--out); } .grp.in { color:var(--in); }
   .lst li { list-style:none; padding:1px 0; cursor:pointer; word-break:break-all; }
-  .lst li:hover { color:#fff; }
-  .legend { position:absolute; bottom:12px; left:12px; font-size:11px; color:#8b949e; }
-  .hint { color:#8b949e; font-size:12px; }
+  .lst li:hover { color:#000; }
+  .legend { position:absolute; bottom:12px; left:12px; font-size:11px; color:#8c8473; }
+  .hint { color:#8c8473; font-size:12px; }
 </style>
 <div id="stage">
   <svg id="svg"></svg>

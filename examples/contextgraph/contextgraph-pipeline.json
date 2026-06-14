@@ -5,10 +5,10 @@
       "verb": "index",
       "primitive": "Substrate",
       "accent": "#21262d",
-      "detail": "159 files",
+      "detail": "162 files",
       "stats": {
         "args": [],
-        "out": "{\"files\":159,\"added\":159,\"updated\":0,\"removed\":0,\"unchanged\":0}"
+        "out": "{\"files\":162,\"added\":162,\"updated\":0,\"removed\":0,\"unchanged\":0}"
       },
       "col": 0,
       "row": 0
@@ -51,11 +51,11 @@
       "verb": "assemble",
       "primitive": "Compress",
       "accent": "#1c3a2e",
-      "detail": "6 kept · 307 tok",
+      "detail": "5 kept · 485 tok",
       "stats": {
         "args": [
           "[6 items]",
-          "{\"budget\":311}"
+          "{\"budget\":594}"
         ],
         "out": "{\"units\":[{\"id\":\"test/mcp.test.js#fixtureRepo\",\"role\":\"tool\",\"content\":\"/** Buil"
       },
@@ -67,13 +67,13 @@
       "verb": "compress",
       "primitive": "Compress",
       "accent": "#1c3a2e",
-      "detail": "signature · 20 tok",
+      "detail": "signature · 714 tok",
       "stats": {
         "args": [
-          "{\"text\":\"/** Build a throwaway repo on disk; returns its root. */\\nfunction fixt",
+          "{\"text\":\"// THE DROP-IN: wrap your LiteCtx with observe(), run your CE loop norm",
           "{\"level\":\"signature\"}"
         ],
-        "out": "/** Build a throwaway repo on disk; ret…"
+        "out": "// THE DROP-IN: wrap your LiteCtx with …"
       },
       "col": 4,
       "row": 0

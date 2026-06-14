@@ -1,29 +1,45 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="2188" height="168" viewBox="0 0 2188 168" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
-<rect width="2188" height="168" fill="#0d1117"/>
-<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#768390"/></marker></defs>
-<text x="28" y="30" fill="#adbac7" font-size="13" font-weight="bold">litectx · contextgraph — flow (how it ran, in order)</text>
-<text x="28" y="48" fill="#636e7b" font-size="10.5">verbs in execution order, captured live by observe()</text>
-<line x1="240" y1="106" x2="407" y2="106" stroke="#768390" stroke-width="1.5" marker-end="url(#arrow)"/>
-<line x1="624" y1="106" x2="791" y2="106" stroke="#768390" stroke-width="1.5" marker-end="url(#arrow)"/>
-<line x1="1008" y1="106" x2="1175" y2="106" stroke="#768390" stroke-width="1.5" marker-end="url(#arrow)"/>
-<line x1="1392" y1="106" x2="1559" y2="106" stroke="#768390" stroke-width="1.5" marker-end="url(#arrow)"/>
-<line x1="1776" y1="106" x2="1943" y2="106" stroke="#768390" stroke-width="1.5" marker-end="url(#arrow)"/>
-<rect x="28" y="72" width="212" height="68" rx="11" fill="#21262d" stroke="#444c56"/>
-<text x="134" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">index</text>
-<text x="134" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">159 files</text>
-<rect x="412" y="72" width="212" height="68" rx="11" fill="#3a2c1c" stroke="#444c56"/>
-<text x="518" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">remember</text>
-<text x="518" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">fact:auth</text>
-<rect x="796" y="72" width="212" height="68" rx="11" fill="#1c2f3a" stroke="#444c56"/>
-<text x="902" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">recall</text>
-<text x="902" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">6 hits</text>
-<rect x="1180" y="72" width="212" height="68" rx="11" fill="#1c3a2e" stroke="#444c56"/>
-<text x="1286" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">assemble</text>
-<text x="1286" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">6 kept · 307 tok</text>
-<rect x="1564" y="72" width="212" height="68" rx="11" fill="#1c3a2e" stroke="#444c56"/>
-<text x="1670" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">compress</text>
-<text x="1670" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">signature · 20 tok</text>
-<rect x="1948" y="72" width="212" height="68" rx="11" fill="#2f1c3a" stroke="#444c56"/>
-<text x="2054" y="100" fill="#f0f6fc" font-size="15" font-weight="bold" text-anchor="middle">stash</text>
-<text x="2054" y="121" fill="#909dab" font-size="10.5" text-anchor="middle">scratch:run1 parked</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1354" height="348" viewBox="0 0 1354 348" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+<rect width="1354" height="348" fill="#f7f5ef"/>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#a79e8b"/></marker></defs>
+<text x="28" y="32" fill="#3a352b" font-size="15" font-weight="bold">litectx · contextgraph — flow (how it ran, in order)</text>
+<text x="28" y="51" fill="#8c8473" font-size="10.5">verbs in execution order, captured live by observe()</text>
+<text x="1265.7" y="79" fill="#7c7565" font-size="10.5">Substrate</text>
+<rect x="1246.7" y="69" width="13" height="13" rx="3" fill="#efece3" stroke="#d3ccbc"/>
+<text x="1183.8" y="79" fill="#7c7565" font-size="10.5">Isolate</text>
+<rect x="1164.8" y="69" width="13" height="13" rx="3" fill="#ece0f6" stroke="#d3ccbc"/>
+<text x="1095.2" y="79" fill="#7c7565" font-size="10.5">Compress</text>
+<rect x="1076.2" y="69" width="13" height="13" rx="3" fill="#d7f0e0" stroke="#d3ccbc"/>
+<text x="1020" y="79" fill="#7c7565" font-size="10.5">Select</text>
+<rect x="1001" y="69" width="13" height="13" rx="3" fill="#d9e9f4" stroke="#d3ccbc"/>
+<text x="951.5" y="79" fill="#7c7565" font-size="10.5">Write</text>
+<rect x="932.5" y="69" width="13" height="13" rx="3" fill="#f4e7d2" stroke="#d3ccbc"/>
+<line x1="240" y1="135" x2="385" y2="135" stroke="#a79e8b" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="602" y1="135" x2="747" y2="135" stroke="#a79e8b" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="964" y1="135" x2="1109" y2="135" stroke="#a79e8b" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="1220" y1="172" x2="1220" y2="241" stroke="#a79e8b" stroke-width="1.5" marker-end="url(#arrow)"/>
+<line x1="1114" y1="283" x2="969" y2="283" stroke="#a79e8b" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="28" y="98" width="212" height="74" rx="11" fill="#efece3" stroke="#d3ccbc"/>
+<text x="134" y="113" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">SUBSTRATE</text>
+<text x="134" y="133" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">index</text>
+<text x="134" y="153" fill="#7c7565" font-size="10.5" text-anchor="middle">162 files</text>
+<rect x="390" y="98" width="212" height="74" rx="11" fill="#f4e7d2" stroke="#d3ccbc"/>
+<text x="496" y="113" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">WRITE</text>
+<text x="496" y="133" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">remember</text>
+<text x="496" y="153" fill="#7c7565" font-size="10.5" text-anchor="middle">fact:auth</text>
+<rect x="752" y="98" width="212" height="74" rx="11" fill="#d9e9f4" stroke="#d3ccbc"/>
+<text x="858" y="113" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">SELECT</text>
+<text x="858" y="133" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">recall</text>
+<text x="858" y="153" fill="#7c7565" font-size="10.5" text-anchor="middle">6 hits</text>
+<rect x="1114" y="98" width="212" height="74" rx="11" fill="#d7f0e0" stroke="#d3ccbc"/>
+<text x="1220" y="113" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">COMPRESS</text>
+<text x="1220" y="133" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">assemble</text>
+<text x="1220" y="153" fill="#7c7565" font-size="10.5" text-anchor="middle">5 kept · 485 tok</text>
+<rect x="1114" y="246" width="212" height="74" rx="11" fill="#d7f0e0" stroke="#d3ccbc"/>
+<text x="1220" y="261" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">COMPRESS</text>
+<text x="1220" y="281" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">compress</text>
+<text x="1220" y="301" fill="#7c7565" font-size="10.5" text-anchor="middle">signature · 714 tok</text>
+<rect x="752" y="246" width="212" height="74" rx="11" fill="#ece0f6" stroke="#d3ccbc"/>
+<text x="858" y="261" fill="#9a9182" font-size="9.5" letter-spacing="1.2" font-weight="bold" text-anchor="middle">ISOLATE</text>
+<text x="858" y="281" fill="#2a261f" font-size="16" font-weight="bold" text-anchor="middle">stash</text>
+<text x="858" y="301" fill="#7c7565" font-size="10.5" text-anchor="middle">scratch:run1 parked</text>
 </svg>

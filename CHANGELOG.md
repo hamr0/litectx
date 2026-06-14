@@ -6,6 +6,20 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **contextgraph — the CE-pipeline observability primitive.** `observe(ctx)` wraps a `LiteCtx` so every
+  CE verb call is recorded LIVE into `ctx.trace` — a pipeline graph whose nodes are the verbs a design
+  composes and whose edges are the data handed between them. Two ways in: `observe(new LiteCtx(...))` or
+  the `trace: true` config; `ctx.tap(verb, fn)` folds in the free-function verbs (`assemble`/`compress`/
+  `summaryWindow`). It works with **zero** litectx-internal changes — every verb already returns an
+  accountable result, so the proxy reads args-in/result-out. New exports: `observe`, `ContextGraph` (the
+  recorder — `.json()` + an agent-readable `.mermaid()`), and the verb→primitive taxonomy (`PRIMITIVES`,
+  `VERBS_BY_PRIMITIVE`, `PRIMITIVE`) grounded in the CE-PRD skill-map. This is the **pipeline** view —
+  sibling to `codegraph`'s content view (`getNode`/`related`/`impact`); both are views over the same data,
+  not re-extractions. litectx ships the trace data + Mermaid; SVG (flow + Write/Select/Compress/Isolate
+  coverage tree) and an interactive viewer live in `examples/contextgraph`. Setup for both graphs:
+  `docs/03-usage/graphs.md`. A bare instance (no `trace`) is untouched — no proxy, zero overhead.
+
 ### Changed
 - **README — cross-session-memory claim sharpened to shortlist-grade.** The F5 test (below) found
   semantic recall surfaces the right past decision into the top-few results but not reliably at #1, so

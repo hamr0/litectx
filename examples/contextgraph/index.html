@@ -6,37 +6,45 @@
 <title>litectx — contextgraph</title>
 <!--
   contextgraph: the PIPELINE view (sibling of ../graph-view, the CONTENT graph). Two views of one real
-  run captured by observe() in pipeline.mjs (re-run it to refresh contextgraph-pipeline.json):
-    • TREE — the Write/Select/Compress/Isolate trunk, verbs branching off; used verbs lit + numbered.
-    • FLOW — the same run as an ordered pipeline. Click any verb for its recorded calls. Zero deps.
+  run captured by observe() in pipeline.mjs. TREE = the W/S/C/I trunk, verbs lit by use. FLOW = the run
+  in order, snake-wrapping when long. Click a verb for its recorded calls. Light/dark toggle. Zero deps.
 -->
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; background:#0d1117; color:#adbac7; font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  :root {
+    --bg:#f7f5ef; --panel:#fffdf8; --panelStroke:#e2dccc; --stroke:#d3ccbc; --line:#a79e8b;
+    --title:#3a352b; --sub:#8c8473; --text:#2a261f; --muted:#7c7565; --tabOn:#d9e9f4; --tabOnBd:#2f6fb3;
+  }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
   header { padding:18px 24px 6px; }
-  h1 { margin:0; font-size:16px; color:#f0f6fc; }
-  p.sub { margin:4px 0 10px; color:#636e7b; font-size:12px; }
-  .tabs button { background:#161b22; color:#adbac7; border:1px solid #30363d; border-radius:7px; padding:5px 14px; font:inherit; font-size:12px; cursor:pointer; margin-right:6px; }
-  .tabs button.on { background:#1c2f3a; color:#f0f6fc; border-color:#539bf5; }
+  h1 { margin:0; font-size:16px; color:var(--title); }
+  p.sub { margin:4px 0 10px; color:var(--sub); font-size:12px; }
+  .bar { display:flex; gap:6px; align-items:center; }
+  .bar button { background:var(--panel); color:var(--text); border:1px solid var(--panelStroke); border-radius:7px; padding:5px 14px; font:inherit; font-size:12px; cursor:pointer; }
+  .bar button.on { background:var(--tabOn); border-color:var(--tabOnBd); }
+  .bar .spacer { flex:1; }
   #wrap { display:flex; gap:18px; padding:6px 24px 24px; align-items:flex-start; flex-wrap:wrap; }
-  svg { background:#0d1117; border:1px solid #21262d; border-radius:10px; min-width:720px; }
+  svg { background:var(--bg); border:1px solid var(--panelStroke); border-radius:10px; min-width:720px; }
   .leaf, .prim, .fnode { cursor:pointer; }
-  .leaf:hover rect, .prim:hover rect, .fnode:hover rect, .sel rect { stroke:#539bf5 !important; stroke-width:2; }
-  #detail { flex:1; min-width:250px; background:#161b22; border:1px solid #21262d; border-radius:10px; padding:14px 16px; }
-  #detail h2 { margin:0 0 2px; font-size:14px; color:#f0f6fc; }
-  #detail .tag { font-size:11px; color:#768390; }
-  #detail .hint { color:#636e7b; }
+  .leaf:hover rect, .prim:hover rect, .fnode:hover rect, .sel rect { stroke:var(--tabOnBd) !important; stroke-width:2; }
+  #detail { flex:1; min-width:250px; background:var(--panel); border:1px solid var(--panelStroke); border-radius:10px; padding:14px 16px; }
+  #detail h2 { margin:0 0 2px; font-size:14px; color:var(--title); }
+  #detail .tag { font-size:11px; color:var(--muted); }
+  #detail .hint { color:var(--sub); }
   #detail table { border-collapse:collapse; font-size:12.5px; margin-top:8px; }
   #detail td { padding:3px 10px 3px 0; vertical-align:top; }
-  #detail td.k { color:#768390; white-space:nowrap; }
-  #detail td.v { color:#adbac7; white-space:pre-wrap; word-break:break-word; }
+  #detail td.k { color:var(--muted); white-space:nowrap; }
+  #detail td.v { color:var(--text); white-space:pre-wrap; word-break:break-word; }
 </style>
 </head>
 <body>
 <header>
   <h1>litectx · contextgraph</h1>
   <p class="sub">A context-engineering pipeline, captured live by <code>observe()</code> — not a hand-drawn build. Click any verb for its recorded calls.</p>
-  <div class="tabs"><button id="tab-tree" class="on">CE coverage (tree)</button><button id="tab-flow">flow (how it ran)</button></div>
+  <div class="bar">
+    <button id="tab-tree" class="on">CE coverage (tree)</button><button id="tab-flow">flow (how it ran)</button>
+    <span class="spacer"></span>
+    <button id="tab-theme">◐ dark</button>
+  </div>
 </header>
 <div id="wrap">
   <svg id="svg"></svg>
@@ -44,30 +52,47 @@
 </div>
 <script type="module">
   const SVG = "http://www.w3.org/2000/svg";
+  const THEMES = {
+    light: { bg:"#f7f5ef", panel:"#fffdf8", panelStroke:"#e2dccc", node:"#ffffff", stroke:"#d3ccbc", line:"#a79e8b", lineDim:"#e7e2d6", title:"#3a352b", sub:"#8c8473", text:"#2a261f", muted:"#7c7565", tag:"#9a9182", num:"#2f6fb3", numText:"#ffffff", tabOn:"#d9e9f4",
+      accent:{ Write:"#f4e7d2", Select:"#d9e9f4", Compress:"#d7f0e0", Isolate:"#ece0f6", Substrate:"#efece3" } },
+    dark: { bg:"#0d1117", panel:"#161b22", panelStroke:"#30363d", node:"#21262d", stroke:"#444c56", line:"#768390", lineDim:"#21262d", title:"#adbac7", sub:"#636e7b", text:"#f0f6fc", muted:"#909dab", tag:"#8b98a5", num:"#539bf5", numText:"#0d1117", tabOn:"#1c2f3a",
+      accent:{ Write:"#3a2c1c", Select:"#1c2f3a", Compress:"#1c3a2e", Isolate:"#2f1c3a", Substrate:"#2a2f37" } },
+  };
+  const PRIMITIVES = ["Write", "Select", "Compress", "Isolate"];
+  let themeName = "light", view = "tree";
+  let t = THEMES[themeName];
+
   const data = await fetch("./contextgraph-pipeline.json").then((r) => r.json());
   const svg = document.getElementById("svg"), detail = document.getElementById("detail");
-  const mk = (t, a, txt) => { const e = document.createElementNS(SVG, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
-  const ACCENT = { Write: "#3a2c1c", Select: "#1c2f3a", Compress: "#1c3a2e", Isolate: "#2f1c3a", Substrate: "#21262d" };
+  const mk = (tag, a, txt) => { const e = document.createElementNS(SVG, tag); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
 
-  // used verb → {order, node}; first appearance is the run-order number
   const used = new Map();
   data.nodes.forEach((n) => { if (!used.has(n.verb)) used.set(n.verb, { order: used.size + 1, node: n }); });
 
-  function show(title, prim, body) {
-    detail.innerHTML = `<h2>${title}</h2><div class="tag">${prim ?? ""}</div>${body}`;
+  function applyChrome() {
+    const r = document.documentElement.style;
+    for (const k of ["bg", "panel", "panelStroke", "stroke", "line", "title", "sub", "text", "muted"]) r.setProperty("--" + k, t[k]);
+    r.setProperty("--tabOn", t.tabOn); r.setProperty("--tabOnBd", t.num);
   }
+  function show(title, tag, body) { detail.innerHTML = `<h2>${title}</h2><div class="tag">${tag ?? ""}</div>${body}`; }
   function showVerb(verb, prim) {
     const u = used.get(verb);
-    if (!u) return show(verb, `${prim} · not used in this run`, `<p class="hint">This verb is part of ${prim} but the traced design never called it.</p>`);
+    if (!u) return show(verb, `${prim} · not used`, `<p class="hint">Part of ${prim}; the traced design never called it.</p>`);
     const s = u.node.stats || {};
     const rows = [["run order", `#${u.order}`], ["detail", u.node.detail], ...Object.entries(s).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : v])];
     show(verb, `${prim} · used`, `<table>${rows.map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join("")}</table>`);
   }
-
-  function clear() { svg.innerHTML = ""; const d = mk("defs"); const m = mk("marker", { id: "arrow", markerWidth: 10, markerHeight: 10, refX: 7, refY: 3, orient: "auto" }); m.appendChild(mk("path", { d: "M0,0 L7,3 L0,6 Z", fill: "#768390" })); d.appendChild(m); svg.appendChild(d); }
   const sel = (g) => { svg.querySelectorAll(".sel").forEach((e) => e.classList.remove("sel")); g.classList.add("sel"); };
+  function clear() { svg.style.background = t.bg; svg.innerHTML = ""; const d = mk("defs"); const m = mk("marker", { id: "arrow", markerWidth: 10, markerHeight: 10, refX: 7, refY: 3, orient: "auto" }); m.appendChild(mk("path", { d: "M0,0 L7,3 L0,6 Z", fill: t.line })); d.appendChild(m); svg.appendChild(d); }
+  function legend(rightX, y) {
+    const items = [...PRIMITIVES, "Substrate"]; let x = rightX;
+    for (let i = items.length - 1; i >= 0; i--) { const k = items[i];
+      x -= k.length * 6.7; svg.appendChild(mk("text", { x, y: y + 4, fill: t.muted, "font-size": 10.5 }, k));
+      x -= 19; svg.appendChild(mk("rect", { x, y: y - 6, width: 13, height: 13, rx: 3, fill: t.accent[k], stroke: t.stroke }));
+      x -= 16;
+    }
+  }
 
-  // ---- TREE: W/S/C/I trunk → verbs, used ones lit + numbered --------------------------------------
   function renderTree() {
     clear();
     const C0 = 28, C1 = 236, C2 = 452, VW = 248, VH = 34, VGAP = 12, BAND = 24, TOP = 28, RW = 168, RH = 44, PW = 150, PH = 40;
@@ -75,54 +100,69 @@
     for (const prim of data.primitives) { const ys = []; for (const v of data.taxonomy[prim]) { vy[v] = y; ys.push(y); y += VH + VGAP; } py[prim] = (ys[0] + ys.at(-1)) / 2; y += BAND; }
     const H = y + 8, W = C2 + VW + 28, rootY = (py[data.primitives[0]] + py[data.primitives.at(-1)]) / 2;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-    const line = (x1, y1, x2, y2, on) => svg.appendChild(mk("line", { x1, y1, x2, y2, stroke: on ? "#768390" : "#21262d", "stroke-width": 1.5 }));
+    const line = (x1, y1, x2, y2, on) => svg.appendChild(mk("line", { x1, y1, x2, y2, stroke: on ? t.line : t.lineDim, "stroke-width": 1.5 }));
     for (const prim of data.primitives) line(C0 + RW, rootY, C1, py[prim], true);
     for (const prim of data.primitives) for (const v of data.taxonomy[prim]) line(C1 + PW, py[prim], C2, vy[v], used.has(v));
-    // root
-    const root = mk("g", { class: "fnode" }); root.append(mk("rect", { x: C0, y: rootY - RH / 2, width: RW, height: RH, rx: 10, fill: "#21262d", stroke: "#444c56" }),
-      mk("text", { x: C0 + RW / 2, y: rootY - 2, fill: "#f0f6fc", "font-size": 13, "font-weight": "bold", "text-anchor": "middle" }, "graph substrate"),
-      mk("text", { x: C0 + RW / 2, y: rootY + 13, fill: "#909dab", "font-size": 9.5, "text-anchor": "middle" }, "index · get · related"));
+    const root = mk("g", { class: "fnode" }); root.append(mk("rect", { x: C0, y: rootY - RH / 2, width: RW, height: RH, rx: 10, fill: t.node, stroke: t.stroke }),
+      mk("text", { x: C0 + RW / 2, y: rootY - 2, fill: t.text, "font-size": 13, "font-weight": "bold", "text-anchor": "middle" }, "graph substrate"),
+      mk("text", { x: C0 + RW / 2, y: rootY + 13, fill: t.muted, "font-size": 9.5, "text-anchor": "middle" }, "index · get · related"));
     root.onclick = () => { sel(root); showVerb("index", "Substrate"); }; svg.appendChild(root);
-    // primitives
     for (const prim of data.primitives) {
       const g = mk("g", { class: "prim" });
-      g.append(mk("rect", { x: C1, y: py[prim] - PH / 2, width: PW, height: PH, rx: 9, fill: ACCENT[prim], stroke: "#586069" }),
-        mk("text", { x: C1 + PW / 2, y: py[prim] + 5, fill: "#f0f6fc", "font-size": 14, "font-weight": "bold", "text-anchor": "middle" }, prim));
+      g.append(mk("rect", { x: C1, y: py[prim] - PH / 2, width: PW, height: PH, rx: 9, fill: t.accent[prim], stroke: t.stroke }),
+        mk("text", { x: C1 + PW / 2, y: py[prim] + 5, fill: t.text, "font-size": 14, "font-weight": "bold", "text-anchor": "middle" }, prim));
       const usedN = data.taxonomy[prim].filter((v) => used.has(v));
       g.onclick = () => { sel(g); show(prim, `${usedN.length}/${data.taxonomy[prim].length} verbs used`, `<table>${data.taxonomy[prim].map((v) => `<tr><td class="k">${used.has(v) ? "#" + used.get(v).order : "—"}</td><td class="v">${v}</td></tr>`).join("")}</table>`); };
       svg.appendChild(g);
     }
-    // verb leaves
     for (const prim of data.primitives) for (const v of data.taxonomy[prim]) {
       const on = used.has(v), yy = vy[v], g = mk("g", { class: "leaf" });
-      g.appendChild(mk("rect", { x: C2, y: yy - VH / 2, width: VW, height: VH, rx: 8, fill: on ? ACCENT[prim] : "#161b22", stroke: on ? "#768390" : "#272d36" }));
-      if (on) { g.append(mk("circle", { cx: C2 + 17, cy: yy, r: 9, fill: "#539bf5" }), mk("text", { x: C2 + 17, y: yy + 3.5, fill: "#0d1117", "font-size": 11, "font-weight": "bold", "text-anchor": "middle" }, used.get(v).order)); }
-      g.appendChild(mk("text", { x: C2 + 34, y: yy + 4, fill: on ? "#f0f6fc" : "#4b525c", "font-size": 12.5, "font-weight": on ? "bold" : "normal" }, v));
+      g.appendChild(mk("rect", { x: C2, y: yy - VH / 2, width: VW, height: VH, rx: 8, fill: on ? t.accent[prim] : t.panel, stroke: on ? t.stroke : t.panelStroke }));
+      if (on) { g.append(mk("circle", { cx: C2 + 17, cy: yy, r: 9, fill: t.num }), mk("text", { x: C2 + 17, y: yy + 3.5, fill: t.numText, "font-size": 11, "font-weight": "bold", "text-anchor": "middle" }, used.get(v).order)); }
+      g.appendChild(mk("text", { x: C2 + 34, y: yy + 4, fill: on ? t.text : t.muted, "font-size": 12.5, "font-weight": on ? "bold" : "normal" }, v));
       g.onclick = () => { sel(g); showVerb(v, prim); }; svg.appendChild(g);
     }
   }
 
-  // ---- FLOW: the run as an ordered pipeline -------------------------------------------------------
   function renderFlow() {
     clear();
-    const NW = 212, NH = 68, GAPX = 168, PAD = 28, CY = 60;
-    const W = PAD * 2 + data.nodes.length * NW + (data.nodes.length - 1) * GAPX, H = 140;
+    const NW = 212, NH = 74, GAPX = 150, GAPY = 74, PAD = 28, TOP = 98, maxCols = 4;
+    const linear = Math.max(...data.nodes.map((n) => n.row)) === 0;
+    const pos = new Map();
+    if (linear && data.nodes.length > maxCols) data.nodes.forEach((n, i) => { const row = Math.floor(i / maxCols), k = i % maxCols; pos.set(n.id, { col: row % 2 === 0 ? k : maxCols - 1 - k, row }); });
+    else data.nodes.forEach((n) => pos.set(n.id, { col: n.col, row: n.row }));
+    const cols = Math.max(...[...pos.values()].map((q) => q.col)) + 1, rows = Math.max(...[...pos.values()].map((q) => q.row)) + 1;
+    const W = PAD * 2 + cols * NW + (cols - 1) * GAPX, H = TOP + rows * NH + (rows - 1) * GAPY + PAD;
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("width", W); svg.setAttribute("height", H);
-    const x = (i) => PAD + i * (NW + GAPX), idx = (id) => data.nodes.findIndex((n) => n.id === id);
-    for (const e of data.edges) { const x1 = x(idx(e.from)) + NW, x2 = x(idx(e.to)); svg.appendChild(mk("line", { x1, y1: CY, x2: x2 - 5, y2: CY, stroke: "#768390", "stroke-width": 1.5, "marker-end": "url(#arrow)" })); }
-    data.nodes.forEach((n, i) => {
-      const g = mk("g", { class: "fnode" }), nx = x(i);
-      g.append(mk("rect", { x: nx, y: CY - NH / 2, width: NW, height: NH, rx: 11, fill: n.accent || "#21262d", stroke: "#444c56" }),
-        mk("text", { x: nx + NW / 2, y: CY - 6, fill: "#f0f6fc", "font-size": 15, "font-weight": "bold", "text-anchor": "middle" }, n.verb),
-        mk("text", { x: nx + NW / 2, y: CY + 15, fill: "#909dab", "font-size": 10.5, "text-anchor": "middle" }, n.detail));
+    const byId = (id) => data.nodes.find((n) => n.id === id);
+    const cx = (n) => PAD + pos.get(n.id).col * (NW + GAPX) + NW / 2, cy = (n) => TOP + pos.get(n.id).row * (NH + GAPY) + NH / 2;
+    legend(W - PAD, 75);
+    for (const e of data.edges) {
+      const s = byId(e.from), d = byId(e.to), ps = pos.get(s.id), pd = pos.get(d.id);
+      let x1, y1, x2, y2;
+      if (ps.row === pd.row) { const dir = pd.col > ps.col ? 1 : -1; x1 = cx(s) + dir * NW / 2; x2 = cx(d) - dir * NW / 2; y1 = y2 = cy(s); }
+      else { x1 = x2 = cx(s); y1 = cy(s) + NH / 2; y2 = cy(d) - NH / 2; }
+      const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
+      svg.appendChild(mk("line", { x1, y1, x2: x2 - (dx / len) * 5, y2: y2 - (dy / len) * 5, stroke: t.line, "stroke-width": 1.5, "marker-end": "url(#arrow)" }));
+    }
+    data.nodes.forEach((n) => {
+      const g = mk("g", { class: "fnode" }), nx = cx(n) - NW / 2, ny = cy(n) - NH / 2;
+      g.append(mk("rect", { x: nx, y: ny, width: NW, height: NH, rx: 11, fill: n.accent ? (t.accent[n.primitive] ?? t.node) : t.node, stroke: t.stroke }),
+        mk("text", { x: cx(n), y: cy(n) - 22, fill: t.tag, "font-size": 9.5, "letter-spacing": 1.2, "font-weight": "bold", "text-anchor": "middle" }, (n.primitive || "").toUpperCase()),
+        mk("text", { x: cx(n), y: cy(n) - 2, fill: t.text, "font-size": 16, "font-weight": "bold", "text-anchor": "middle" }, n.verb),
+        mk("text", { x: cx(n), y: cy(n) + 18, fill: t.muted, "font-size": 10.5, "text-anchor": "middle" }, n.detail));
       g.onclick = () => { sel(g); showVerb(n.verb, n.primitive); }; svg.appendChild(g);
     });
   }
 
-  const tabT = document.getElementById("tab-tree"), tabF = document.getElementById("tab-flow");
-  tabT.onclick = () => { tabT.classList.add("on"); tabF.classList.remove("on"); renderTree(); };
-  tabF.onclick = () => { tabF.classList.add("on"); tabT.classList.remove("on"); renderFlow(); };
-  renderTree();
+  const render = () => (view === "tree" ? renderTree() : renderFlow());
+  const tabT = document.getElementById("tab-tree"), tabF = document.getElementById("tab-flow"), tabTheme = document.getElementById("tab-theme");
+  tabT.onclick = () => { view = "tree"; tabT.classList.add("on"); tabF.classList.remove("on"); render(); };
+  tabF.onclick = () => { view = "flow"; tabF.classList.add("on"); tabT.classList.remove("on"); render(); };
+  tabTheme.onclick = () => { themeName = themeName === "light" ? "dark" : "light"; t = THEMES[themeName]; tabTheme.textContent = themeName === "light" ? "◐ dark" : "◐ light"; applyChrome(); render(); };
+
+  applyChrome();
+  render();
 </script>
 </body>
 </html>

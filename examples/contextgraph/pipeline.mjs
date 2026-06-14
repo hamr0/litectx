@@ -12,7 +12,8 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { LiteCtx, assemble as rawAssemble, compress as rawCompress } from "../../src/index.js";
-import { observe, VERBS_BY_PRIMITIVE, PRIMITIVES } from "./recorder.mjs";
+import { observe, VERBS_BY_PRIMITIVE, PRIMITIVES } from "../../src/index.js";
+import { svg, treeSvg } from "./render.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -38,8 +39,8 @@ ctx.stash("scratch:run1", "a large intermediate result parked out of the context
 const g = ctx.trace;
 const json = { ...g.json(), taxonomy: VERBS_BY_PRIMITIVE, primitives: PRIMITIVES };
 writeFileSync(join(here, "contextgraph-pipeline.json"), JSON.stringify(json, null, 2) + "\n");
-writeFileSync(join(here, "contextgraph-pipeline-flow.svg"), g.svg({ title: "litectx · contextgraph — flow (how it ran, in order)", subtitle: "verbs in execution order, captured live by observe()" }) + "\n");
-writeFileSync(join(here, "contextgraph-pipeline-tree.svg"), g.treeSvg() + "\n");
+writeFileSync(join(here, "contextgraph-pipeline-flow.svg"), svg(g, { theme: "light", title: "litectx · contextgraph — flow (how it ran, in order)", subtitle: "verbs in execution order, captured live by observe()" }) + "\n");
+writeFileSync(join(here, "contextgraph-pipeline-tree.svg"), treeSvg(g, { theme: "light" }) + "\n");
 
 console.log("verbs observed:", g.nodes.map((n) => n.verb).join(" → "));
 console.log(`wrote contextgraph-pipeline.json + -flow.svg + -tree.svg to ${here}`);

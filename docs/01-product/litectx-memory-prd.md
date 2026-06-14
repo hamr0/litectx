@@ -103,8 +103,10 @@ Over that one graph, v1 ships **two views**:
 | **impact** | "if I change *this*, what breaks and how risky?" | call/import edges → reference count → risk bucket |
 
 **Why this framing is load-bearing:** the graph is exposed as first-class public API, so
-the future `codegraph`/`contextgraph` (§9) are *additional views over the same data*, not
-re-extractions. Build "a search function" instead and you pay for the graph twice.
+`codegraph`/`contextgraph` are *additional views over the same data*, not re-extractions —
+**`contextgraph` now ships** (the `observe()`/`trace` CE-pipeline view; `codegraph`'s content
+view rides `getNode`/`related`/`impact`). See `docs/03-usage/graphs.md`. Build "a search
+function" instead and you pay for the graph twice.
 
 ### 2.1 Module architecture (the memory engine) — one substrate, scorers, views
 

@@ -3,10 +3,10 @@
     {
       "id": "n0",
       "verb": "index",
-      "detail": "159 files → graph",
+      "detail": "162 files → graph",
       "stats": {
-        "files": 159,
-        "added": 159,
+        "files": 162,
+        "added": 162,
         "updated": 0,
         "removed": 0,
         "unchanged": 0
@@ -29,11 +29,11 @@
     {
       "id": "n2",
       "verb": "assemble",
-      "detail": "budget 1116 tok",
+      "detail": "budget 1105 tok",
       "stats": {
-        "budget": 1116,
+        "budget": 1105,
         "inUnits": 8,
-        "inTokens": 2479
+        "inTokens": 2456
       },
       "col": 2,
       "row": 0
@@ -41,10 +41,10 @@
     {
       "id": "n3",
       "verb": "→ context window",
-      "detail": "1098 tok assembled",
+      "detail": "1075 tok assembled",
       "accent": "#1c3a2e",
       "stats": {
-        "tokens": 1098,
+        "tokens": 1075,
         "verbatim": 6,
         "compressed": 0,
         "dropped": 2
@@ -62,7 +62,7 @@
     {
       "from": "n1",
       "to": "n2",
-      "label": "8 units · 2479 tok"
+      "label": "8 units · 2456 tok"
     },
     {
       "from": "n2",

@@ -13,7 +13,8 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { LiteCtx, assemble } from "../../src/index.js"; // adopters: import from "litectx"
-import { ContextGraph } from "./recorder.mjs";
+import { ContextGraph } from "../../src/index.js";
+import { svg } from "./render.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -50,7 +51,7 @@ g.edge(assembleN, ctxN, `kept ${verbatim} · comp ${compressed} · drop ${fit.dr
 
 // ---- emit: the trace JSON (the primitive's output) + two renders ---------------------------------
 writeFileSync(join(here, "contextgraph.json"), JSON.stringify(g.json(), null, 2) + "\n");
-writeFileSync(join(here, "contextgraph.svg"), g.svg() + "\n");
+writeFileSync(join(here, "contextgraph.svg"), svg(g, { theme: "light" }) + "\n");
 writeFileSync(join(here, "contextgraph.md"), "# contextgraph (generated)\n\n```mermaid\n" + g.mermaid() + "\n```\n");
 
 console.log(g.mermaid());

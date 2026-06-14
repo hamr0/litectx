@@ -11,7 +11,8 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { assemble } from "../../src/index.js";
-import { ContextGraph } from "./recorder.mjs";
+import { ContextGraph } from "../../src/index.js";
+import { svg } from "./render.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -63,7 +64,8 @@ const bOut = g.node({ verb: "→ context", detail: `needle ${offNeedle ? "kept" 
 g.edge(bN, bOut, `kept ${off.units.length} · drop ${off.dropped.length}`);
 
 writeFileSync(join(here, "contextgraph-bench.json"), JSON.stringify(g.json(), null, 2) + "\n");
-writeFileSync(join(here, "contextgraph-bench.svg"), g.svg({
+writeFileSync(join(here, "contextgraph-bench.svg"), svg(g, {
+  theme: "light",
   title: "litectx · contextgraph — assemble VALUE bench (A/B)",
   subtitle: "the COMPRESS-rescue gate as a pipeline: one transcript, two assemble policies",
 }) + "\n");

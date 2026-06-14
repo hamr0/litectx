@@ -18,6 +18,7 @@ import { computeImpact } from "./impact.js";
 import { ftsMatch, keywords } from "./tokenize.js";
 import { Embedder, cosine } from "./embedder.js";
 import { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
+import { observe } from "./contextgraph.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 
@@ -104,6 +105,9 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {WriteAudit} [writeAudit]     optional standalone audit sink (the paper-trail half §10.1) —
  *                                         when set with `writeGate`, each write decision is recorded. A
  *                                         host-supplied `redact` on it scrubs secrets (litectx ships none).
+ * @property {boolean} [trace]             when true, the instance is returned wrapped in `observe()` — every
+ *                                         CE verb call is recorded into `ctx.trace` (a `ContextGraph`). Off
+ *                                         by default = the bare instance, no proxy. See `src/contextgraph.js`.
  */
 /** @typedef {import("./writegate.js").WriteGateLike} WriteGateLike */
 
@@ -163,6 +167,10 @@ export class LiteCtx {
     this.writeGate = config.writeGate ?? null;
     /** @type {WriteAudit | null} */
     this.writeAudit = config.writeAudit ?? null;
+
+    // contextgraph (opt-in): trace:true returns the instance wrapped in observe(), so every CE verb call
+    // is recorded into ctx.trace. Off by default = the bare instance, no proxy, zero overhead.
+    if (config.trace) return observe(this);
   }
 
   /** The embedder for this instance — injected, or lazily constructed when the tier is on. */
@@ -716,3 +724,4 @@ export { compress, COMPRESS_LEVELS } from "./compress.js";
 export { assemble, summaryWindow } from "./assemble.js";
 export { liteCtxAsStore } from "./memory-store.js";
 export { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
+export { observe, ContextGraph, PRIMITIVES, VERBS_BY_PRIMITIVE, PRIMITIVE } from "./contextgraph.js";

@@ -534,6 +534,12 @@ disabled, does. Build it when that caller is real, not before.
 > Compress / Isolate) as the trunk**. Everything related branches off, each with a 1–2 line
 > description. Every leaf is **marked** for what it means to litectx (build map below), so
 > this tree directly **drives the litectx PRD requirements** (doc #3).
+
+> **SHIPPED 2026-06-14 — `contextgraph`.** This trunk is now a runtime observability view: `observe(ctx)`
+> / `trace: true` records a live CE run into `ctx.trace`, and the coverage render lights the verbs used
+> against this exact Write/Select/Compress/Isolate map. The verb→primitive table ships as `PRIMITIVE` /
+> `VERBS_BY_PRIMITIVE` (data + agent-readable Mermaid in the lib; SVG + interactive viewer in
+> `examples/contextgraph`). Setup for both graphs: `docs/03-usage/graphs.md`.
 >
 > **Method (the whole point).** *Derive specs from the leaders in CE, not from guesses.*
 > Every claim is grounded in the primary sources the field's leaders published (Anthropic,
