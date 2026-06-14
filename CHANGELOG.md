@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-06-14
+
 ### Added
 - **`trim(units, policy)` — the transcript-truncation verb (R-C5).** Evicts old turns by recency and
   returns the **harvest-before-evict worklist**: where `assemble` produces a non-destructive per-step
@@ -14,7 +16,7 @@ All notable changes to this project are documented here, following
   (`maxTokens`) delegates wholesale to `assemble`'s fit (POC: `===` unit-for-unit); COUNT (`keepLastN`)
   is the net-new turn-granular policy no token budget can express when turn sizes vary. Both preserve
   the `pinned`/`atomic` invariants. This is the litectx half of the RT-2 harvest-before-evict interlock
-  (CE-PRD §8.2). API-only (§10.5). New export: `trim`. POC `poc/rc5-trim-poc.mjs`; `test/trim.test.js` (9).
+  (CE-PRD §8.2). API-only (§10.5). New export: `trim`. POC `poc/rc5-trim-poc.mjs`; `test/trim.test.js` (15).
 
 ## [0.15.0] — 2026-06-14
 
