@@ -111,7 +111,7 @@ Each claim is a committed bench, run as a local pre-push gate (corpora are local
 | memory recalls by *meaning*, not just words | `memory-bench` | paraphrase MRR **0.000 → 0.574** (embeddings on); exact/morph held |
 | impact never silently marks a used symbol "isolated" | `impact-bench` | **SAFETY = 0** invariant, exit-code gated |
 
-> **What we don't claim.** litectx scaffolds *search*; it doesn't replace the model's own intelligence. Live A/B runs found in-run recall/impact gives a strong model no net build-speed win (its bottleneck is reasoning, not finding) and a weaker model a consistent **nudge, not a rescue**. The measured edge is **durable cross-session memory** and **impact's safety invariant**. Full findings, including the nulls, are in [`docs/01-product/benches-prd.md`](docs/01-product/benches-prd.md).
+> **What we don't claim.** litectx scaffolds *search*; it doesn't replace the model's own intelligence. Live A/B runs found in-run recall/impact gives a strong model no net build-speed win (its bottleneck is reasoning, not finding) and a weaker model a consistent **nudge, not a rescue**. The measured edge is **durable cross-session memory** — on a fresh session it surfaces the right past decision into your top-few results where keyword search is blind (a shortlist, not a guaranteed #1 hit) — and **impact's safety invariant**. Full findings, including the nulls, are in [`docs/01-product/benches-prd.md`](docs/01-product/benches-prd.md).
 
 ## Where litectx fits
 
