@@ -78,6 +78,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (v0.10.0 — RT-3) |
 | **`compress(node, {level})`** — rank-tiered render (R-C7): `verbatim` / `signature` (header + doc, body elided) / `drop`; tree-sitter signature extraction, ~82% bytes saved with the doc kept | ✅ shipped (library API only, like `stash`/`peek`) |
 | **`await assemble(units, ctx)`** — RT-1 budget-fit a neutral transcript to a token budget: recency-anchored, `pinned`/`atomic` invariants, `dropped[]`-with-handle, cache-stable order; a would-be-dropped `code`/`doc` unit is recovered as its `compress()` signature (COMPRESS tier) | ✅ shipped (FIT + COMPRESS; SELECT POC-killed; async) |
+| **`await trim(units, policy)`** — R-C5 transcript-truncation: evict old turns by SIZE (`maxTokens`, delegates to `assemble`) or COUNT (`keepLastN`); returns the `harvest` worklist (dropped units, content intact) for harvest-before-evict | ✅ shipped (thin verb; `pinned`/`atomic`-safe; API-only) |
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
@@ -616,6 +617,24 @@ the **host owns the model** — litectx never calls one.
   retained the dropped-turn answers FIT-drop lost (**3/3 vs 0/3**). Integration with bareagent's real
   `summarize()` seam is pending its §23 build; the verb works today with any host-supplied summarizer.
 
+### `await trim(units, policy?)` → `Promise<{ units, dropped, harvest }>`
+The **transcript-truncation** verb (R-C5) — a free function (`import { trim } from "litectx"`). Where
+`assemble` produces a non-destructive per-step **view** (your canonical transcript is preserved), `trim`'s
+intent is **eviction**: drop old turns by a recency heuristic and hand back exactly what was dropped so you
+can **harvest-before-evict** (persist, then discard). A **thin verb** — it never reimplements the fit math.
+- `policy`: **`maxTokens`** (SIZE) — delegates wholesale to `assemble`'s recency-anchored fit (incl. the
+  COMPRESS rescue tier); or **`keepLastN`** (COUNT) — keep the N most-recent un-pinned **items** (an
+  `atomic` group counts as one item). `maxTokens` wins if both are given; neither set → no-op (keep all).
+- Both policies preserve the invariants: **`pinned` never drops**, **`atomic` groups are kept/dropped
+  whole** (an atomic group with any pinned member is force-kept).
+- **The eviction contract:** `harvest` is the array of dropped units **with content intact** (same ids as
+  `dropped`) — the worklist to persist *before* you remove those turns from your canonical transcript. A
+  unit `assemble` down-tiered to a COMPRESS signature stays in `units` (still present) → never harvested.
+- COUNT is genuinely distinct from a budget: no `maxTokens` reproduces "keep the last N turns" once turn
+  sizes vary (`poc/rc5-trim-poc.mjs`, C2a). Library API only.
+- Typical interlock: `const { units, harvest } = await trim(msgs, { keepLastN: 12 }); for (const u of
+  harvest) await lc.remember(u.id, u.content, { kind: "episode" }); /* then drop the dropped ids */`.
+
 ### `liteCtxAsStore(lc, opts?)` → a host `Store`
 Mount an indexed `LiteCtx` as a host's swappable memory backend — the four-method `Store` shape
 (`{ store, search, get, delete }`) a runtime like bareagent's `Memory` expects — so a substring-scan
@@ -646,6 +665,7 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 - `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
 - `assemble(units, { budget, task })` — RT-1 budget-fit a neutral transcript to a token budget (the section above).
 - `summaryWindow(units, { budget, summarize, summaryKeep, summaryRole, summaryId })` — R-C6 rolling-summary read-path over `assemble` (the section above).
+- `trim(units, { maxTokens, keepLastN })` — R-C5 transcript-truncation: evict old turns + return the `harvest` worklist (the section above).
 - `liteCtxAsStore(lc, { kind })` — mount litectx as a host `Store` (the section just above).
 - `toWriteAction(id, text, { kind, provenance, meta, injectionRisk })` → the pure write-gate emitter
   (the `{ type: "memory.write", … }` action shape); `WriteAudit` → standalone JSONL audit sink (ships no

@@ -228,3 +228,102 @@ export async function summaryWindow(units, ctx = {}) {
   }
   return { units: result.units, dropped, tokens: result.tokens };
 }
+
+/**
+ * @typedef {Object} TrimPolicy
+ * @property {number} [maxTokens]   SIZE policy — fit the running transcript to a token budget. Pure
+ *                                  delegation to {@link assemble}'s recency-anchored fit (incl. its
+ *                                  COMPRESS rescue tier); trim never reimplements that math.
+ * @property {number} [keepLastN]   COUNT policy — keep the N most-recent un-pinned ITEMS (an atomic
+ *                                  group counts as one item, kept/dropped whole). A turn-granular
+ *                                  heuristic a token budget cannot express when turn sizes vary.
+ *                                  Ignored when `maxTokens` is set (size takes precedence).
+ */
+
+/**
+ * @typedef {Object} TrimResult
+ * @property {Unit[]} units                                   kept units, ORIGINAL order (cache-stable)
+ * @property {{ id: string, reason: "size"|"count" }[]} dropped   evicted turns, in original order
+ * @property {Unit[]} harvest                                 the dropped units WITH content — the
+ *                                  harvest-before-evict worklist: persist these (e.g. `remember`)
+ *                                  BEFORE discarding them from the canonical transcript. `harvest`
+ *                                  carries the same ids as `dropped`; both restore by id.
+ */
+
+/**
+ * trim (R-C5) — the transcript-truncation seam: drop OLD turns by a recency/size heuristic and hand back
+ * exactly what was dropped, content intact, so the caller can harvest-before-evict (RT-2 interlock). Unlike
+ * {@link assemble} (a non-destructive per-step VIEW, canonical transcript preserved), trim's intent is
+ * EVICTION — the caller permanently removes the dropped turns from its running transcript afterward; the
+ * `harvest` worklist is what makes that safe (you cannot drop history you have not persisted).
+ *
+ * Two policies, one eviction contract. **SIZE** (`maxTokens`) delegates wholesale to assemble's fit — the
+ * shipped, POC-proven recency/pinned/atomic mechanic, reused not rebuilt (POC C1). **COUNT** (`keepLastN`)
+ * is the net-new knob: keep the N freshest un-pinned items, a turn-granular drop no budget reproduces when
+ * sizes differ (POC C2a). Both never split an `atomic` group and never drop a `pinned` unit (an atomic
+ * group with any pinned member is force-kept whole). Neither policy set → no-op (keep all). Async only to
+ * share assemble's signature on the size path. POC: `poc/rc5-trim-poc.mjs`.
+ *
+ * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
+ * @param {TrimPolicy} [policy]
+ * @returns {Promise<TrimResult>}
+ */
+export async function trim(units, policy = {}) {
+  if (!Array.isArray(units)) throw new TypeError("trim: units must be an array");
+
+  // SIZE — pure delegation. assemble owns recency/pinned/atomic + the COMPRESS rescue; trim only adds the
+  // eviction contract (full-content `harvest` for the dropped set). A unit assemble COMPRESSED to a
+  // signature stays in `units` (still present, not evicted) → never harvested.
+  if (Number.isFinite(policy.maxTokens)) {
+    const r = await assemble(units, { budget: policy.maxTokens });
+    const lost = new Set(r.dropped.map((d) => d.id));
+    return {
+      units: r.units,
+      dropped: r.dropped.map((d) => ({ id: d.id, reason: "size" })),
+      harvest: units.filter((u) => u && lost.has(u.id)),
+    };
+  }
+
+  // COUNT — keep the N most-recent un-pinned ITEMS. Neither maxTokens nor a valid keepLastN → no-op.
+  const N = Number.isInteger(policy.keepLastN) && /** @type {number} */ (policy.keepLastN) >= 0
+    ? /** @type {number} */ (policy.keepLastN) : null;
+  if (N === null) return { units: units.filter(Boolean), dropped: [], harvest: [] };
+
+  // pinned always kept; an atomic group with ANY pinned member is force-kept whole (never split).
+  const keep = new Set();
+  /** @type {Map<string, string[]>} */ const atomicOf = new Map();
+  for (const u of units) {
+    if (!u) continue;
+    if (u.pinned) keep.add(u.id);
+    if (u.atomic) { let a = atomicOf.get(u.atomic); if (!a) atomicOf.set(u.atomic, (a = [])); a.push(u.id); }
+  }
+  for (const m of atomicOf.values()) if (m.some((id) => keep.has(id))) for (const id of m) keep.add(id);
+
+  // Collapse the remaining un-kept units into items (atomic group = one item; recency = newest member),
+  // then keep the N freshest. Mirrors assemble's item model so behavior can't drift between the two.
+  /** @type {{ ids: string[], recency: number }[]} */ const items = [];
+  /** @type {Map<string, { ids: string[], recency: number }>} */ const groups = new Map();
+  units.forEach((u, i) => {
+    if (!u || keep.has(u.id)) return;
+    if (u.atomic) {
+      let g = groups.get(u.atomic);
+      if (!g) { g = { ids: [], recency: i }; groups.set(u.atomic, g); items.push(g); }
+      g.ids.push(u.id); g.recency = i;
+    } else {
+      items.push({ ids: [u.id], recency: i });
+    }
+  });
+  items.sort((a, b) => a.recency - b.recency);
+  for (const it of N === 0 ? [] : items.slice(-N)) for (const id of it.ids) keep.add(id);
+
+  // Emit in ORIGINAL order; every non-kept unit is an eviction → reported in `dropped` and `harvest`.
+  /** @type {Unit[]} */ const kept = [];
+  /** @type {{ id: string, reason: "count" }[]} */ const dropped = [];
+  /** @type {Unit[]} */ const harvest = [];
+  for (const u of units) {
+    if (!u) continue;
+    if (keep.has(u.id)) kept.push(u);
+    else { dropped.push({ id: u.id, reason: "count" }); harvest.push(u); }
+  }
+  return { units: kept, dropped, harvest };
+}

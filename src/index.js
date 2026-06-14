@@ -721,7 +721,7 @@ export { Store } from "./store.js";
 export { splitIdent, keywords, ftsMatch } from "./tokenize.js";
 export { Embedder, cosine } from "./embedder.js";
 export { compress, COMPRESS_LEVELS } from "./compress.js";
-export { assemble, summaryWindow } from "./assemble.js";
+export { assemble, summaryWindow, trim } from "./assemble.js";
 export { liteCtxAsStore } from "./memory-store.js";
 export { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
 export { observe, ContextGraph, PRIMITIVES, VERBS_BY_PRIMITIVE, PRIMITIVE } from "./contextgraph.js";
