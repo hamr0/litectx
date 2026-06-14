@@ -121,11 +121,12 @@ knowledge (in-weights) + reading a small local contract**, not *finding* the fil
 calls cost their own tokens. So the honest scope of the in-run claim is narrower than "stays coherent
 on long tasks": litectx accelerates *file-finding*, which is rarely the long pole.
 
-This does **not** condemn litectx — it relocates its value. The two places not yet refuted: **(a)
-cross-session memory** (F5 — OFF has no mechanism at all), and **(b) impact's safety guarantee** (the
-"never a silent isolated → safe" invariant is a *correctness* property, not a speed one, so a
-speed-based A/B can't measure it). A genuinely huge repo where context *physically* can't be held may
-still favor recall, but that's blocked by **F2** (oracle) and not chased per the "don't chase" stance.
+This does **not** condemn litectx — it relocates its value. The two places it was relocated to: **(a)
+cross-session memory** (OFF has no mechanism at all — now run, **F5**: a qualified shortlist win, top-5
+70% vs 20%, but not a top-1 bullseye), and **(b) impact's safety guarantee** (the "never a silent
+isolated → safe" invariant is a *correctness* property, not a speed one, so a speed-based A/B can't
+measure it — un-refuted). A genuinely huge repo where context *physically* can't be held may still favor
+recall, but that's blocked by **F2** (oracle) and not chased per the "don't chase" stance.
 
 ## F6 — Model-strength dependence: the Haiku re-run (the sign flips, but it's a nudge)
 
@@ -182,14 +183,50 @@ pays off when the fix is something the model can *execute once reminded* (a mech
 Y"), not when the fix is itself a hard algorithm (the emphasis edge cases are the latter). The test
 could have shown a rescue; it didn't — it was able to fail, and did.
 
-## F5 — Untested: the OTHER half of long-running — cross-session memory
+## F5 — Cross-session memory: RUN (2026-06-14) — a *qualified* win (shortlist yes, top-1 no)
 
-All three live runs measured **in-run** coherence. The second long-running claim — on a *fresh*
-session, recall the **right prior decision by meaning** among many (OFF structurally cannot) — is where
-litectx should win close to by construction, and is now the **decisive evidence to collect** (it is the
-one regime the in-run A/Bs could not test, because OFF has no cross-session mechanism). Design rule to
-avoid a
-strawman: the win must be *"retrieve the right memory among many decoys,"* not *"has a notes file."*
+The one regime the in-run A/Bs could not test (OFF has no cross-session mechanism) is now **run**, not
+just designed. Harness: `poc/cross-session-memory-poc.mjs` — **14 real prior decisions harvested
+verbatim-faithfully from litectx's own memory log** (uncrafted), queried by **10 fresh-session
+paraphrases** with an **asserted zero-keyword-overlap audit** (the memory-bench discipline; the audit
+caught 2 leaks on the first pass and the run aborted until they were true paraphrases). The corpus
+**deliberately packs near-neighbour decoys** — three "a ranking signal was falsified → ships surfaced,
+not scored" siblings (`no-confidence-label`, `edit-activation-zero`, `trust-not-scored`) plus generic
+infra decisions — so a vague paraphrase can land on the wrong sibling. ON = litectx semantic recall;
+OFF = BM25-only (the "structurally cannot" arm). Built to be able to FAIL — and it half-did.
+
+| Arm | P@1 | P@3 | P@5 | MRR |
+|---|---|---|---|---|
+| **OFF** (BM25 lexical) | 0% | 10% | 20% | 0.070 |
+| **ON** (semantic) | **0%** | **40%** | **70%** | **0.268** |
+
+**Verdict — two findings, opposite signs:**
+
+- **The strong claim ("recall THE right decision at #1 among decoys") is FALSIFIED here.** ON P@1 = 0%
+  — the semantic arm *never* ranks the exact target first. The near-neighbour siblings win the top slot
+  on genuine proximity (not an embedding artifact): `trust-not-scored` absorbs the confidence /
+  recall-value / edit-activation queries — all genuinely *"should signal X affect result ordering,"* its
+  own theme — and the `storage` decision (which literally names "vector tier… float arrays") legitimately
+  pulls the embeddings query. **Top-1 retrieval degrades exactly when prior decisions cluster
+  semantically — and real decision logs cluster** (you make many related calls).
+
+- **The realistic claim ("surface the right decision into the shortlist the agent reads") HOLDS, and is
+  a large win.** At top-5 — what an agent actually consumes from a ranked recall — ON hits 70% vs OFF's
+  20% (Δ +50 pts); top-3 40% vs 10% (Δ +30 pts); MRR +0.198. **OFF is at chance** (top-3 10%, MRR at the
+  ~1/N floor; 7/10 pure misses; its few hits are stopword noise, audit confirmed clean), so this is the
+  one regime where **OFF genuinely cannot and ON can** — the cross-session mechanism is real. The lift
+  comes from the **slice-11 cosine-nomination path** (BM25 returns ~nothing on zero-overlap paraphrases;
+  the KNN nomination is what brings the targets into the pool) — so this also corroborates `memory-bench`
+  (para 0.000 → 0.574) on **real, uncrafted decisions under adversarial decoys**, not a curated dataset.
+
+**Net:** F5 is **not** the by-construction blowout the pitch implied. It is a **shortlist win, not a
+bullseye** — litectx surfaces the right past decision into the top-5 where lexical retrieval is blind,
+but does not reliably rank it #1 among semantically similar decisions. This is the *same* through-line as
+F4/F6: **litectx surfaces and narrows; it does not hand back a single perfect answer.** Honest scope:
+the cross-session value is "the agent gets the right decision in front of it among ~5," which is real and
+OFF-impossible — provided the host reads the shortlist, not just hit #1. *(Caveat: n=10 queries,
+directional; one embedding model — the default MiniLM. A stronger model could lift P@1, but the
+decoy-clustering ceiling is structural, not just model-limited.)*
 
 ---
 
@@ -315,7 +352,8 @@ gate. It justifies the automation ramp (Part B) and headlines a release note; it
 > **Run twice already (2026-06-13) — see [F3](#f3--two-live-ab-trajectory-runs-safe-copy-worktree-harness).**
 > The live ON/OFF trajectory harness exists and works on the safe-copy worktree model; `assemble`
 > (short) and `impact` (long, n=3) have both been run. Result so far: **no measurable in-run lift**
-> (F4). The remaining trajectory evidence worth collecting is the **cross-session memory** half (F5).
+> (F4). The **cross-session memory** half (F5) has now also been run (`poc/cross-session-memory-poc.mjs`,
+> 2026-06-14) — a **shortlist win, not a bullseye**: top-5 70% vs 20% (OFF at chance), but P@1 0%.
 
 ## A7. The existing bench suite (what `realwork-bench` joins)
 
