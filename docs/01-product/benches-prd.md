@@ -276,7 +276,12 @@ aurora-HARD −0.099. Using that column as "ON" would import a dead, repo-depend
 spurious win-or-loss. **OFF disables only the graph/memory/compression features; everything else is
 identical.** (A `[[verify-shipped-against-poc-data]]` harness confound, caught before it was baked in.)
 
-## A2b. CE read/write verbs shipped since this PRD — what to bench, what to keep OUT (suggestion, 2026-06-14)
+## A2b. CE read/write verbs shipped since this PRD — what to bench, what to keep OUT (BUILT 2026-06-14)
+
+> **Status: built.** `bench:assemble` (`poc/assemble-bench.mjs`) + `bench:summary`
+> (`poc/summarywindow-bench.mjs`) ship as durable VALUE gates (see A7). The write-gate emitter stays out
+> (covered by unit + seam-contract tests). The structural-proxy idea below is what `bench:assemble`
+> implements; `summaryWindow` got its own gate (not just a replay row) on the same stub-summarizer basis.
 
 Three CE verbs shipped after A2 was written (`assemble` FIT+COMPRESS, **`summaryWindow`** R-C6, the
 **write-gate emitter**). Slotting them into the bench correctly — without smuggling in things that don't
@@ -367,6 +372,15 @@ ON/OFF columns). The durable suite today:
 | `impact-bench.mjs` | `bench:impact` | impact E2E — **zero silent-isolated** SAFETY invariant + isolation accuracy; caller-recall reported, not gated (over-count is safe) | impact-aurora / impact-mcprune / impact-ts (local) | **SAFETY = 0** + isolation match set the exit code |
 | `memory-bench.mjs` | `bench:memory` | written-memory recall quality by category | memory-facts (pure-memory — **runs anywhere**) | exact **floored**; morph/para **pinned** (red-before-fix); `--embeddings` adds emb-floors when it runs |
 | `access-bench.mjs` | _(manual)_ | does edit-activation **lift or pollute** recall rank | aurora + gitdone (local) | SAFETY: no swept weight may drop below the recall baseline — **ships at zero** (surfaced, not scored) |
+| `assemble-bench.mjs` | `bench:assemble` | `assemble()` VALUE — the **COMPRESS tier rescues** a needed code unit FIT would drop, + the structural invariants (pinned/atomic/no-loss/no-overflow/order) | _none — synthetic fixtures (pure, CI-capable)_ | **floor** needed-symbol retention ≥ 1.0 via `compressed:true`; **expected** FIT-only baseline = 0 (red-before-regression) |
+| `summarywindow-bench.mjs` | `bench:summary` | `summaryWindow()` VALUE — the **rolling summary retains** dropped-turn decisions (stub summarizer) + fold/restorable/never-overflow/fallback contract | _none — synthetic fixtures + stub summarizer (pure, CI-capable)_ | **floor** retention ≥ FIT and = 3/3; **expected** FIT-drop = 0/3 |
+
+> **Built 2026-06-14 (A2b).** `assemble-bench` + `summarywindow-bench` are the two new durable VALUE gates
+> agreed in A2b — they guard each verb's *reason to exist* (beats the naive FIT-drop baseline) where the
+> unit tests guard invariants. Both are **pure/deterministic/offline/free** (synthetic fixtures; a STUB
+> extractive summarizer, never a live model — the live-model value is already proven in
+> `poc/rc6-summarywindow-poc.mjs`), so unlike the corpus benches they are **CI-capable** but kept as local
+> `npm run` gates for suite parity. The redundant `realwork-bench` (VB-1..VB-7) is **not** built — F1.
 
 Plus two research/one-time harnesses kept for the record:
 

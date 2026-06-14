@@ -32,6 +32,8 @@
     "bench": "node poc/bench-lib.mjs",
     "bench:impact": "node poc/impact-bench.mjs",
     "bench:memory": "node poc/memory-bench.mjs",
+    "bench:assemble": "node poc/assemble-bench.mjs",
+    "bench:summary": "node poc/summarywindow-bench.mjs",
     "bench:ablation": "node poc/run.mjs aurora && node poc/run.mjs gitdone"
   },
   "dependencies": {
