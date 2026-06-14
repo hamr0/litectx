@@ -1,0 +1,65 @@
+{
+  "nodes": [
+    {
+      "id": "n0",
+      "verb": "index",
+      "detail": "154 files → graph",
+      "stats": {
+        "files": 154,
+        "added": 154,
+        "updated": 0,
+        "removed": 0,
+        "unchanged": 0
+      }
+    },
+    {
+      "id": "n1",
+      "verb": "recall",
+      "detail": "8 code hits",
+      "stats": {
+        "query": "assemble budget fit compress signature drop tier",
+        "kind": "code",
+        "hits": 8
+      }
+    },
+    {
+      "id": "n2",
+      "verb": "assemble",
+      "detail": "budget 1154 tok",
+      "stats": {
+        "budget": 1154,
+        "inUnits": 8,
+        "inTokens": 2564
+      }
+    },
+    {
+      "id": "n3",
+      "verb": "→ context window",
+      "detail": "1115 tok assembled",
+      "accent": "#1c3a2e",
+      "stats": {
+        "tokens": 1115,
+        "verbatim": 5,
+        "compressed": 1,
+        "dropped": 2
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "query the index"
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "8 units · 2564 tok"
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": "kept 5 · comp 1 · drop 2"
+    }
+  ]
+}

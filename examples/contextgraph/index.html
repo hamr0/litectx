@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>litectx — contextgraph (CE pipeline view)</title>
+<!--
+  contextgraph: the PIPELINE view (sibling of ../graph-view, which maps the CONTENT graph).
+  Nodes are the CE verbs a design composes; edges are the data handed between them. Generated from a
+  REAL run by contextgraph.mjs (re-run it to refresh contextgraph.json). Self-contained, zero deps.
+-->
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0d1117; color:#adbac7; font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header { padding:18px 24px 6px; }
+  h1 { margin:0; font-size:16px; color:#f0f6fc; }
+  p.sub { margin:4px 0 0; color:#636e7b; font-size:12px; }
+  #wrap { display:flex; gap:18px; padding:14px 24px 24px; align-items:flex-start; flex-wrap:wrap; }
+  svg { background:#0d1117; border:1px solid #21262d; border-radius:10px; min-width:760px; }
+  .node rect { fill:#21262d; stroke:#444c56; cursor:pointer; transition:stroke .15s, fill .15s; }
+  .node.out rect { fill:#1c3a2e; }
+  .node:hover rect, .node.sel rect { stroke:#539bf5; }
+  .node .verb { fill:#f0f6fc; font-weight:bold; font-size:15px; }
+  .node .detail { fill:#909dab; font-size:10.5px; }
+  .elabel { fill:#adbac7; font-size:10px; }
+  .epill { fill:#161b22; stroke:#30363d; }
+  #detail { flex:1; min-width:240px; background:#161b22; border:1px solid #21262d; border-radius:10px; padding:14px 16px; }
+  #detail h2 { margin:0 0 8px; font-size:14px; color:#f0f6fc; }
+  #detail .hint { color:#636e7b; }
+  #detail table { border-collapse:collapse; font-size:12.5px; }
+  #detail td { padding:2px 10px 2px 0; vertical-align:top; }
+  #detail td.k { color:#768390; }
+  #detail td.v { color:#adbac7; white-space:pre-wrap; word-break:break-word; }
+</style>
+</head>
+<body>
+<header>
+  <h1>litectx · contextgraph</h1>
+  <p class="sub">A context-engineering <b>pipeline</b>, generated from a real run — verbs are nodes, the data handed between them rides on the edges. (Content-graph view: <code>../graph-view</code>.) Click a node for its stats.</p>
+</header>
+<div id="wrap">
+  <svg id="svg"></svg>
+  <div id="detail"><p class="hint">Click a verb node to see what it produced.</p></div>
+</div>
+<script type="module">
+  const SVG = "http://www.w3.org/2000/svg";
+  const data = await fetch("./contextgraph.json").then((r) => r.json());
+  const svg = document.getElementById("svg");
+
+  const NW = 212, NH = 68, GAP = 168, PAD = 28, CY = 104, H = 184;
+  const W = PAD * 2 + data.nodes.length * NW + (data.nodes.length - 1) * GAP;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", W); svg.setAttribute("height", H);
+  const xOf = (i) => PAD + i * (NW + GAP);
+  const idx = (id) => data.nodes.findIndex((n) => n.id === id);
+  const mk = (tag, attrs, text) => { const e = document.createElementNS(SVG, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+
+  // arrowhead
+  const defs = mk("defs"); const m = mk("marker", { id: "arrow", markerWidth: 10, markerHeight: 10, refX: 7, refY: 3, orient: "auto" });
+  m.appendChild(mk("path", { d: "M0,0 L7,3 L0,6 Z", fill: "#768390" })); defs.appendChild(m); svg.appendChild(defs);
+
+  // edges
+  for (const e of data.edges) {
+    const x1 = xOf(idx(e.from)) + NW, x2 = xOf(idx(e.to)), mx = (x1 + x2) / 2;
+    svg.appendChild(mk("line", { x1, y1: CY, x2: x2 - 5, y2: CY, stroke: "#768390", "stroke-width": 1.5, "marker-end": "url(#arrow)" }));
+    const lw = e.label.length * 6.1 + 14;
+    svg.appendChild(mk("rect", { class: "epill", x: mx - lw / 2, y: CY - 24, width: lw, height: 17, rx: 5 }));
+    svg.appendChild(mk("text", { class: "elabel", x: mx, y: CY - 12, "text-anchor": "middle" }, e.label));
+  }
+
+  // nodes
+  const nodeEls = new Map();
+  data.nodes.forEach((n, i) => {
+    const g = mk("g", { class: "node" + (n.accent ? " out" : "") });
+    const nx = xOf(i);
+    g.appendChild(mk("rect", { x: nx, y: CY - NH / 2, width: NW, height: NH, rx: 11 }));
+    g.appendChild(mk("text", { class: "verb", x: nx + NW / 2, y: CY - 6, "text-anchor": "middle" }, n.verb));
+    g.appendChild(mk("text", { class: "detail", x: nx + NW / 2, y: CY + 15, "text-anchor": "middle" }, n.detail));
+    g.onclick = () => select(n.id);
+    svg.appendChild(g); nodeEls.set(n.id, g);
+  });
+
+  function select(id) {
+    const n = data.nodes.find((x) => x.id === id);
+    for (const [k, el] of nodeEls) el.classList.toggle("sel", k === id);
+    const rows = Object.entries(n.stats || {}).map(([k, v]) =>
+      `<tr><td class="k">${k}</td><td class="v">${typeof v === "object" ? JSON.stringify(v) : v}</td></tr>`).join("");
+    document.getElementById("detail").innerHTML =
+      `<h2>${n.verb}</h2><div>${n.detail}</div>` + (rows ? `<table>${rows}</table>` : `<p class="hint">no stats recorded</p>`);
+  }
+  select(data.nodes[data.nodes.length - 1].id); // open on the assembled context
+</script>
+</body>
+</html>
