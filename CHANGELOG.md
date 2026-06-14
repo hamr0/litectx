@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-14
+
 ### Added
 - **contextgraph — the CE-pipeline observability primitive.** `observe(ctx)` wraps a `LiteCtx` so every
   CE verb call is recorded LIVE into `ctx.trace` — a pipeline graph whose nodes are the verbs a design
