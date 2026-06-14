@@ -155,6 +155,33 @@ of a task is *locate* vs *do*; for coding, *do* dominates. **Corollary (untested
 bottleneck genuinely *is* finding (needle in a large unfamiliar repo, simple edit) on a weak model is
 where a category-difference — ON solves, OFF can't — would most plausibly appear.
 
+## F7 — Error-keyed memory: a design pattern test (knowing ≠ executing)
+
+Direct test of the "litectx helps with *known failures*" thesis, using existing primitives (no new
+one): seed litectx **memory** with the conceptual emphasis/strikethrough *pitfalls* (rule-of-3,
+multi-marker nesting, flanking, underscore intra-word, odd strikethrough, delimiter-record fields —
+*knowledge, not the solution code*) and have Haiku **recall them by the failing case** (`recall
+"<error>" --kind fact`). Pre-checked that a seeded lesson is retrievable by a *paraphrased* error and
+ranks above decoys. Third arm, n=3, vs the F6 baselines:
+
+| Arm (Haiku, n=3) | remaining failures | mean | spread |
+|---|---|---|---|
+| OFF (grep) | 23 · 35 · 81 | 46.3 | 23–81 |
+| ON-code (recall over repo) | 16 · 30 · 60 | 35.3 | 16–60 |
+| **ON-mem (recall + seeded failure-memory)** | **30 · 35 · 30** | **31.7** | **30–35** |
+
+Each ON-mem agent **genuinely queried the memory** (verified in transcripts: 3–6 recall calls, 4
+`--kind fact` queries each) and named the lessons as "instrumental." Findings: **(1) No rescue —
+knowing ≠ executing.** Every run plateaued at ~30, failing the *exact* edge cases the recalled lessons
+described; surfacing the known-failure lesson did not convert into fixing it, because the weak model's
+bottleneck is execution skill, not knowledge access. **(2) The one real benefit is variance collapse**
+— ON-mem clusters tightly at 30–35 where ON-code (16–60) and OFF (23–81) swing wildly: the memory
+**floors the downside** (no 60/81 disasters) but also **caps the upside** (no 16). So error-keyed
+memory is a **stabilizer, not a capability boost**. **(3) Scope of the "known-failures" value:** it
+pays off when the fix is something the model can *execute once reminded* (a mechanical "call X before
+Y"), not when the fix is itself a hard algorithm (the emphasis edge cases are the latter). The test
+could have shown a rescue; it didn't — it was able to fail, and did.
+
 ## F5 — Untested: the OTHER half of long-running — cross-session memory
 
 All three live runs measured **in-run** coherence. The second long-running claim — on a *fresh*
