@@ -904,3 +904,32 @@ PLUGGABLE (`.check`-duck-typed — bareguard when embedded, any gate standalone)
 passthrough that accepts a host redactor. A standalone built-in FLOOR gate is DEFERRED (speculative — no
 standalone consumer needs gating without bareguard yet; trip-wire: build when one does). `memory.inject`
 is reserved in the type union but has NO producer (SELECT killed) → not minted.
+
+---
+
+## R-C6 summaryWindow windowing-policy — GATE: PASS (2026-06-14)
+
+`poc/rc6-summarywindow-poc.mjs` — the riskiest assumption, not the plumbing: **at an EQUAL token budget,
+does last-N-verbatim + rolling-summary-of-older retain task-relevant answers that plain FIT-drop loses?**
+Real components: the SHIPPED `assemble` runs the FIT-drop arm AND the final fit of the summary arm; a live
+`claude -p` (tools OFF) is both the summarizer (stand-in for bareagent's `summarize()`) and the answerer.
+
+**Result (equal budget ≈372 tok, last-N=4, 20-turn session):** summaryWindow **5/5** probes vs FIT-drop
+**1/5**; on the discriminator (probes whose answer lives in a FIT-dropped turn) **summaryWindow 4/4 vs
+FIT 0/4**; the recent-turn control passes both (harness valid). → **build R-C6** (wire bareagent's
+`summarize()` into the splice; splice = the shipped restorable COMPRESS path, summarized turns recoverable by id).
+
+**Falsifiable / honest (the test can fail, and first did):**
+- The summarizer gets a GENERIC "summarize concisely" prompt — NOT told which facts to keep — so a fact it
+  drops is a real miss. Probes deliberately mix salient decisions (Postgres-for-joins, MAX_RETRIES=5) with
+  incidental details (STAGING_PG_URL, the 02:00 cron time); the summary retained all four here.
+- **Confound caught + fixed, not glossed (prove-don't-assert):** first run scored summaryWindow 0/5 with
+  `summary survived the fit: false` — the summary (149 tok) exceeded a budget (141 tok) set from last-N
+  ALONE, so `assemble` dropped the summary itself and the arm was empty. Fixed by computing the budget AFTER
+  the summary (`tok(summary)+Σtok(recent)+headroom`) so the same budget governs both arms, and lengthening
+  the older block so FIT's summary-sized slack can't buy back the early fact-turns. A label bug (`turn:22`
+  on a 20-turn transcript) also leaked the control into the discriminator (stray `fit 1/4`); fixed → 0/4.
+- **Limits:** n=5 probes, one session, one summarizer model; the win is conditional on summary quality —
+  a lossier summarizer would drop incidental facts (the honest tradeoff the build must surface). Integration
+  needs bareagent's real `summarize()` on `ctx`; this POC stands in with a live model and does NOT prove the
+  seam, only the policy's value.
