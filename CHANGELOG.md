@@ -6,6 +6,15 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Changed
+- **README rewritten around the context-engineering framing.** Adopts the bareagent README skeleton
+  (banner → quick start → *What's inside* → *Surfaces* → *Recipes* → *Validation* → ecosystem), groups
+  the ~20 public verbs into five buckets, and adds a grounded **Validation** table (the bench gates) with
+  an honest *"what we don't claim"* scope note (in-run navigation is a nudge, not a rescue; the measured
+  edge is durable cross-session memory + impact's safety invariant). Removed the per-release status dump
+  from the intro — that history lives in this file. Logo simplified to a CE-forward wordmark
+  (`write · select · compress · isolate`). Docs only — no code or API change.
+
 ## [0.14.0] — 2026-06-14
 
 ### Added
