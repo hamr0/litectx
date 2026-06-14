@@ -536,6 +536,16 @@ export class LiteCtx {
     }
     const by = opts.by ?? "agent";
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
+    // write-gate (§10.1) — when wired, check BEFORE any side effect (no embedding spent, no episode prune,
+    // no write), so a denied write is a true no-op. litectx states the SOURCE (`provenance:by`) + passes
+    // through an optional guardrails `injectionRisk` shape flag; the gate renders deny/ask. A deny throws
+    // and nothing persists (the §6 line: litectx never makes the content judgment, only carries the facts).
+    if (this.writeGate) {
+      const action = toWriteAction(id, text, { kind, provenance: by, meta: opts.meta, injectionRisk: opts.injectionRisk });
+      const decision = await this.writeGate.check(action);
+      if (this.writeAudit) this.writeAudit.emit(action, decision, Date.now());
+      if (decision.outcome === "deny") throw new WriteDeniedError(id, decision);
+    }
     const format = opts.format ?? (kind === "doc" ? "md" : "text");
     const occurredAt = kind === "episode" ? opts.occurredAt ?? Date.now() : null;
     // RT-3 #3: serialize the opaque caller dict to JSON once, here — the store holds bytes, the facade
@@ -548,16 +558,6 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    // write-gate (§10.1) — when wired, emit a gate-able action and check it BEFORE the write commits.
-    // litectx states the SOURCE (`provenance:by`) + passes through an optional guardrails `injectionRisk`
-    // shape flag; the gate renders deny/ask. A deny throws and the write does not persist (the §6 line:
-    // litectx never makes the content judgment, only carries the facts the gate decides on).
-    if (this.writeGate) {
-      const action = toWriteAction(id, text, { kind, provenance: by, meta: opts.meta, injectionRisk: opts.injectionRisk });
-      const decision = await this.writeGate.check(action);
-      if (this.writeAudit) this.writeAudit.emit(action, decision, Date.now());
-      if (decision.outcome === "deny") throw new WriteDeniedError(id, decision);
-    }
     this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding });
   }
 

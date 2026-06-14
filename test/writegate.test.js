@@ -64,6 +64,18 @@ test("deny BLOCKS the write — it does not persist, and WriteDeniedError carrie
   assert.equal(lc.get("fact:tainted"), null, "denied write must not be persisted");
 });
 
+test("deny is a true no-op — a denied episode write does not prune prior episodes", async () => {
+  const lc = fresh();
+  // Seed a stale episode (backdated well past the active window); honored on its own write.
+  await lc.remember("ep:old", "earlier episode", { kind: "episode", occurredAt: 1 });
+  assert.ok(lc.get("ep:old"), "seeded stale episode should persist");
+  // A denying gate must throw BEFORE pruneStaleEpisodes runs, so the stale episode survives.
+  // (Regression: pre-hoist, the prune ran ahead of the gate and evicted it on a denied write.)
+  lc.writeGate = { check: async () => ({ outcome: "deny", rule: "test" }) };
+  await assert.rejects(() => lc.remember("ep:new", "blocked", { kind: "episode" }), WriteDeniedError);
+  assert.ok(lc.get("ep:old"), "denied write must not prune prior episodes — deny is a true no-op");
+});
+
 test("allow lets the write commit", async () => {
   const gate = { check: async () => ({ outcome: "allow" }) };
   const lc = fresh({ writeGate: gate });
