@@ -17,6 +17,152 @@
 > **Status.** DRAFT — Part A is buildable now and is the priority; Part B is deferred and optional.
 > Supersedes the prior SF-1..SF-15 / SF-D1..SF-D2 numbering (this doc is design-only, nothing in
 > code references those IDs).
+>
+> **Update 2026-06-13 — the A/B has now been *run*, not just designed. See [Findings to date](#findings-to-date-2026-06-13--the-live-ab-and-what-it-changes)
+> below; the empirical results change Part A's conclusion (the replay bench is largely redundant;
+> litectx's single-run discovery lift is narrow). The Part A design (VB-1..VB-7) is kept as rationale
+> but is superseded where Findings conflict.**
+
+---
+
+# Findings to date (2026-06-13) — the live A/B, and what it changes
+
+We stopped *designing* the validation bench and ran the actual experiment. Five things came out of it;
+they refine (and in places supersede) the Part A design below.
+
+## F1 — The replay bench (VB-2..VB-5) is largely redundant
+
+Each replayable column just **re-scores an existing per-primitive bench** on a real-task corpus:
+recall→`bench-lib`, impact→`impact-bench`, memory→`memory-bench`. The "recall-given-the-working-set
+differs" objection fails — shipped `recall()` is `query → ranked files`; the working set is **not** a
+scoring input. The one genuinely new claim — **multi-step compounding** — is structurally
+**non-replayable** (it needs a live agent trajectory). ⟹ Don't build a standalone `realwork-bench`
+gate. Instead: (1) feed real-task **NL** queries into the existing benches (VB-4a); (2) the
+compounding claim is a **live ON-vs-OFF trajectory run = evidence (VB-6), not a per-commit gate**.
+
+## F2 — Corpus ≠ A/B subject (the constraint that bounds every live test)
+
+A read-only **corpus** is cheap (any local checkout). A live **A/B subject** needs a *runnable,
+green-at-baseline test oracle* so "did it work" is a fact, not an opinion — a much higher bar. Of the
+corpus repos, **aurora** (no venv anywhere, ML src-layout monorepo) and **gitdone** (no
+`node_modules`, no wired test script) **cannot** serve as A/B subjects without standing up heavy
+per-worktree environments. Only **mcp-gov** and **litectx itself** are turnkey. This is *why* the
+large-unfamiliar-repo A/B (the case that would most favor litectx) hasn't been run — it is blocked on
+**building an oracle**, not on willingness (see F4).
+
+## F3 — Two live A/B trajectory runs (safe-copy worktree harness)
+
+Safety model, held on every run: an **independent copy or `git worktree`** / throwaway `bench/*`
+branch / **never push** / oracle **green at baseline** / teardown after. The real litectx checkout is
+never touched.
+
+- **Run 1 — `assemble` (SHORT, single function).** Revert-rebuild `src/assemble.js` (its 12 tests the
+  oracle). ON = grep + litectx CLI; OFF = grep only. Both reached green. **OFF: 7 tools / 24.7k tok /
+  69s. ON: 15 / 44.9k / 146s — litectx LOST ~2×.** Not a recall failure (one call nailed the context);
+  the task was too short and the spec was *handed over* as tests → nothing to discover, and the
+  cold index-build was pure overhead.
+
+- **Run 2 — the `impact` subsystem (LONG, discovery-heavy, n=3 per side).** Rip out `src/impact.js` +
+  `src/tsalias.js` (19 tests across core / barrel-alias / recall↔impact compose / MCP as the oracle).
+  ON ran against a **pre-warmed** index (cold-build measured *separately* = **11.9s**, model cached);
+  OFF was grep-only. Fairness walls verified post-hoc on **all six** worktrees: only the two permitted
+  files changed, `tsc` clean, and **none byte-identical to the original** (no git-history recovery).
+
+  | Arm | Tools (mean) | Tokens (mean) | Pass rate |
+  |---|---|---|---|
+  | **ON** (grep + warm recall) | **27.7** | **108.2k** | **3/3** |
+  | **OFF** (grep only) | **22.0** | **109.6k** | **3/3** |
+
+  **Verdict: no measurable lift.** Tokens are a dead tie (ON 1.3% *lower* — noise); ON used **+26%
+  more tool calls**; both arms finished every run. (Wall-clock omitted — the runs shared CPU, so it's
+  confounded; tools + tokens are the clean metrics.) All six agents *independently* reported the same
+  reason: the surviving `src/chunker.js` already exported every hard primitive (`analyzeBody`,
+  `callSitesOf`, `reExportsOf`, `importBindingsOf`), so impact was **orchestration, not discovery** —
+  recall helped "orientation," but reading 3–4 obvious files was decisive.
+
+- **Run 3 — `markdown-it` emphasis/strikethrough (LONG, n=3, the *favorable* regime).** The Run-2
+  caveat said the impact test under-tested the favorable case (litectx's own greppable, familiar code).
+  So Run 3 deliberately built that case: a **third-party, unfamiliar** repo
+  ([markdown-it](https://github.com/markdown-it/markdown-it), MIT, turnkey — `npm install` + 941 tests
+  green out of the box, no build) and a subsystem with **indirect, non-greppable wiring** — rip out the
+  two-pass inline-emphasis rules (`lib/rules_inline/emphasis.mjs` + `strikethrough.mjs`; delimiters
+  pushed in pass 1, linked by `balance_pairs.mjs`, resolved in pass 2). ON had warm `recall` **and**
+  working `impact`; OFF grep-only. Walls verified post-hoc on all six (only the 2 files, both suites
+  green, none identical to original).
+
+  | Arm | Tools (mean) | Tokens (mean) | Pass rate |
+  |---|---|---|---|
+  | **ON** (grep + recall + impact) | **15.7** | **39.9k** | **3/3** |
+  | **OFF** (grep only) | **12.0** | **35.6k** | **3/3** |
+
+  **Verdict: litectx lost again — in the regime engineered to favor it.** OFF was leaner on every axis
+  (ON +31% tools, +12% tokens). All three ON agents converged, unprompted, on the same mechanism:
+  **recall *points* but doesn't *pay*** — it ranked the right ~4 wiring files in one shot (a real edge
+  over guessing filenames to grep; one run even surfaced a relevant *doc* by meaning), **but it changed
+  neither outcome nor cost**, because the real bottlenecks were (a) the emphasis algorithm already
+  **in the model's weights** and (b) **reading the local delimiter-field contract** — neither of which
+  recall shortcuts, while the recall calls themselves cost tokens. `impact` went unused ("the coupling
+  was static-registration, not call-graph").
+
+## F4 — Meta-finding: litectx's single-run lift is NARROW (6 independent signals)
+
+The in-run discovery lift does **not** appear as a net win, even where the regime was engineered to
+favor it. Signals: (1) warm-up keyword corpora (+0.02 MRR); (2) the recall column on a clean repo;
+(3) the mcp-gov shakedown (the agent never needed litectx); (4) the `assemble` A/B (lost ~2×);
+(5) the `impact` A/B (tied tokens, +26% tools); (6) the `markdown-it` A/B (lost on every axis) — the
+**deliberately favorable** regime: unfamiliar third-party repo, indirect non-greppable wiring.
+
+The Run-2→Run-3 progression closes the obvious objection. Run 2's caveat was "litectx's own code is
+greppable + familiar, so this under-tested the favorable case." Run 3 built that case and litectx
+**still** lost. The crisp mechanism (all three Run-3 ON agents, unprompted): **recall *points* but
+doesn't *pay*.** It does what it claims — rank the right files by meaning, faster than guessing grep
+terms — but for a strong model that doesn't move the outcome, because the bottleneck is **domain
+knowledge (in-weights) + reading a small local contract**, not *finding* the files; and the recall
+calls cost their own tokens. So the honest scope of the in-run claim is narrower than "stays coherent
+on long tasks": litectx accelerates *file-finding*, which is rarely the long pole.
+
+This does **not** condemn litectx — it relocates its value. The two places not yet refuted: **(a)
+cross-session memory** (F5 — OFF has no mechanism at all), and **(b) impact's safety guarantee** (the
+"never a silent isolated → safe" invariant is a *correctness* property, not a speed one, so a
+speed-based A/B can't measure it). A genuinely huge repo where context *physically* can't be held may
+still favor recall, but that's blocked by **F2** (oracle) and not chased per the "don't chase" stance.
+
+## F6 — Model-strength dependence: the Haiku re-run (the sign flips, but it's a nudge)
+
+Every result above used a frontier model (Opus 4.8) — the case *least* in need of retrieval
+scaffolding. So we re-ran the **identical markdown-it harness with Haiku on both arms**, n=3, to test
+whether a weaker model — less domain knowledge in-weights, worse blind navigation, smaller context —
+benefits more. Metric: **remaining failures (of 144) when the run stops** (Haiku can't fully solve, so
+binary pass/fail doesn't apply; this is recoverable even from a watchdog-killed run).
+
+| Arm (Haiku, n=3) | remaining failures | mean | median |
+|---|---|---|---|
+| **ON** (grep + recall) | 16 · 30 · 60 | **35.3** | 30 |
+| **OFF** (grep only) | 23 · 35 · 81 | **46.3** | 35 |
+
+Findings: **(1) Neither arm solved it** — best of all 6 runs was 16 remaining; the task is beyond Haiku
+*regardless* of litectx (Opus: 0-fail in ~38k tok / 14 tools; Haiku: 100–160 tools / ~110k tok and
+still failing). **(2) ON beat OFF on every order statistic** (min 16<23, median 30<35, max 60<81,
+mean −24%) — the **sign flipped** from the Opus runs (neutral-to-worse) to consistently positive. So
+retrieval scaffolding *does* help the weaker model more. **(3) But it's a nudge, not a rescue**:
+distributions overlap heavily (ON's worst 60 > OFF's best 23), variance is huge, n=3 is directional
+only; an early scout's dramatic 21-vs-81 was variance.
+
+**The unifying mechanism for F4+F6: recall helps *finding*, not *executing*.** Opus — finding trivial →
+no help. Haiku — finding helped a bit → small consistent edge — but its real bottleneck was *executing*
+the delimiter algorithm, which recall can't touch → no rescue. litectx's value is bounded by how much
+of a task is *locate* vs *do*; for coding, *do* dominates. **Corollary (untested):** a task whose
+bottleneck genuinely *is* finding (needle in a large unfamiliar repo, simple edit) on a weak model is
+where a category-difference — ON solves, OFF can't — would most plausibly appear.
+
+## F5 — Untested: the OTHER half of long-running — cross-session memory
+
+All three live runs measured **in-run** coherence. The second long-running claim — on a *fresh*
+session, recall the **right prior decision by meaning** among many (OFF structurally cannot) — is where
+litectx should win close to by construction, and is now the **decisive evidence to collect** (it is the
+one regime the in-run A/Bs could not test, because OFF has no cross-session mechanism). Design rule to
+avoid a
+strawman: the win must be *"retrieve the right memory among many decoys,"* not *"has a notes file."*
 
 ---
 
@@ -66,6 +212,31 @@ aurora-HARD −0.099. Using that column as "ON" would import a dead, repo-depend
 spurious win-or-loss. **OFF disables only the graph/memory/compression features; everything else is
 identical.** (A `[[verify-shipped-against-poc-data]]` harness confound, caught before it was baked in.)
 
+## A2b. CE read/write verbs shipped since this PRD — what to bench, what to keep OUT (suggestion, 2026-06-14)
+
+Three CE verbs shipped after A2 was written (`assemble` FIT+COMPRESS, **`summaryWindow`** R-C6, the
+**write-gate emitter**). Slotting them into the bench correctly — without smuggling in things that don't
+belong in an MRR gate:
+
+- **`summaryWindow` — ADD a replay row (deterministic, stub summarizer).** Question: *given the turns the
+  budget dropped, did the rolling summary retain the decision/bytes used downstream?* Known answer = the
+  span later cited/edited (same harvest the `compress` row uses). **Gate determinism:** drive it with a
+  **stub** `ctx.summarize` (e.g. identity/extractive concat), not a live model — the live-model value is
+  already proven in `poc/rc6-summarywindow-poc.mjs` (3/3 vs 0/3); the *gate* must be offline and free
+  (VB-3). Floor = summaryWindow ≥ plain FIT-drop on the dropped-turn answers (the POC's discriminator,
+  expressed as a floor). This is the natural 5th row of the A2 table.
+- **`assemble` FIT+COMPRESS — already covered by the `compress` row + structural proxy.** The shipped
+  `assemble-fit-poc`/`assemble-compress-seam-poc` use a live model for *validation*; the per-commit gate
+  should use the **structural proxy** ("the needed unit survived the fit") which is deterministic — reserve
+  the live-model run for periodic harvest, not the gate (VB-3 split).
+- **write-gate emitter — KEEP OUT of the MRR bench (scope note, so it isn't smuggled in).** It is a
+  *gate*, not a ranking/quality signal — there is no MRR to floor. It is fully covered by deterministic
+  unit tests (`test/writegate.test.js`) + bareguard's `seam-contract.test.js` (the real-emitter swap, green
+  both sides). Benching it as "quality" would be a category error.
+
+Net suggestion: the validation bench grows by **one row (`summaryWindow`)**, run with a stub summarizer;
+everything else is either already in scope (recall/impact/compress/memory) or explicitly out (write-gate).
+
 ## A3. The crux — harvest ≠ replay (this is why it can gate every change)
 
 **VB-3 — The bench replays a committed trace; it never runs a live agent.** A live agent is
@@ -113,6 +284,11 @@ repo corpora, the three checkouts are local → **local gate** (absent repo → 
 tokens, # wrong-file/wrong-symbol edits, the coherence-break step, cross-run reuse. This is
 **evidence printed once per harvest run**, not a green/red signal — it's model-dependent and can't
 gate. It justifies the automation ramp (Part B) and headlines a release note; it does not block merge.
+
+> **Run twice already (2026-06-13) — see [F3](#f3--two-live-ab-trajectory-runs-safe-copy-worktree-harness).**
+> The live ON/OFF trajectory harness exists and works on the safe-copy worktree model; `assemble`
+> (short) and `impact` (long, n=3) have both been run. Result so far: **no measurable in-run lift**
+> (F4). The remaining trajectory evidence worth collecting is the **cross-session memory** half (F5).
 
 ## A7. The existing bench suite (what `realwork-bench` joins)
 
@@ -242,6 +418,8 @@ not litectx's concern.
 **Open:**
 1. **Which task per repo** — one past multi-commit issue/PR per repo produces the first
    `realwork.mjs` trace; the repos are settled (D4), the specific commits are not yet chosen.
-2. **δ** — how big must the ON−OFF delta be to call it a win (per primitive)?
+2. **δ** — how big must the ON−OFF delta be to call it a win (per primitive)? *(Moot for the in-run
+   trajectory: ON did not win on any axis — F3/F4. Still live for the replay columns and the
+   cross-session memory test — F5.)*
 3. **Pi-vs-bareagent** (FS-3) — only if Part B graduates past a spike.
 4. **Web board vs Pi TUI** (FS-3) — only if a watch/gate surface is actually wanted.

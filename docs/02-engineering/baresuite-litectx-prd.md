@@ -231,7 +231,7 @@ necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cr
 | Store backend | `liteCtxAsStore` plug | mounts it (RT-3) | — |
 | MCP mount | the `litectx-mcp` bin | mount recipe (RT-4) | — |
 | Write-gate | **emitter** (`toWriteAction`) + standalone audit/redact | — | the **gate** (`flags` + 6-step floor) |
-| Summary window (R-C6) | **policy SHIPPED** — `summaryWindow(units,ctx)` (trigger/N/splice over `assemble`) | the bound **`summarize()`** model call (pending §23) | — |
+| Summary window (R-C6) | **policy SHIPPED** — `summaryWindow(units,ctx)` (trigger/N/splice over `assemble`) | **`ctx.summarize()` SHIPPED** (loop.js, §23.1.5) — live seam lit | — |
 | Agent loop · tool dispatch · sub-agent spawn · `ctx` carrier | — | **owns** | — |
 | Content-trust: source label vs verdict | `provenance` label + shape flag | — | renders **deny/ask** (never scans text) |
 
@@ -243,10 +243,11 @@ necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cr
 **B. R-C6 summaryWindow (AGREED — shape confirmed 2026-06-14):**
 3. ✅ **litectx — windowing-policy POC** (`poc/rc6-summarywindow-poc.mjs`): at equal budget, 3/3 vs 0/3 dropped-turn answers. Gate PASSED.
 4. ✅ **litectx — `summaryWindow(units, ctx)` SHIPPED** (`[Unreleased]`): a verb over `assemble` (last-N verbatim + rolling summary of older, restorable, never overflows). Works with any host summarizer.
-5. **bareagent — build `summarize(messages) => Promise<string>` on `ctx`** + spec it into `prd.md §23` (DUE). *The model-call half litectx is forbidden to own — wiring it lights the live seam.*
+5. ✅ **bareagent — `ctx.summarize(excerpt, opts?)` SHIPPED** (loop.js, spec'd §23.1.5; contract verified compatible). **The live R-C6 seam is lit** — litectx's `summaryWindow` reads `ctx.summarize` directly. (Committed on bareagent main; push/release is bareagent's call.)
 
-**C. Contract-only close-outs (docs, not code — mark CLOSED so they stop reading as "open"):**
-6. Fold the resolved Tier-B contracts into **§5C**: R-W3 = state on `ctx.session` (convention over the opaque carrier; isolate = don't emit a unit); R-C3/C5 = view-level drop only (no destructive mutation); R-W4 = `remember(kind:"episode")`. **No code on any repo.**
+**B is COMPLETE** — both halves shipped; the live seam works end-to-end. Optional next: a release cut + an end-to-end integration test wiring `summaryWindow` ↔ a real `ctx.summarize`.
+
+**C. Contract-only close-outs — ✅ DONE:** resolved Tier-B contracts folded into **§5C** (R-W3 = state on `ctx.session`; R-C3/C5 = view-level drop only; R-W4 = `remember(kind:"episode")`; R-S6 = data-blocked). Scratch deleted. **No code on any repo.**
 
 ### Necessary deferrals (blocked on a real precondition — trip-wires, not vague "later")
 | Item | Owner when it fires | Trip-wire |
@@ -483,17 +484,21 @@ no bareguard change** — the gate is compose-time inside baresuite. The `flags`
 test land on bareguard's timeline; when both are in, the seam test flips from synthetic to real and
 either stays green (coverage confirmed) or fails at the exact `rule` line.
 
-### 5C. bareagent — *pull* the deferred primitives (specify so litectx can build)
+### 5C. Tier-B adopter-pulled primitives — RESOLVED (2026-06-14)
 
-These are **adopter-pulled** (CE-PRD §8.1 Tier-B, restated in §1) — blocked on **you answering**, not on
-litectx coding. (`assemble`'s FIT half is now shipped via the RT-1 seam — see §1; what remains below is
-genuinely consumer-shaped.)
+These were **adopter-pulled** (CE-PRD §8.1 Tier-B): litectx asked bareagent to pin the spec before
+building. bareagent answered (folded in here from the working scratch). **Net: of the five, one was a
+real build (R-C6, now SHIPPED), one is data-blocked, three are subsumed by shipped primitives — no code.**
+Ownership rule that settled them: if a seam needs a *model call* or *provider grammar* it is **not**
+litectx's; litectx owns content/policy, bareagent owns the loop/provider.
 
-| Primitive | What litectx needs you to pin |
-|---|---|
-| **`session` / `state` / `state.view`** | The state **schema** — which fields exist, which are LLM-visible vs isolated? |
-| **`clear` / `trim` / `summaryWindow`** | The **policy** — *when* does your loop clear a spent tool-result / trim old turns / roll a summary? (litectx supplies mechanism; timing is your loop's.) |
-| **`selectTools` / `recordUseful`** | A real tool corpus to rank for / the loop's success-verdict (the recall-rerank use was falsified topic-blind — §1). |
+| Primitive | Disposition | Who builds / owns |
+|---|---|---|
+| **R-C6 `summaryWindow`** | ✅ **SHIPPED** — `summaryWindow(units, ctx)`, a verb over `assemble` (last-N verbatim + rolling summary of older, restorable, never overflows). | litectx owns trigger/N/splice; **bareagent owns the model call** — `ctx.summarize(excerpt, opts?)` **SHIPPED** (loop.js, spec'd bareagent §23.1.5; contract verified compatible with litectx's `[{role,content}]` call). Live seam lit. |
+| **R-W3 `session`/`state`/`state.view`** | **No build.** State rides the opaque `ctx` (forwarded by-ref, unmodified — bareagent's RT-1 guarantee); a field is LLM-visible iff litectx emits a unit for it in `assemble`, isolated iff it doesn't; durability = serialize into Memory + rehydrate. | litectx owns the schema (its own keys on `ctx.session`); bareagent owns the carrier + the Memory substrate. Both ship. |
+| **R-C3 `clear` / R-C5 `trim`** | **No build.** `assemble` FIT+COMPRESS + `dropped[]` already do view-level elision every call; destructive transcript mutation is **forbidden** (breaks fail-open). "Spent" results drop from the *view*, restorable by id. | litectx (view-level, shipped); bareagent will not add destructive loop mutation. |
+| **R-W4 note store** | **No build.** Subsumed by `remember(kind:"episode")` + free-form `meta`; survives compaction (lives outside the transcript). | litectx (shipped). |
+| **R-S6 `selectTools` / `recordUseful`** | **Deferred — data-blocked, not design-blocked.** ~15–20 native tools → RAG-over-tools lift ≈ 0; recall-rerank-for-tools was falsified topic-blind (§1). | litectx (build) **when** bareagent supplies a real tool corpus + (intent→tools) traces. Trip-wire: hundreds of MCP tools + mineable traces. |
 
 ## 6. What litectx will NOT do — so you don't wait on it
 

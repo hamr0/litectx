@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-14
+
 ### Added
 - **`summaryWindow(units, ctx)` — the R-C6 rolling-summary read-path verb.** Under budget pressure it keeps
   the last-N transcript turns **verbatim** and rolls everything **older** into one rolling summary, then
