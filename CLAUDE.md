@@ -42,7 +42,7 @@ history in **`.claude/stash/`**.
 
 - **Pure ESM JS + JSDoc. No build step for shipped code** — the `.js` you author is the `.js` that ships. (This supersedes any "TypeScript source" framing in the PRD: TypeScript is a **dev-only** types toolchain, not the source language.)
 - **Types: JSDoc → generated `.d.ts`, never hand-edited, git-ignored, built on publish.** `tsc` runs `checkJs` + `strictNullChecks` (not full `strict`). CI runs `tsc --noEmit` on every push/PR and before publish — a JSDoc/code mismatch blocks merge and publish. Never use `!`, `as any`, or `@ts-ignore`.
-- **One production dependency is the bar** — here that is `better-sqlite3`. A second prod dep needs explicit justification.
+- **Two production dependencies, both explicitly justified** — `better-sqlite3` (storage + FTS5/BM25) and `web-tree-sitter` (vendored WASM grammars; the no-LSP edge resolution this doctrine mandates needs a parser). A third needs the same bar. The embeddings ML stack (`@huggingface/transformers`) is an **optional peer dep marked `optional` in `peerDependenciesMeta`** — NOT auto-installed, so `npm i litectx` stays lean + offline-capable; adopters who want the tier install it themselves (the embedder throws a helpful message if it's missing).
 - **`package.json`:** `"type": "module"`, `main`, `exports` with a `types` condition on every subpath, `files` whitelist (`src/` + `types/` + doc set), `engines` Node floor.
 - **Adopter docs:** `README.md` (pitch + 6-line quickstart) and `litectx.context.md` (complete contract — every option, full public API, extension contracts, "what's NOT in litectx and why", gotchas). Both ship. This `CLAUDE.md` and `docs/` are **repo-only — never in `files`**.
 

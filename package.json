@@ -38,8 +38,13 @@
     "better-sqlite3": "^11.8.1",
     "web-tree-sitter": "0.22.6"
   },
-  "optionalDependencies": {
+  "peerDependencies": {
     "@huggingface/transformers": "^4.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=18"
@@ -73,6 +78,7 @@
     "access": "public"
   },
   "devDependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "@types/node": "^22.19.19",
     "typescript": "^5.9.3"
   }

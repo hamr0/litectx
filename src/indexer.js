@@ -42,7 +42,8 @@ export function collectFiles(root, include, pathspecs) {
   const inc = new Set(include.map((e) => (e.startsWith(".") ? e : `.${e}`)));
   let files;
   try {
-    files = execFileSync("git", ["-C", root, "ls-files", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
+    // `--` so a pathspec can never be misread as a git option (parity with gitsig.js / the rg sweeps).
+    files = execFileSync("git", ["-C", root, "ls-files", "--", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
       .split("\n")
       .filter(Boolean);
   } catch {
