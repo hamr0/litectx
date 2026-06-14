@@ -11,6 +11,10 @@ All notable changes to this project are documented here, following
   semantic recall surfaces the right past decision into the top-few results but not reliably at #1, so
   the Validation note now reads "a shortlist, not a guaranteed #1 hit." Added two rows to the Validation
   table for the new CE-verb gates. Docs only.
+- **README — added a shared "The bare ecosystem" section** (Core / Optional-reach list covering all six
+  modules: `bareagent` · `bareguard` · `litectx`, plus `barebrowse` · `baremobile` · `beeperbox`). litectx
+  is positioned as the tree-sitter memory-with-decay + lightweight context-engineering (write/select/compress/isolate)
+  member. The same section now ships across all six repos. Docs only.
 
 ### Internal (validation — `poc/` + CI; not part of the shipped package)
 - **The bench arc is closed.** Ran the **F5 cross-session-memory** test (`poc/cross-session-memory-poc.mjs`):
