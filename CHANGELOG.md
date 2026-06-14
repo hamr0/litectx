@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-06-14
+
 ### Added
 - **Write-gate emitter (CE-PRD §10.1).** `remember()` gains an opt-in `writeGate` hook: when a
   `LiteCtxConfig.writeGate` (any object with a `.check(action)`) is wired, a write is first emitted as a
