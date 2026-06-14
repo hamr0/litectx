@@ -7,6 +7,19 @@ All notable changes to this project are documented here, following
 ## [Unreleased]
 
 ### Added
+- **Write-gate emitter (CE-PRD §10.1).** `remember()` gains an opt-in `writeGate` hook: when a
+  `LiteCtxConfig.writeGate` (any object with a `.check(action)`) is wired, a write is first emitted as a
+  gate-able action `{ type: "memory.write", kind, provenance, text, id, meta?, injectionRisk? }` and
+  checked **before it commits** — a `deny` outcome throws `WriteDeniedError` and the write does **not**
+  persist; `allow`/`ask` proceed. litectx states the **source** (`provenance`) plus an optional
+  guardrails-set `injectionRisk` shape flag, and never makes the content judgment (the §6 line —
+  bareguard, or any gate, renders deny/ask). New exports: `toWriteAction` (the pure emitter),
+  `WriteAudit` (a standalone JSONL audit sink that ships **no** secret patterns — a host-supplied
+  `redact` scrubs), and `WriteDeniedError`. Default unset = no gate, **byte-identical** to prior writes.
+  Grounded end-to-end on the **real bareguard `Gate`** (`poc/write-gate-emitter-poc.mjs`, 13/13): the
+  emitted shape is load-bearing (strip `provenance`/`injectionRisk` → the decision flips back to allow)
+  and floor supremacy holds (`injectionRisk:"high"` denies **through** an allowlist). Demand-gated — no
+  consumer emits gate actions yet; `memory.inject` is reserved in the type but has no producer.
 - **`assemble()` COMPRESS budget tier (Build B).** When the budget-fit would drop a parseable code/doc
   unit, it is now recovered as its `compress()` **signature** (header + doc, body elided) before being
   evicted — marked `compressed: true` on the kept unit, full body still recoverable by id like a drop.

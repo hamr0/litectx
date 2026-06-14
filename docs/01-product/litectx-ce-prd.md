@@ -374,6 +374,17 @@ item is tagged **[copy]** (lift the design ~as-is), **[adapt]** (lift + change t
 action-vs-content thesis both hold.
 
 ### 10.1 bareguard — gate the memory-write, inherit floor supremacy (R-G3 / R-X2)
+> **SHIPPED (litectx side) 2026-06-14 — the write-gate emitter.** `remember()` now emits the gate-able
+> `{type:"memory.write", kind, provenance, text, id, meta?, injectionRisk?}` action and checks it via an
+> opt-in `writeGate` (`LiteCtxConfig`) **before** the write commits — a `deny` throws `WriteDeniedError`
+> and nothing persists. Exports: `toWriteAction` (pure emitter), `WriteAudit` (standalone audit, ships no
+> secret patterns — host `redact` scrubs), `WriteDeniedError`. litectx is duck-typed to `.check` (not
+> coupled to a bareguard version). **POC `poc/write-gate-emitter-poc.mjs` (13/13) on the REAL bareguard
+> `Gate`:** the emitted shape is load-bearing (strip `provenance`/`injectionRisk` → decision flips back to
+> allow) and floor supremacy holds (`injectionRisk:"high"` denies through an allowlist). **Demand-gated** —
+> no consumer emits gate actions yet; `memory.inject` reserved in the type but has no producer (SELECT killed).
+> Standalone built-in *floor* gate deferred (speculative — no standalone consumer needs gating without
+> bareguard yet). Next on bareguard's side: swap `seam-contract.test.js` onto this real emitter (§5B).
 - **Gate decision contract — [copy → adapt]:** `Gate#check(action)` → `Decision{outcome:"allow"
   |"deny", severity, rule, reason}` (`bareguard/src/gate.js:215`, `types.js:40`); an action is an
   open dict keyed by `type` (`types.js:24`). litectx **copies this contract** and **adapts** it

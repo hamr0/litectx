@@ -17,6 +17,7 @@ import { collectGitSig } from "./gitsig.js";
 import { computeImpact } from "./impact.js";
 import { ftsMatch, keywords } from "./tokenize.js";
 import { Embedder, cosine } from "./embedder.js";
+import { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 
@@ -92,7 +93,19 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  *                                         episodes. A host running concurrent agents sets it so a run's
  *                                         own episodes aren't buried by more-relevant other sessions
  *                                         (gate #1, 2026-06-13). `fact`s ignore it (always cross-session).
+ * @property {WriteGateLike} [writeGate]   optional write-gate hook (CE-PRD §10.1) — when set, `remember()`
+ *                                         emits a `{type:"memory.write", …}` action and `await`s
+ *                                         `writeGate.check(action)` BEFORE persisting; a `deny` outcome
+ *                                         throws {@link WriteDeniedError} and the write does not commit
+ *                                         (`ask`/`allow` proceed). Duck-typed — bareguard's `Gate` when
+ *                                         embedded, any `.check`-shaped object standalone. litectx is not
+ *                                         coupled to a gate version. Default unset = no gate (byte-identical
+ *                                         to pre-hook writes).
+ * @property {WriteAudit} [writeAudit]     optional standalone audit sink (the paper-trail half §10.1) —
+ *                                         when set with `writeGate`, each write decision is recorded. A
+ *                                         host-supplied `redact` on it scrubs secrets (litectx ships none).
  */
+/** @typedef {import("./writegate.js").WriteGateLike} WriteGateLike */
 
 /**
  * @typedef {Object} Item
@@ -143,6 +156,13 @@ export class LiteCtx {
     this._embedder = config.embedder ?? null;
     /** @type {Map<string, Float32Array>} LRU query-embedding cache */
     this._qcache = new Map();
+
+    // write-gate (§10.1) — opt-in. When wired, remember() emits a gate-able action and checks it
+    // before persisting; default unset = no gate, byte-identical to pre-hook writes.
+    /** @type {WriteGateLike | null} */
+    this.writeGate = config.writeGate ?? null;
+    /** @type {WriteAudit | null} */
+    this.writeAudit = config.writeAudit ?? null;
   }
 
   /** The embedder for this instance — injected, or lazily constructed when the tier is on. */
@@ -498,9 +518,11 @@ export class LiteCtx {
    *
    * @param {string} id    caller key / identity (lands in the row's `path`)
    * @param {string} text  the content
-   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown> }} [opts]
+   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high" }} [opts]
    *   `kind` ∈ {fact, episode, doc} (default `fact`); `by` = provenance `"human"|"agent"` (default
-   *   `"agent"`); `occurredAt` = episode timestamp (epoch ms, default now; ignored for non-episodes);
+   *   `"agent"`); `injectionRisk` = OPTIONAL guardrails shape flag forwarded to a wired `writeGate`
+   *   (litectx core never computes it — a guardrails tier sets it; ignored when no `writeGate`);
+   *   `occurredAt` = episode timestamp (epoch ms, default now; ignored for non-episodes);
    *   `format` defaults to `md` for docs, `text` otherwise. `meta` = an opaque caller dict (RT-3 #3)
    *   stored verbatim and returned untouched by `get`/`recall` — small structured tags ({sessionId,
    *   tag, …}), NEVER searched or ranked; park large payloads in `stash`, not here. Re-`remember`ing
@@ -526,6 +548,16 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
+    // write-gate (§10.1) — when wired, emit a gate-able action and check it BEFORE the write commits.
+    // litectx states the SOURCE (`provenance:by`) + passes through an optional guardrails `injectionRisk`
+    // shape flag; the gate renders deny/ask. A deny throws and the write does not persist (the §6 line:
+    // litectx never makes the content judgment, only carries the facts the gate decides on).
+    if (this.writeGate) {
+      const action = toWriteAction(id, text, { kind, provenance: by, meta: opts.meta, injectionRisk: opts.injectionRisk });
+      const decision = await this.writeGate.check(action);
+      if (this.writeAudit) this.writeAudit.emit(action, decision, Date.now());
+      if (decision.outcome === "deny") throw new WriteDeniedError(id, decision);
+    }
     this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding });
   }
 
@@ -683,3 +715,4 @@ export { Embedder, cosine } from "./embedder.js";
 export { compress, COMPRESS_LEVELS } from "./compress.js";
 export { assemble } from "./assemble.js";
 export { liteCtxAsStore } from "./memory-store.js";
+export { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";

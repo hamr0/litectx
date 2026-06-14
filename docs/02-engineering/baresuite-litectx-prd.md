@@ -137,6 +137,13 @@ These pass the §8.1 discriminator: **no consumer ambiguity.** Ranked by readine
   low-risk either way (contract frozen, blast radius zero).
 
 ### ② bareguard write-gate seam (CE-PRD §10.1) — **the one net-new bareguard primitive (see §5B)**
+> **litectx EMITTER SHIPPED 2026-06-14.** The write-gate hook is built: `remember()` emits
+> `{type:"memory.write", kind, provenance, text, id, meta?, injectionRisk?}` via the exported
+> `toWriteAction` and checks it through an opt-in `writeGate` (duck-typed `.check`) before committing;
+> deny throws `WriteDeniedError`, nothing persists. `WriteAudit`/`WriteDeniedError` also exported. POC
+> 13/13 on the REAL bareguard `Gate` (`poc/write-gate-emitter-poc.mjs`). **bareguard is now unblocked** to
+> swap `seam-contract.test.js` onto the real emitter (the producer-less seam in §1 item 4 now has a
+> producer). `memory.write` only — `memory.inject` has no producer (SELECT killed).
 - **What:** litectx emits gate-able actions `{type:"memory.write"|"memory.inject", kind, provenance,
   text, …}` and exposes a minimal optional **write-gate hook** so the action is checkable standalone;
   inside baresuite, bareguard *is* the gate.

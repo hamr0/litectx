@@ -83,6 +83,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
+| **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; demand-gated, no producer for `memory.inject`) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
 | **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
 | Trust/stability as a recall *tie-breaker* (use/churn/provenance → search order) | ⊘ dropped (POC-falsified — no-ops on exact ties, pollutes on any band, and buries fresh/better matches; trust ships as columns, ranking stays pure relevance — slice 5c) |
@@ -138,6 +139,8 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
 | `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. `code`/`doc` are never scoped. |
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
+| `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
+| `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** paired with `writeGate` — records one JSONL decision line per write. Ships **no** secret patterns: a host-supplied `redact(action)` on it scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
 
 There is **one** config object and no global state. No environment variables, no
 config files — the adopter passes everything in.
@@ -391,6 +394,17 @@ content. The `id` is your handle for update/forget — namespace it (`"fact:auth
   key-value memory store (see `liteCtxAsStore`). Keep it to **small structured tags** (`{ sessionId,
   tag, author }`); park large payloads in `stash`, not here. Re-`remember`ing without `meta` clears
   any prior meta (the latest write wins, like the text).
+- `opts.injectionRisk?: "low" | "medium" | "high"` — an **optional guardrails shape flag** forwarded
+  to a wired `writeGate` action. litectx core never computes it (the §6 line — content judgment is the
+  guardrails tier's / gate's job); it only passes through what a caller sets. Ignored when no `writeGate`.
+
+**Write-gate (§10.1, opt-in via `writeGate` config).** When a `writeGate` is wired, `remember()` first
+builds a gate-able action `{ type: "memory.write", kind, provenance: by, text, id, meta?, injectionRisk? }`
+(via the exported `toWriteAction`) and `await`s `writeGate.check(action)` **before** the write commits. A
+`deny` outcome throws `WriteDeniedError` (carrying `.id` + `.decision`) and **nothing persists**;
+`allow`/`ask` proceed to the write. If a `writeAudit` is also wired, one decision line is recorded
+(host `redact` scrubs). litectx states the **source** (`provenance`) + an optional `injectionRisk` flag;
+the gate renders deny/ask — litectx never makes the content verdict. Default (no `writeGate`) is unchanged.
 
 Content is stored **whole** — one searchable unit, no tree-sitter/section chunking. You
 control granularity by how you split before writing (ten atomic facts beat one blob).
@@ -606,6 +620,10 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 - `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
 - `assemble(units, { budget, task })` — RT-1 budget-fit a neutral transcript to a token budget (the section above).
 - `liteCtxAsStore(lc, { kind })` — mount litectx as a host `Store` (the section just above).
+- `toWriteAction(id, text, { kind, provenance, meta, injectionRisk })` → the pure write-gate emitter
+  (the `{ type: "memory.write", … }` action shape); `WriteAudit` → standalone JSONL audit sink (ships no
+  secret patterns; takes a host `redact`); `WriteDeniedError` → thrown when a wired `writeGate` denies a
+  write (carries `.id` + `.decision`). See the `writeGate` config + `remember` write-gate note above (§10.1).
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).

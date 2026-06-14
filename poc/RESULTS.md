@@ -878,3 +878,29 @@ an easy metric (string-present) — but that is exactly what the budget tier sel
 and `drop 0/8` proves eviction loses it; (c) the **body-detail limit** (signature elides bodies) is *not*
 re-measured here — a first body-needle mis-scored (ambiguous "the string literal", verbatim 0/8) and was
 dropped; `compress-middle`'s body-needle (signature 0/2 = drop) already establishes it cleanly.
+
+---
+
+## write-gate emitter (CE-PRD §10.1 / baresuite-litectx-prd §5B) — GATE: PASS (2026-06-14)
+
+`poc/write-gate-emitter-poc.mjs` — 13/13 on REAL components (a real `LiteCtx :memory:` round-trips the
+write; a real **bareguard `Gate`** renders the verdict; bareguard's real `redact` scrubs). The emitter is
+DEMAND-GATED (no consumer emits gate actions yet), so the POC's job was to PIN its VALUE, not run plumbing.
+
+**Claim proven:** the emitted action shape `{type:"memory.write", kind, provenance, text, id, injectionRisk?}`
+lets bareguard's `flags` gate make a DIFFERENT, CORRECT decision than it could without those structured fields.
+- **F1** emitter reflects REAL persisted state — `toWriteAction` text/id/provenance/kind === `get(id)`.
+- **F2** `provenance` is LOAD-BEARING — `provenance:"web"` → **ask** (`rule:flags.provenance`); strip the
+  field (control) → **allow**, no ask. The flip proves the field carries the signal.
+- **F3** `injectionRisk` is LOAD-BEARING — strip it (control) → allow.
+- **F4** floor supremacy holds — `injectionRisk:"high"` → **DENY** (`rule:flags.injectionRisk`) **even though
+  `memory.write` is allowlisted**. The deny-arm runs before the allowlist, as §5B requires.
+- **F5** redact — `redact` ships **NO built-in patterns**: bare call is a no-op (the secret survives); it
+  scrubs only when the **host** supplies `{patterns}`. This is the §6 line in code: litectx ships the
+  audit/redact MECHANISM, never the secret patterns (content judgment). Finding folded into the build.
+
+**Build verdict (write-only):** the emitter is a thin pure `toWriteAction` around `remember`; the gate is
+PLUGGABLE (`.check`-duck-typed — bareguard when embedded, any gate standalone); audit/redact is a standalone
+passthrough that accepts a host redactor. A standalone built-in FLOOR gate is DEFERRED (speculative — no
+standalone consumer needs gating without bareguard yet; trip-wire: build when one does). `memory.inject`
+is reserved in the type union but has NO producer (SELECT killed) → not minted.
