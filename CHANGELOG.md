@@ -6,6 +6,26 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Changed
+- **README — cross-session-memory claim sharpened to shortlist-grade.** The F5 test (below) found
+  semantic recall surfaces the right past decision into the top-few results but not reliably at #1, so
+  the Validation note now reads "a shortlist, not a guaranteed #1 hit." Added two rows to the Validation
+  table for the new CE-verb gates. Docs only.
+
+### Internal (validation — `poc/` + CI; not part of the shipped package)
+- **The bench arc is closed.** Ran the **F5 cross-session-memory** test (`poc/cross-session-memory-poc.mjs`):
+  on real, uncrafted decisions with adversarial decoys, semantic recall is a **qualified win** — top-5 70%
+  vs 20% lexical (OFF at chance), but P@1 0% (near-neighbour decisions win the top slot). Surfaces, not
+  bullseyes — the same through-line as the in-run findings.
+- **Two durable VALUE gates added and wired into CI:** `bench:assemble` (the COMPRESS tier rescues a
+  needed unit FIT would drop) and `bench:summary` (the rolling summary retains dropped-turn decisions, via
+  a stub summarizer). Both are pure/deterministic/offline/free, so they run on **every push/PR** — a
+  regression in either CE verb's reason-to-exist now blocks merge. Mutation-verified (RED on a real src
+  regression, GREEN clean). Added a `bench:all` aggregator for the pre-release ritual.
+- **Validation framing settled.** The redundant `realwork-bench` stays **unbuilt** (it only re-scored
+  existing benches); the optional Part-B "factory spike" is **parked** (off-roadmap). See
+  `docs/01-product/benches-prd.md`.
+
 ## [0.14.1] — 2026-06-14
 
 ### Changed

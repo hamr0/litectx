@@ -102,7 +102,7 @@ const { units, dropped, tokens } = await assemble(transcriptUnits, { budget: 800
 
 ## Validation — grounded, not asserted
 
-Each claim is a committed bench, run as a local pre-push gate (corpora are local checkouts). Results in [`poc/RESULTS.md`](poc/RESULTS.md).
+Each claim is a committed bench. The pure CE-verb gates run **in CI** on every push; the corpus gates run as a **local pre-push gate** (their corpora are local checkouts). Results in [`poc/RESULTS.md`](poc/RESULTS.md).
 
 | Claim | Bench | Result |
 |---|---|---|
@@ -110,6 +110,8 @@ Each claim is a committed bench, run as a local pre-push gate (corpora are local
 | recall lands the ground-truth file (E2E) | `bench-lib` | per-dataset **MRR floors** hold-or-beat |
 | memory recalls by *meaning*, not just words | `memory-bench` | paraphrase MRR **0.000 → 0.574** (embeddings on); exact/morph held |
 | impact never silently marks a used symbol "isolated" | `impact-bench` | **SAFETY = 0** invariant, exit-code gated |
+| `assemble` keeps a needed unit a tight budget would drop | `assemble-bench` *(CI)* | COMPRESS rescues it as a signature (1/1 vs FIT-drop 0/1) |
+| `summaryWindow` retains decisions in dropped turns | `summarywindow-bench` *(CI)* | **3/3** vs plain FIT **0/3** |
 
 > **What we don't claim.** litectx scaffolds *search*; it doesn't replace the model's own intelligence. Live A/B runs found in-run recall/impact gives a strong model no net build-speed win (its bottleneck is reasoning, not finding) and a weaker model a consistent **nudge, not a rescue**. The measured edge is **durable cross-session memory** — on a fresh session it surfaces the right past decision into your top-few results where keyword search is blind (a shortlist, not a guaranteed #1 hit) — and **impact's safety invariant**. Full findings, including the nulls, are in [`docs/01-product/benches-prd.md`](docs/01-product/benches-prd.md).
 
