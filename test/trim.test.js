@@ -112,6 +112,23 @@ test("SIZE pinned-over-budget: pinned kept best-effort (no hard cap), never harv
   assert.ok(!r.harvest.some((h) => h.id === "sys"), "pinned is never in the harvest worklist");
 });
 
+test("COUNT force-keeps an atomic group WHOLE when any member is pinned (never split)", async () => {
+  // group "g" = a pinned member (p) + its non-pinned partner (q), both OLD; keepLastN=1 would normally
+  // keep only the newest item (z). The pinned member must drag its whole group through → q survives too,
+  // so the tool-call/result pair is never half-evicted (broken grammar unrepresentable).
+  const units = [
+    u("p", { atomic: "g", pinned: true, role: "assistant" }),
+    u("q", { atomic: "g", role: "tool" }),
+    u("x"),
+    u("y"),
+    u("z"),
+  ];
+  const r = await trim(units, { keepLastN: 1 });
+  assert.ok(ids(r.units).includes("p") && ids(r.units).includes("q"), "atomic group kept whole via its pinned member");
+  assert.deepEqual(r.dropped.map((d) => d.id), ["x", "y"], "only the un-pinned older turns evicted; z is the kept item");
+  assert.ok(!r.harvest.some((h) => h.id === "p" || h.id === "q"), "neither group member harvested");
+});
+
 test("COUNT keepLastN > item count → keep everything, drop nothing", async () => {
   const units = [u("a"), u("b"), u("c")];
   const r = await trim(units, { keepLastN: 999 });
