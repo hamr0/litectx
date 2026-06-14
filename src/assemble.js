@@ -44,6 +44,10 @@ import { compress } from "./compress.js";
  * @property {number} [tokensApprox]  approximate token cost (the consumer's estimate; we fall back to chars/4)
  * @property {boolean} [compressed]   set by assemble on a unit down-tiered to its signature to fit budget
  *                                     (its `content` is the signature; full body recoverable by id, like a drop)
+ * @property {boolean} [summary]      set by summaryWindow on the SYNTHETIC unit it splices in — its `content`
+ *                                     is the rolling summary of the older turns it replaced
+ * @property {string[]} [summarizes]  on a summary unit: the ids of the turns folded into it (each also
+ *                                     reported in `dropped` with reason "summarized"; restorable by id)
  */
 
 /**
@@ -147,4 +151,80 @@ export async function assemble(units, ctx = {}) {
     else dropped.push({ id: u.id, reason: "budget" });
   }
   return { units: kept, dropped, tokens };
+}
+
+/**
+ * @typedef {Object} SummaryWindowCtx
+ * @property {number} [budget]        token budget for the assembled view (as {@link assemble})
+ * @property {(messages: {role: string, content: string}[]) => Promise<string>} [summarize]
+ *                                     a provider-bound summarizer the HOST supplies (litectx never calls a
+ *                                     model itself). Absent → this is a plain {@link assemble}.
+ * @property {number} [summaryKeep]   N most-recent transcript turns kept VERBATIM (default 8); everything
+ *                                     older is rolled into one summary. litectx owns N.
+ * @property {string} [summaryRole]   role for the spliced summary unit (default "system") — role is the
+ *                                     consumer's grammar, so the host names it and its adapter places it
+ * @property {string} [summaryId]     id for the spliced summary unit (default derived from the folded range)
+ * @property {string} [task]          passed through to {@link assemble} (reserved)
+ */
+
+/**
+ * summaryWindow (R-C6) — the rolling-summary read-path policy: keep the last-N transcript turns VERBATIM,
+ * roll everything OLDER into one rolling summary, and budget-fit the result via {@link assemble}. litectx
+ * owns trigger (engaged only under budget pressure) + N + the splice; the HOST owns the model (`ctx.summarize` —
+ * litectx never calls one). The summary is a SYNTHETIC unit placed as the freshest content (a cache-stable
+ * dynamic suffix; the verbatim prefix stays byte-identical for prefix caching) so the recency-anchored fit
+ * keeps it; if even the summary can't fit it is dropped like any unit (never an overflow). The splice is
+ * RESTORABLE: folded turns are reported in `dropped` (reason "summarized", recoverable by id) and listed on
+ * the summary unit's `summarizes`. Falls back to a plain `assemble` when unwired, when everything already
+ * fits (no pressure), or when there are < 2 older turns to fold — so it is never worse than FIT.
+ * POC-gated: `poc/rc6-summarywindow-poc.mjs` — at equal budget, summaryWindow retained the dropped-turn
+ * answers FIT-drop lost (discriminator 3/3 vs 0/3 on a live model).
+ *
+ * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
+ * @param {SummaryWindowCtx} [ctx]
+ * @returns {Promise<{ units: Unit[], dropped: {id: string, reason: "budget"|"summarized"}[], tokens: number }>}
+ */
+export async function summaryWindow(units, ctx = {}) {
+  if (!Array.isArray(units)) throw new TypeError("summaryWindow: units must be an array");
+  if (typeof ctx?.summarize !== "function") return assemble(units, ctx);
+  const budget = Number.isFinite(ctx?.budget) ? /** @type {number} */ (ctx.budget) : Infinity;
+  // No budget pressure → keep everything verbatim; summarizing would be wasted work (and a wasted model call).
+  if (units.reduce((n, u) => n + tokOf(u), 0) <= budget) return assemble(units, ctx);
+
+  const sk = ctx.summaryKeep;
+  const N = typeof sk === "number" && Number.isInteger(sk) && sk >= 0 ? sk : 8;
+  // Foldable = conversational turns only (pinned never folds; atomic tool-call/result pairs never elide into
+  // prose; code/doc are COMPRESS's job inside assemble). "Older" = all foldable EXCEPT the last-N verbatim.
+  const foldable = units.filter((u) => u && !u.pinned && !u.atomic && u.content && u.kind !== "code" && u.kind !== "doc");
+  const older = N > 0 ? foldable.slice(0, -N) : foldable.slice();
+  if (older.length < 2) return assemble(units, ctx); // a lone older turn isn't worth a model call / a summary
+
+  const prose = await ctx.summarize(older.map((u) => ({ role: u.role, content: u.content })));
+  const content = typeof prose === "string" ? prose.trim() : "";
+  if (!content) return assemble(units, ctx); // summarizer gave nothing → fall back, never worse than FIT
+
+  const olderIds = new Set(older.map((u) => u.id));
+  /** @type {Unit} */ const summaryUnit = {
+    id: ctx.summaryId ?? `summary:${older[0].id}..${older[older.length - 1].id}`,
+    role: ctx.summaryRole ?? "system",
+    content,
+    kind: null,
+    summary: true,
+    summarizes: older.map((u) => u.id),
+  };
+  // Fit the verbatim tail + the summary (appended as freshest → top recency priority, so the fit keeps it
+  // over older verbatim). assemble owns the budget math; nothing here can overflow it.
+  const rest = units.filter((u) => !olderIds.has(u.id));
+  const result = await assemble([...rest, summaryUnit], ctx);
+
+  // Re-account `dropped` in ORIGINAL order: a folded turn is "summarized" if its summary survived the fit
+  // (represented + restorable by id), else a plain "budget" drop (the summary itself didn't fit).
+  const summaryKept = result.units.some((u) => u.id === summaryUnit.id);
+  const budgetDropped = new Set(result.dropped.filter((d) => d.id !== summaryUnit.id).map((d) => d.id));
+  /** @type {{id:string, reason:"budget"|"summarized"}[]} */ const dropped = [];
+  for (const u of units) {
+    if (olderIds.has(u.id)) dropped.push({ id: u.id, reason: summaryKept ? "summarized" : "budget" });
+    else if (budgetDropped.has(u.id)) dropped.push({ id: u.id, reason: "budget" });
+  }
+  return { units: result.units, dropped, tokens: result.tokens };
 }

@@ -933,3 +933,10 @@ FIT 0/4**; the recent-turn control passes both (harness valid). → **build R-C6
   a lossier summarizer would drop incidental facts (the honest tradeoff the build must surface). Integration
   needs bareagent's real `summarize()` on `ctx`; this POC stands in with a live model and does NOT prove the
   seam, only the policy's value.
+
+**Reconciled to the SHIPPED verb (2026-06-14):** the POC's summaryWindow arm now calls the shipped
+`summaryWindow(units, {budget, summarize, summaryKeep})` (not a manual splice), so it validates exactly
+what ships. Re-run: summaryWindow stays WITHIN budget (379 ≤ 399 tok — the verb reserves no overflow,
+composing `assemble`) and still beats FIT-drop on the discriminator (3/3 vs 0/3). The build is a separate
+verb over `assemble` (not folded into it — keeps assemble's complexity flat); 8 integration tests in
+`test/summarywindow.test.js`. Pending: bareagent's real `summarize()` on `ctx` (§23) for the live seam.

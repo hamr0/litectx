@@ -21,7 +21,7 @@
 // the answerer. Run: node poc/rc6-summarywindow-poc.mjs
 
 import { execFileSync } from "node:child_process";
-import { assemble } from "../src/index.js";
+import { assemble, summaryWindow } from "../src/index.js";
 
 const MODEL = "sonnet";
 
@@ -97,31 +97,38 @@ const recent = all.slice(-N);
 const older = all.slice(0, -N);
 const tok = (s) => Math.ceil(s.length / 4);
 
-// Arm 2 first — roll OLDER into one summary (GENERIC prompt — not told which facts to keep), so the
-// budget can be set to exactly hold (summary + last-N). Same budget then governs the FIT arm.
-const summaryText = ask(
-  `Summarize the following earlier portion of an engineering conversation concisely (a few sentences), ` +
-  `preserving concrete decisions and values a teammate might need later:\n\n${renderView(older)}`,
-);
-const summaryUnit = { id: "summary", role: "system", content: `[earlier conversation, summarized] ${summaryText}` };
+// The summarizer (stand-in for bareagent's ctx.summarize). Memoized by folded-turn count so the
+// budget-sizing call and the in-assemble call return the SAME text (deterministic budget).
+const memo = new Map();
+const summarize = async (msgs) => {
+  if (memo.has(msgs.length)) return memo.get(msgs.length);
+  const text = ask(
+    `Summarize the following earlier portion of an engineering conversation concisely (a few sentences), ` +
+    `preserving concrete decisions and values a teammate might need later:\n\n` +
+    msgs.map((m) => `[${m.role}] ${m.content}`).join("\n\n"),
+  );
+  memo.set(msgs.length, text);
+  return text;
+};
 
-// EQUAL budget = summary + last-N verbatim + small headroom. By construction the summary arm fits
-// exactly; the FIT arm gets the SAME budget and spends the summary-sized slack buying back the most
-// RECENT older turns (the filler), never reaching the early fact-turns.
-const budget = tok(summaryUnit.content) + recent.reduce((n, u) => n + tok(u.content), 0) + 20;
+// Size the EQUAL budget = summary(of older) + last-N verbatim + headroom, so the FIT arm spends the
+// summary-sized slack buying back the most RECENT older turns (never reaching the early fact-turns).
+const summaryText = await summarize(older.map((u) => ({ role: u.role, content: u.content })));
+const budget = tok(summaryText) + recent.reduce((n, u) => n + tok(u.content), 0) + 20;
 
 console.log(`R-C6 summaryWindow — equal-budget A/B (budget≈${budget} tok, last-N=${N}, model=${MODEL})\n`);
 
-// Arm 1 — FIT-drop (the shipped verb, no summary).
+// Arm 1 — FIT-drop (the shipped verb, no summarize).
 const fit = await assemble(all, { budget });
 console.log(`FIT-drop: kept ${fit.units.length}/${all.length} turns (dropped ${fit.dropped.length} older), ${fit.tokens} tok`);
 
-// Arm 2 — summaryWindow at the same budget.
+// Arm 2 — summaryWindow via the SHIPPED verb (same budget, keep last-N verbatim).
 console.log(`summary of ${older.length} older turns = ${tok(summaryText)} tok`);
-const sw = await assemble([summaryUnit, ...recent], { budget });
-console.log(`summaryWindow: 1 summary (${tok(summaryText)} tok) + ${recent.length} verbatim, kept ${sw.units.length}, ${sw.tokens} tok`);
-const swFit = sw.units.some((u) => u.id === "summary");
-console.log(`  summary survived the fit: ${swFit}\n`);
+const sw = await summaryWindow(all, { budget, summarize, summaryKeep: N });
+const swSummary = sw.units.find((u) => u.summary);
+const swSummarized = sw.dropped.filter((d) => d.reason === "summarized").map((d) => d.id);
+console.log(`summaryWindow (shipped tier): kept ${sw.units.length} units, ${sw.tokens} tok; ` +
+  `summary spliced=${!!swSummary} folding ${swSummarized.length} turns\n`);
 
 // ── Probe both views with the live model ────────────────────────────────────────────────────────────
 const fitScore = scored(answerAll(renderView(fit.units)));
@@ -132,7 +139,7 @@ console.log("-".repeat(70));
 for (let i = 0; i < PROBES.length; i++) {
   const p = PROBES[i];
   const inFit = fit.units.some((u) => u.id === `t${p.turn}`);
-  const inSw = p.turn > all.length - N; // recent turns are verbatim in sw
+  const inSw = sw.units.some((u) => u.id === `t${p.turn}`) || (swSummarized.includes(`t${p.turn}`)); // verbatim OR folded into summary
   console.log(
     `${p.kind.padEnd(18)} t${String(p.turn).padEnd(2)} | ${String(inFit).padEnd(5)}/${String(inSw).padEnd(5)} ` +
     `| ${fitScore[i].hit ? " ✓ " : " ✗ "} | ${swScore[i].hit ? " ✓ " : " ✗ "}  ${swScore[i].hit ? "" : `(sw said: ${swScore[i].ans.slice(0, 40)})`}`,

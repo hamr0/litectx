@@ -231,19 +231,19 @@ necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cr
 | Store backend | `liteCtxAsStore` plug | mounts it (RT-3) | — |
 | MCP mount | the `litectx-mcp` bin | mount recipe (RT-4) | — |
 | Write-gate | **emitter** (`toWriteAction`) + standalone audit/redact | — | the **gate** (`flags` + 6-step floor) |
-| Summary window (R-C6) | **policy** (trigger/N/splice via compress) | the bound **`summarize()`** model call | — |
+| Summary window (R-C6) | **policy SHIPPED** — `summaryWindow(units,ctx)` (trigger/N/splice over `assemble`) | the bound **`summarize()`** model call (pending §23) | — |
 | Agent loop · tool dispatch · sub-agent spawn · `ctx` carrier | — | **owns** | — |
 | Content-trust: source label vs verdict | `provenance` label + shape flag | — | renders **deny/ask** (never scans text) |
 
 ### Build order — agreed work only, no unnecessary deferral
-**A. Close the write-gate seam (live; the only blocker is a release):**
-1. **litectx — cut the release.** Merge `build-b-compress-tier` → main, bump (COMPRESS + write-gate are both `[Unreleased]` → **v0.13.0**), publish (OIDC dispatch). ← *current blocker, litectx's move.*
-2. **bareguard — repin.** Swap `seam-contract.test.js` from the relative import to a `devDependency` on the published version; merge to main. ← *bareguard's move, after step 1.* Seam then CLOSED both sides.
+**A. Close the write-gate seam:**
+1. ✅ **litectx — release cut.** **v0.13.0 published** (COMPRESS + write-gate emitter), on npm.
+2. **bareguard — repin** (DUE). Swap `seam-contract.test.js` from the relative import to a `devDependency` on `litectx@^0.13.0`; merge to main. ← *bareguard's move.* Seam then CLOSED both sides.
 
-**B. R-C6 summaryWindow (AGREED — shape confirmed 2026-06-14; build it, don't park it):**
-3. **litectx — windowing-policy POC** (trigger on `ctx.budget` + last-N verbatim + compress-splice, stand-in summarizer). *No bareagent dep — startable now.* Gate: must beat plain FIT-drop at equal budget.
-4. **bareagent — build `summarize(messages) => Promise<string>` on `ctx`** + spec the signature into its `prd.md §23`. *The model-call half litectx is forbidden to own.*
-5. **litectx — build summaryWindow** wiring bareagent's `summarize()` into `assemble`; splice = the shipped restorable COMPRESS path (summarized turns recoverable by id). *After 3 (gate) + 4 (seam).*
+**B. R-C6 summaryWindow (AGREED — shape confirmed 2026-06-14):**
+3. ✅ **litectx — windowing-policy POC** (`poc/rc6-summarywindow-poc.mjs`): at equal budget, 3/3 vs 0/3 dropped-turn answers. Gate PASSED.
+4. ✅ **litectx — `summaryWindow(units, ctx)` SHIPPED** (`[Unreleased]`): a verb over `assemble` (last-N verbatim + rolling summary of older, restorable, never overflows). Works with any host summarizer.
+5. **bareagent — build `summarize(messages) => Promise<string>` on `ctx`** + spec it into `prd.md §23` (DUE). *The model-call half litectx is forbidden to own — wiring it lights the live seam.*
 
 **C. Contract-only close-outs (docs, not code — mark CLOSED so they stop reading as "open"):**
 6. Fold the resolved Tier-B contracts into **§5C**: R-W3 = state on `ctx.session` (convention over the opaque carrier; isolate = don't emit a unit); R-C3/C5 = view-level drop only (no destructive mutation); R-W4 = `remember(kind:"episode")`. **No code on any repo.**

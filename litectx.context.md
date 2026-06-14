@@ -590,6 +590,29 @@ the contract:
   `recall`/`get`/`impact` and pass injected `code`/`doc` units in explicitly (COMPRESS then tiers them).
   Library API only (a host-loop mechanic, like `compress` — not an MCP verb).
 
+### `await summaryWindow(units, ctx?)` → `Promise<{ units, dropped, tokens }>`
+The **rolling-summary** read-path verb (R-C6) — a free function (`import { summaryWindow } from "litectx"`)
+that composes `assemble`. Under budget pressure it keeps the **last-N** transcript turns verbatim and rolls
+everything **older** into one rolling summary, then budget-fits via `assemble`. litectx owns the *policy*;
+the **host owns the model** — litectx never calls one.
+- `ctx`: the same as `assemble` plus — `summarize` (**required to engage**): a host-supplied
+  `(messages: {role,content}[]) => Promise<string>`; `summaryKeep` = N recent turns kept verbatim (default
+  8); `summaryRole` = role for the summary unit (default `"system"`; role is the consumer's grammar, so the
+  host names it); `summaryId` = its id (default derived from the folded range).
+- **Engages only under budget pressure.** No `summarize`, or everything already fits the budget, or fewer
+  than 2 older turns to fold → it is a plain `assemble` (no model call, no summary). So it is **never worse
+  than FIT**.
+- **The summary unit** carries `summary: true` and `summarizes: [ids]` (the turns it folded) and is placed
+  as the **freshest** content — a cache-stable dynamic suffix, so the verbatim prefix stays byte-identical
+  for prefix caching. Each folded turn is reported in `dropped` with **`reason: "summarized"`** (restorable
+  by `id`, like a drop). If even the summary can't fit, it is dropped like any unit (**never an overflow**),
+  and its folded turns degrade to `reason: "budget"`.
+- Excludes `pinned`/`atomic`/`code`/`doc` from folding (pinned never elides; tool-call pairs never become
+  prose; code/doc are the COMPRESS tier's job inside `assemble`). Library API only.
+- Validated end-to-end with a live model (`poc/rc6-summarywindow-poc.mjs`): at equal budget, summaryWindow
+  retained the dropped-turn answers FIT-drop lost (**3/3 vs 0/3**). Integration with bareagent's real
+  `summarize()` seam is pending its §23 build; the verb works today with any host-supplied summarizer.
+
 ### `liteCtxAsStore(lc, opts?)` → a host `Store`
 Mount an indexed `LiteCtx` as a host's swappable memory backend — the four-method `Store` shape
 (`{ store, search, get, delete }`) a runtime like bareagent's `Memory` expects — so a substring-scan
@@ -619,6 +642,7 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 ### Named exports (advanced / extension)
 - `compress(node, { level })` / `COMPRESS_LEVELS` — the R-C7 render primitive above.
 - `assemble(units, { budget, task })` — RT-1 budget-fit a neutral transcript to a token budget (the section above).
+- `summaryWindow(units, { budget, summarize, summaryKeep, summaryRole, summaryId })` — R-C6 rolling-summary read-path over `assemble` (the section above).
 - `liteCtxAsStore(lc, { kind })` — mount litectx as a host `Store` (the section just above).
 - `toWriteAction(id, text, { kind, provenance, meta, injectionRisk })` → the pure write-gate emitter
   (the `{ type: "memory.write", … }` action shape); `WriteAudit` → standalone JSONL audit sink (ships no

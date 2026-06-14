@@ -6,6 +6,21 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **`summaryWindow(units, ctx)` — the R-C6 rolling-summary read-path verb.** Under budget pressure it keeps
+  the last-N transcript turns **verbatim** and rolls everything **older** into one rolling summary, then
+  budget-fits the result via `assemble`. litectx owns the policy (trigger — engaged only when the transcript
+  exceeds budget; N — `ctx.summaryKeep`, default 8; the splice); the **host owns the model** (`ctx.summarize`,
+  a provider-bound `(messages) => Promise<string>` — litectx never calls a model itself). The summary is a
+  synthetic unit placed as the freshest content (a cache-stable dynamic suffix; the verbatim prefix stays
+  byte-identical for prefix caching) and is **restorable** — folded turns are reported in `dropped` with
+  reason `"summarized"` and listed on the summary unit's `summarizes`, recoverable by id. Never overflows
+  (the summary fits via `assemble`, or is dropped like any unit) and **never worse than FIT** (falls back to
+  a plain `assemble` when unwired, when everything already fits, or when there are < 2 older turns to fold).
+  POC-gated (`poc/rc6-summarywindow-poc.mjs`): at equal budget, summaryWindow retained the dropped-turn
+  answers FIT-drop lost (discriminator 3/3 vs 0/3 on a live model). Integration with bareagent's real
+  `summarize()` seam is pending its §23 build; this verb stands alone with any host-supplied summarizer.
+
 ## [0.13.0] — 2026-06-14
 
 ### Added
