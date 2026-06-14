@@ -1,8 +1,10 @@
-# Push / PR gate (LIBRARY_CONVENTIONS §5): npm ci → typecheck → build:types → test.
-# Nothing else gates a merge — no lint step (tsc with checkJs + strictNullChecks already catches
-# the bug class that matters; the ESLint ecosystem cuts against the dependency hierarchy for a small
-# vanilla-ESM lib). The recall/impact bench floors are a LOCAL pre-push gate, not here: their
-# corpora are local checkouts that don't exist on a CI runner (see poc/bench-lib.mjs).
+# Push / PR gate (LIBRARY_CONVENTIONS §5): npm ci → typecheck → build:types → test → pure benches.
+# No lint step (tsc with checkJs + strictNullChecks already catches the bug class that matters; the
+# ESLint ecosystem cuts against the dependency hierarchy for a small vanilla-ESM lib). The recall/impact/
+# memory bench floors stay a LOCAL pre-push gate, not here: their corpora are local checkouts that don't
+# exist on a CI runner (see poc/bench-lib.mjs). The two CE-verb VALUE gates (assemble/summaryWindow) DO
+# run here — they are pure/deterministic/offline/free (synthetic fixtures, a stub summarizer, no corpus,
+# no model), so a regression in either verb's reason-to-exist blocks the merge.
 name: CI
 
 on:
@@ -27,3 +29,5 @@ jobs:
       - run: npm run typecheck   # tsc --noEmit — JSDoc/code mismatch blocks merge (anti-drift §2)
       - run: npm run build:types  # prove the .d.ts actually generate from the JSDoc
       - run: npm test             # node --test — all integration tests are hermetic (own tmp fixtures)
+      - run: npm run bench:assemble  # CE-verb VALUE gate — COMPRESS rescues a needed unit (pure, no corpus)
+      - run: npm run bench:summary   # CE-verb VALUE gate — rolling summary retains dropped turns (stub summarizer)

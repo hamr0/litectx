@@ -14,7 +14,9 @@
 >   try Pi. It **stands on fabro's shell** rather than rebuilding it, and it **may reveal**
 >   primitive gaps but **never dictates** litectx's API.
 >
-> **Status.** DRAFT — Part A is buildable now and is the priority; Part B is deferred and optional.
+> **Status.** Part A is **DONE** — the validation suite ships (see A7: recall/impact/memory + the
+> `assemble`/`summaryWindow` VALUE gates; the redundant `realwork-bench` is deliberately unbuilt per F1).
+> Part B is **PARKED** (2026-06-14) — optional, personal R&D, not on any roadmap; see the banner at Part B.
 > Supersedes the prior SF-1..SF-15 / SF-D1..SF-D2 numbering (this doc is design-only, nothing in
 > code references those IDs).
 >
@@ -396,6 +398,12 @@ library (`bench-lib.mjs`, invoked by `npm run bench`) is the natural home for it
 ---
 
 # Part B — The Factory spike (optional · personal · stands on fabro)
+
+> **PARKED 2026-06-14.** With Part A done (the bench suite fully covers validation), Part B has **no
+> dependency pulling on it** — it is *not* validation and nothing in litectx/baresuite needs it. It stays
+> here as a recorded want (build-itch + try Pi), explicitly **off the roadmap and unscheduled**. Un-park
+> only as a deliberate, separately-budgeted personal spike; the hard rules below (FS-1/FS-2 — stands on
+> fabro, never dictates a primitive) still bind if it ever wakes up. Everything below is the parked design.
 
 ## B0. Honest framing
 
