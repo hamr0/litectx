@@ -199,19 +199,61 @@ The factory-independent residue is now **almost entirely shipped** (status 2026-
    RT-3 consumer (v0.13.0). No longer pending.
 3. **`assemble()` (R-G6)** ✅ **SHIPPED** — FIT (v0.11.0) + **COMPRESS tier (Build B, 2026-06-13)**;
    SELECT killed. bareagent RT-1 adapter consumes it (awaits → async-compatible).
-4. **bareguard write-gate seam (②)** — the **one factory-independent piece still unbuilt**: litectx's
-   write-gate **emitter** (emits `{type:"memory.write"|"memory.inject",…}`). bareguard's `flags`
-   field-gate is built (§5B); the seam is **producer-less** until this ships. **Demand-gated** — no
-   consumer emits gate actions yet, so building it now lights up a seam nobody drives.
-5. **`scope` (④)** — `owner`/`session` predicate ✅ **SHIPPED** (R-I1, §4.4); harness threading deferred.
+4. **bareguard write-gate seam (②)** ✅ **EMITTER SHIPPED 2026-06-14** (litectx `build-b-compress-tier`
+   @ `5b9cf8b`) — `toWriteAction` + opt-in `writeGate` on `remember` + `WriteAudit`/`WriteDeniedError`.
+   bareguard's `flags` field-gate was already on main (`738ab20`); the seam is **branch-test GREEN on the
+   real emitter** (bareguard `litectx-seam-branchtest` @ `1d182fe`: 10/10 seam rows, 139/139 suite — the
+   two flag-path rows matched the litectx POC 13/13). **One step left and it's litectx's: cut the release**
+   → then bareguard repins its seam test from the relative import to a published `devDependency` (the
+   mergeable, CI-safe commit). See **§3.1 + §5B step 6**.
+5. **`scope` (④)** — `owner`/`session` predicate ✅ **SHIPPED** (R-I1, §4.4); harness threading deferred (RT-5 trip-wire).
 
-So the litectx critical path is no longer this seam list (mostly done) — it's the **Tier-B adopter-pulled
-set** (session/state, clear/trim, summaryWindow, selectTools), each blocked on bareagent answering its
-shape question (§5C), plus the demand-gated write-gate emitter (item 4).
+The factory-independent seam list is **done** (only the release cut remains). What's genuinely left is
+**one agreed build — R-C6 summaryWindow** (shape CONFIRMED 2026-06-14; NOT to be deferred) — plus
+necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cross-repo board is **§3.1**.
 
-Everything else is `assemble()`-class: **defer until bareagent pins the shape.** When bareagent exists,
-the first question for each deferred item stays *"does `forget`/`evict`/`remember`/`recall` already
-cover this?"* before adding surface.
+---
+
+## 3.1 Tri-repo board — who owns what + build order (canonical, 2026-06-14)
+
+> The single source of truth for the litectx ↔ bareagent ↔ bareguard hand-offs. **Spine:** litectx is
+> *consumed by* baresuite (bareagent + bareguard), never the reverse — litectx owns **content/context**,
+> bareagent owns the **loop/grammar/provider**, bareguard owns the **gate/floor**. When a seam needs a
+> model call or transcript grammar, it is NOT litectx's (it never calls a model on these paths, never
+> learns provider grammar). Update this table, not scattered notes, when a hand-off moves.
+
+### Ownership (steady-state)
+| Domain | litectx (content) | bareagent (loop) | bareguard (gate) |
+|---|---|---|---|
+| Code/doc graph · recall · impact · `get`/`getNode`/`related` | **owns** | — | — |
+| Write path · memory · `stash`/`peek`/`evict` · scope predicate | **owns** | — | — |
+| CE render: `compress`, `assemble` (FIT+COMPRESS) | **owns** (the verb) | msgs⇄units adapter + grammar/pairing/fail-open | — |
+| Store backend | `liteCtxAsStore` plug | mounts it (RT-3) | — |
+| MCP mount | the `litectx-mcp` bin | mount recipe (RT-4) | — |
+| Write-gate | **emitter** (`toWriteAction`) + standalone audit/redact | — | the **gate** (`flags` + 6-step floor) |
+| Summary window (R-C6) | **policy** (trigger/N/splice via compress) | the bound **`summarize()`** model call | — |
+| Agent loop · tool dispatch · sub-agent spawn · `ctx` carrier | — | **owns** | — |
+| Content-trust: source label vs verdict | `provenance` label + shape flag | — | renders **deny/ask** (never scans text) |
+
+### Build order — agreed work only, no unnecessary deferral
+**A. Close the write-gate seam (live; the only blocker is a release):**
+1. **litectx — cut the release.** Merge `build-b-compress-tier` → main, bump (COMPRESS + write-gate are both `[Unreleased]` → **v0.13.0**), publish (OIDC dispatch). ← *current blocker, litectx's move.*
+2. **bareguard — repin.** Swap `seam-contract.test.js` from the relative import to a `devDependency` on the published version; merge to main. ← *bareguard's move, after step 1.* Seam then CLOSED both sides.
+
+**B. R-C6 summaryWindow (AGREED — shape confirmed 2026-06-14; build it, don't park it):**
+3. **litectx — windowing-policy POC** (trigger on `ctx.budget` + last-N verbatim + compress-splice, stand-in summarizer). *No bareagent dep — startable now.* Gate: must beat plain FIT-drop at equal budget.
+4. **bareagent — build `summarize(messages) => Promise<string>` on `ctx`** + spec the signature into its `prd.md §23`. *The model-call half litectx is forbidden to own.*
+5. **litectx — build summaryWindow** wiring bareagent's `summarize()` into `assemble`; splice = the shipped restorable COMPRESS path (summarized turns recoverable by id). *After 3 (gate) + 4 (seam).*
+
+**C. Contract-only close-outs (docs, not code — mark CLOSED so they stop reading as "open"):**
+6. Fold the resolved Tier-B contracts into **§5C**: R-W3 = state on `ctx.session` (convention over the opaque carrier; isolate = don't emit a unit); R-C3/C5 = view-level drop only (no destructive mutation); R-W4 = `remember(kind:"episode")`. **No code on any repo.**
+
+### Necessary deferrals (blocked on a real precondition — trip-wires, not vague "later")
+| Item | Owner when it fires | Trip-wire |
+|---|---|---|
+| **R-S6 selectTools** | litectx (build) | bareagent ships a real **tool corpus + (intent→tools) traces** (~hundreds of MCP tools). Today ~15–20 native → RAG lift ≈ 0. |
+| **RT-2 onTurn observe** | bareagent (seam) / litectx (writer) | a **transcript-truncation seam** exists (harvest-before-evict interlock). |
+| **RT-5 scope-key threading** | bareagent (thread) / litectx (predicate ✅ ships) | ephemeral children / cross-child queries / multi-tenant single store. |
 
 ---
 
