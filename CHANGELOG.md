@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-06-14
+
 ### Changed
 - **README rewritten around the context-engineering framing.** Adopts the bareagent README skeleton
   (banner → quick start → *What's inside* → *Surfaces* → *Recipes* → *Validation* → ecosystem), groups

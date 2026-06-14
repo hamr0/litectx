@@ -16,7 +16,7 @@
 
 **Opinionated and lightweight**, like the rest of [baresuite](https://github.com/hamr0/bareagent). Light enough to read in an afternoon; complete enough that you don't reinvent recall, impact, memory, or budget-fitting. It doesn't make a model smarter and it doesn't bloat the build — it **scaffolds the rough spots where agents fail (finding the right file, remembering across sessions, fitting a budget) at low processing cost**, so a weaker model searches more like a strong one without replacing the model's own reasoning. Not a framework, not a service, not an LSP: a code+context **graph** in one SQLite file plus the verbs that read and write it. It owns no loop and calls no model of its own. Import what you need, ignore the rest.
 
-> **Status: v0.14.0 — `npm i litectx`.** Pre-1.0: the surface is stable enough to use and CI-gated (240+ tests), but the API may still evolve (`recall()`/`impact()`/`assemble()` are async). Per-release detail lives in the [CHANGELOG](CHANGELOG.md).
+> **Status: v0.14.1 — `npm i litectx`.** Pre-1.0: the surface is stable enough to use and CI-gated (240+ tests), but the API may still evolve (`recall()`/`impact()`/`assemble()` are async). Per-release detail lives in the [CHANGELOG](CHANGELOG.md).
 
 ## Quick start
 
