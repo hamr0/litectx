@@ -68,7 +68,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | `calls` edges (symbol blast radius) — computed on demand, not persisted (§7.1) | ✅ shipped (slice 5a; `type='call'` row stays reserved for a future persist optimization) |
 | Anti-false-isolation for TS aliases / barrels (§7.2) | ✅ shipped (slice 5b — renamed barrel/path-alias re-exports resolved) |
 | `getNode` / `related` graph accessors (R-G1/R-G2: describe a node + walk its `import` edges) | ✅ shipped (v0.9.0; API-only) |
-| **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@huggingface/transformers` is an *optional* dep (auto-installed; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
+| **Embeddings** (semantic tier) | ✅ shipped (slice 6). **ON by default on the CLI + MCP** (`--no-embeddings` for the BM25-only base); the raw `LiteCtx` lib default stays `embeddings: false` (explicit opt-in). `@huggingface/transformers` is an *optional **peer** dep* (**not** auto-installed — `npm i @huggingface/transformers` to enable; graceful BM25 fallback if absent). Near-essential for memory (paraphrase 0.000→0.574); +~0.2 MRR on natural-language code recall. Per-query ~0.7s first load / ~6ms warm (not the mis-borrowed "15–19s") |
 | **Write path** — `remember`/`forget` for `fact`/`episode`/direct `doc`; provenance (`by`); recall audit log; `reviewCandidates` HITL query | ✅ shipped (slice 7) |
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
@@ -400,9 +400,10 @@ content. The `id` is your handle for update/forget — namespace it (`"fact:auth
 
 **Write-gate (§10.1, opt-in via `writeGate` config).** When a `writeGate` is wired, `remember()` first
 builds a gate-able action `{ type: "memory.write", kind, provenance: by, text, id, meta?, injectionRisk? }`
-(via the exported `toWriteAction`) and `await`s `writeGate.check(action)` **before** the write commits. A
-`deny` outcome throws `WriteDeniedError` (carrying `.id` + `.decision`) and **nothing persists**;
-`allow`/`ask` proceed to the write. If a `writeAudit` is also wired, one decision line is recorded
+(via the exported `toWriteAction`) and `await`s `writeGate.check(action)` **before any side effect**. A
+`deny` outcome throws `WriteDeniedError` (carrying `.id` + `.decision`) and **nothing persists** — a denied
+write is a true no-op (no embedding computed, no episode prune, no row written); `allow`/`ask` proceed to
+the write. If a `writeAudit` is also wired, one decision line is recorded
 (host `redact` scrubs). litectx states the **source** (`provenance`) + an optional `injectionRisk` flag;
 the gate renders deny/ask — litectx never makes the content verdict. Default (no `writeGate`) is unchanged.
 

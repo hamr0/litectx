@@ -15,6 +15,21 @@ All notable changes to this project are documented here, following
   from the intro — that history lives in this file. Logo simplified to a CE-forward wordmark
   (`write · select · compress · isolate`). Docs only — no code or API change.
 
+### Fixed
+- **A denied write is now a true no-op.** `remember()` checked the `writeGate` *after* computing the
+  embedding and pruning stale episodes, so a `deny` still spent an embed and mutated the store. The gate
+  now runs **before any side effect** — on `deny` nothing is embedded, pruned, or written. The allow-path
+  order (embed → prune → write) is unchanged. Regression test verified to fail on the pre-fix code.
+
+### Security
+- **The embeddings ML stack is no longer installed by default.** `@huggingface/transformers` moved from
+  `optionalDependencies` (which npm installs by default) to an **optional `peerDependency`** (marked
+  `optional` in `peerDependenciesMeta`), so `npm i litectx` stays lean + offline-capable. Adopters opt in
+  with `npm i @huggingface/transformers` — the embedder already errors with that exact instruction when
+  it's absent. Shrinks the default supply-chain surface; no API change.
+- **`git ls-files` argument hardening.** `collectFiles()` now passes `--` before pathspecs (parity with
+  the `git log` and `rg` calls), so a pathspec can never be misread as a git option.
+
 ## [0.14.0] — 2026-06-14
 
 ### Added

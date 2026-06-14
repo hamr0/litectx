@@ -376,8 +376,8 @@ action-vs-content thesis both hold.
 ### 10.1 bareguard — gate the memory-write, inherit floor supremacy (R-G3 / R-X2)
 > **SHIPPED (litectx side) 2026-06-14 — the write-gate emitter.** `remember()` now emits the gate-able
 > `{type:"memory.write", kind, provenance, text, id, meta?, injectionRisk?}` action and checks it via an
-> opt-in `writeGate` (`LiteCtxConfig`) **before** the write commits — a `deny` throws `WriteDeniedError`
-> and nothing persists. Exports: `toWriteAction` (pure emitter), `WriteAudit` (standalone audit, ships no
+> opt-in `writeGate` (`LiteCtxConfig`) **before any side effect** — a `deny` throws `WriteDeniedError` and
+> the write is a true no-op (no embedding computed, no episode prune, no row written). Exports: `toWriteAction` (pure emitter), `WriteAudit` (standalone audit, ships no
 > secret patterns — host `redact` scrubs), `WriteDeniedError`. litectx is duck-typed to `.check` (not
 > coupled to a bareguard version). **POC `poc/write-gate-emitter-poc.mjs` (13/13) on the REAL bareguard
 > `Gate`:** the emitted shape is load-bearing (strip `provenance`/`injectionRisk` → decision flips back to

@@ -230,10 +230,10 @@ hook to the **global published install** means it runs the **published 0.5.0 `im
 
 Two separate layers, do not conflate them:
 
-1. **The JS dependency** (`@xenova/transformers`) installs **with npm**, at package
-   install time. It's an **`optionalDependency`**, so `npm install -g litectx`
-   auto-installs it best-effort — and if its native/optional build fails, npm
-   **continues without failing the install** (bare/offline installs still work).
+1. **The JS dependency** (`@huggingface/transformers`) is an **optional `peerDependency`**
+   (marked `optional` in `peerDependenciesMeta`), so `npm install -g litectx` does **not**
+   pull it — the base install stays lean + offline-capable. Enable embeddings by installing it
+   yourself (`npm i @huggingface/transformers`); without it the CLI/MCP fall back to BM25-only.
 2. **The model weights** (`Xenova/all-MiniLM-L6-v2`, 384-dim, **~23 MB** quantized ONNX)
    are **not bundled**. They download **lazily on first embedding use** (first
    `index`/`recall`/`remember` with embeddings on) from the HF hub, then cache. Measured:
