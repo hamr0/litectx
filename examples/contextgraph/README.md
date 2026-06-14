@@ -2,45 +2,63 @@
 
 Two graphs sit over the same litectx data:
 
-- **codegraph** (`../graph-view`) — the **content** graph: files, `import` edges, risk badges. *What the code is.*
-- **contextgraph** (here) — the **pipeline**: the context-engineering verbs a design composes
-  (`index` · `recall` · `assemble` · `compress` · `summaryWindow` · `remember` · `impact` …) as nodes,
-  and the **data handed between them** as edges. *What a CE design does, end to end.*
+- **codegraph** (`../graph-view`) — the **content** graph: files, `import` edges, risk. *What the code is.*
+- **contextgraph** (here) — the **pipeline**: the context-engineering verbs a design composes, as nodes,
+  and the data handed between them as edges. *What a CE design does, end to end.*
 
-It's generated from a **real run**, so it reports what actually happened — units in, tokens, and how
-`assemble` resolved the budget (`kept` verbatim · `compressed` to signature · `dropped`) — not a
-hand-drawn intent. The graph can't lie about the pipeline.
+It's captured from a **real run** (not a hand-drawn build), so it reports what actually happened. Two views:
 
-![contextgraph](./contextgraph.svg)
+| view | answers | file |
+|---|---|---|
+| **flow** | how it ran, in order, with the data on the edges | `*-flow.svg` |
+| **tree / coverage** | the **Write · Select · Compress · Isolate** trunk with every verb branching off — the ones this design used are lit + numbered, the rest dim | `*-tree.svg` |
+
+![tree](./contextgraph-pipeline-tree.svg)
+
+The tree is the diagnostic: drop it next to your build, run, and see which CE primitives you cover, which
+you skip, and whether a verb is in the wrong place. The verb→primitive map is source-grounded in the
+CE-PRD skill-map (`docs/01-product/litectx-ce-prd.md`).
+
+## The drop-in — `observe()`
+
+Wrap your `LiteCtx` once, run your loop normally, read `.trace`. It records every verb call **live** —
+it works because each verb returns an accountable result, so the proxy reads args-in + result-out with
+**zero** changes to litectx internals.
+
+```js
+import { observe } from "./recorder.mjs";
+const ctx = observe(new LiteCtx({ root }));
+const assemble = ctx.tap("assemble", rawAssemble);   // free-function verbs join the same trace
+
+await ctx.index();  await ctx.recall(q);  await assemble(units, { budget });  ctx.stash(id, payload);
+
+ctx.trace.treeSvg();   // CE coverage
+ctx.trace.svg();       // flow
+ctx.trace.json();      // the structured trace
+```
 
 ## Run it
 
 ```sh
-node examples/contextgraph/contextgraph.mjs
+node examples/contextgraph/pipeline.mjs     # the observe() drop-in — exercises all 4 primitives
+node examples/contextgraph/contextgraph.mjs # a minimal index → recall → assemble flow
+node examples/contextgraph/from-bench.mjs   # contextgraph applied to poc/assemble-bench.mjs (A/B branch)
 ```
 
-Indexes this repo, runs `index → recall → assemble` (a tight budget so FIT, COMPRESS, and drop all
-fire), and writes three artifacts next to the script:
+Then serve the folder and open **`index.html`** for the **interactive** view — toggle flow/tree, click any
+verb for its recorded calls:
 
-| file | what |
-|---|---|
-| `contextgraph.json` | the **trace** — `{ nodes, edges }`, the primitive's structured output |
-| `contextgraph.svg`  | a static render (the image above) |
-| `contextgraph.md`   | a **Mermaid** flowchart — agent-readable, renders on GitHub / in any preview |
+```sh
+cd examples/contextgraph && python3 -m http.server 8011
+# → http://127.0.0.1:8011/index.html   (a server is needed; index.html fetches the JSON)
+```
 
-Open **`index.html`** for the interactive view (click a verb node for its stats). Self-contained, zero deps.
+## Files
 
-## How it works
+- `recorder.mjs` — the `ContextGraph` recorder (`svg`/`treeSvg`/`mermaid`/`json`), the W/S/C/I taxonomy,
+  and `observe()`. The prototype of a future `src/contextgraph.js` lib primitive.
+- `pipeline.mjs` · `contextgraph.mjs` · `from-bench.mjs` — three real pipelines that emit the artifacts.
+- `index.html` — the zero-dep interactive viewer.
+- `contextgraph*.{json,svg,md}` — generated artifacts (re-run a script to refresh).
 
-Every litectx verb already **returns an accountable result** (`recall` → hits; `assemble` →
-`{ units, dropped, tokens }` with `compressed`/`summary` flags). So the recorder in `contextgraph.mjs`
-is thin: a node per verb call, an edge per handoff, both read straight from return values — no internal
-instrumentation. That recorder is the prototype of a future `contextgraph` library primitive; for now it
-lives here as a worked example.
-
-## Adapting it
-
-Swap the pipeline body for your own composition — record a `remember → recall → summaryWindow → assemble`
-flow, a sub-agent's `impact`-gated edit, whatever your design is. The verbs are nodes; what each returns
-is the edge. (Adopters import from `litectx`; this example imports from `../../src` because it lives in
-the repo.)
+(Adopters import from `litectx`; these examples import from `../../src` because they live in the repo.)

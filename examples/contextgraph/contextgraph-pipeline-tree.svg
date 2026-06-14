@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="728" height="740" viewBox="0 0 728 740" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+<rect width="728" height="740" fill="#0d1117"/>
+<text x="28" y="30" fill="#adbac7" font-size="13" font-weight="bold">litectx · contextgraph — CE coverage</text>
+<text x="28" y="48" fill="#636e7b" font-size="10.5">Write · Select · Compress · Isolate as the trunk; verbs this design USED are lit + numbered in run order</text>
+<line x1="196" y1="361.5" x2="236" y2="130" stroke="#768390" stroke-width="1.5"/>
+<line x1="196" y1="361.5" x2="236" y2="269" stroke="#768390" stroke-width="1.5"/>
+<line x1="196" y1="361.5" x2="236" y2="408" stroke="#768390" stroke-width="1.5"/>
+<line x1="196" y1="361.5" x2="236" y2="593" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="130" x2="452" y2="84" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="130" x2="452" y2="130" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="130" x2="452" y2="176" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="269" x2="452" y2="246" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="269" x2="452" y2="292" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="408" x2="452" y2="362" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="408" x2="452" y2="408" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="408" x2="452" y2="454" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="593" x2="452" y2="524" stroke="#768390" stroke-width="1.5"/>
+<line x1="386" y1="593" x2="452" y2="570" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="593" x2="452" y2="616" stroke="#21262d" stroke-width="1.5"/>
+<line x1="386" y1="593" x2="452" y2="662" stroke="#21262d" stroke-width="1.5"/>
+<rect x="28" y="339.5" width="168" height="44" rx="10" fill="#21262d" stroke="#444c56"/>
+<text x="112" y="359.5" fill="#f0f6fc" font-size="13" font-weight="bold" text-anchor="middle">graph substrate</text>
+<text x="112" y="374.5" fill="#909dab" font-size="9.5" text-anchor="middle">index · get · related</text>
+<rect x="236" y="110" width="150" height="40" rx="9" fill="#3a2c1c" stroke="#586069"/>
+<text x="311" y="135" fill="#f0f6fc" font-size="14" font-weight="bold" text-anchor="middle">Write</text>
+<rect x="236" y="249" width="150" height="40" rx="9" fill="#1c2f3a" stroke="#586069"/>
+<text x="311" y="274" fill="#f0f6fc" font-size="14" font-weight="bold" text-anchor="middle">Select</text>
+<rect x="236" y="388" width="150" height="40" rx="9" fill="#1c3a2e" stroke="#586069"/>
+<text x="311" y="413" fill="#f0f6fc" font-size="14" font-weight="bold" text-anchor="middle">Compress</text>
+<rect x="236" y="573" width="150" height="40" rx="9" fill="#2f1c3a" stroke="#586069"/>
+<text x="311" y="598" fill="#f0f6fc" font-size="14" font-weight="bold" text-anchor="middle">Isolate</text>
+<rect x="452" y="67" width="248" height="34" rx="8" fill="#3a2c1c" stroke="#768390"/>
+<circle cx="469" cy="84" r="9" fill="#539bf5"/><text x="469" y="87.5" fill="#0d1117" font-size="11" font-weight="bold" text-anchor="middle">2</text>
+<text x="486" y="88" fill="#f0f6fc" font-size="12.5" font-weight="bold">remember</text>
+<rect x="452" y="113" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="134" fill="#4b525c" font-size="12.5" font-weight="normal">forget</text>
+<rect x="452" y="159" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="180" fill="#4b525c" font-size="12.5" font-weight="normal">write-gate</text>
+<rect x="452" y="229" width="248" height="34" rx="8" fill="#1c2f3a" stroke="#768390"/>
+<circle cx="469" cy="246" r="9" fill="#539bf5"/><text x="469" y="249.5" fill="#0d1117" font-size="11" font-weight="bold" text-anchor="middle">3</text>
+<text x="486" y="250" fill="#f0f6fc" font-size="12.5" font-weight="bold">recall</text>
+<rect x="452" y="275" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="296" fill="#4b525c" font-size="12.5" font-weight="normal">impact</text>
+<rect x="452" y="345" width="248" height="34" rx="8" fill="#1c3a2e" stroke="#768390"/>
+<circle cx="469" cy="362" r="9" fill="#539bf5"/><text x="469" y="365.5" fill="#0d1117" font-size="11" font-weight="bold" text-anchor="middle">4</text>
+<text x="486" y="366" fill="#f0f6fc" font-size="12.5" font-weight="bold">assemble</text>
+<rect x="452" y="391" width="248" height="34" rx="8" fill="#1c3a2e" stroke="#768390"/>
+<circle cx="469" cy="408" r="9" fill="#539bf5"/><text x="469" y="411.5" fill="#0d1117" font-size="11" font-weight="bold" text-anchor="middle">5</text>
+<text x="486" y="412" fill="#f0f6fc" font-size="12.5" font-weight="bold">compress</text>
+<rect x="452" y="437" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="458" fill="#4b525c" font-size="12.5" font-weight="normal">summaryWindow</text>
+<rect x="452" y="507" width="248" height="34" rx="8" fill="#2f1c3a" stroke="#768390"/>
+<circle cx="469" cy="524" r="9" fill="#539bf5"/><text x="469" y="527.5" fill="#0d1117" font-size="11" font-weight="bold" text-anchor="middle">6</text>
+<text x="486" y="528" fill="#f0f6fc" font-size="12.5" font-weight="bold">stash</text>
+<rect x="452" y="553" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="574" fill="#4b525c" font-size="12.5" font-weight="normal">peek</text>
+<rect x="452" y="599" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="620" fill="#4b525c" font-size="12.5" font-weight="normal">evict</text>
+<rect x="452" y="645" width="248" height="34" rx="8" fill="#161b22" stroke="#272d36"/>
+<text x="486" y="666" fill="#4b525c" font-size="12.5" font-weight="normal">scope</text>
+</svg>

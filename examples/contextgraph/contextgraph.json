@@ -3,14 +3,16 @@
     {
       "id": "n0",
       "verb": "index",
-      "detail": "154 files → graph",
+      "detail": "159 files → graph",
       "stats": {
-        "files": 154,
-        "added": 154,
+        "files": 159,
+        "added": 159,
         "updated": 0,
         "removed": 0,
         "unchanged": 0
-      }
+      },
+      "col": 0,
+      "row": 0
     },
     {
       "id": "n1",
@@ -20,29 +22,35 @@
         "query": "assemble budget fit compress signature drop tier",
         "kind": "code",
         "hits": 8
-      }
+      },
+      "col": 1,
+      "row": 0
     },
     {
       "id": "n2",
       "verb": "assemble",
-      "detail": "budget 1154 tok",
+      "detail": "budget 1116 tok",
       "stats": {
-        "budget": 1154,
+        "budget": 1116,
         "inUnits": 8,
-        "inTokens": 2564
-      }
+        "inTokens": 2479
+      },
+      "col": 2,
+      "row": 0
     },
     {
       "id": "n3",
       "verb": "→ context window",
-      "detail": "1115 tok assembled",
+      "detail": "1098 tok assembled",
       "accent": "#1c3a2e",
       "stats": {
-        "tokens": 1115,
-        "verbatim": 5,
-        "compressed": 1,
+        "tokens": 1098,
+        "verbatim": 6,
+        "compressed": 0,
         "dropped": 2
-      }
+      },
+      "col": 3,
+      "row": 0
     }
   ],
   "edges": [
@@ -54,12 +62,12 @@
     {
       "from": "n1",
       "to": "n2",
-      "label": "8 units · 2564 tok"
+      "label": "8 units · 2479 tok"
     },
     {
       "from": "n2",
       "to": "n3",
-      "label": "kept 5 · comp 1 · drop 2"
+      "label": "kept 6 · comp 0 · drop 2"
     }
   ]
 }

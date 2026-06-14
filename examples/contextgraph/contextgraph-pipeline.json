@@ -1,0 +1,153 @@
+{
+  "nodes": [
+    {
+      "id": "n0",
+      "verb": "index",
+      "primitive": "Substrate",
+      "accent": "#21262d",
+      "detail": "159 files",
+      "stats": {
+        "args": [],
+        "out": "{\"files\":159,\"added\":159,\"updated\":0,\"removed\":0,\"unchanged\":0}"
+      },
+      "col": 0,
+      "row": 0
+    },
+    {
+      "id": "n1",
+      "verb": "remember",
+      "primitive": "Write",
+      "accent": "#3a2c1c",
+      "detail": "fact:auth",
+      "stats": {
+        "args": [
+          "fact:auth",
+          "Auth is JWT, verified in validateToken …",
+          "{\"kind\":\"fact\",\"by\":\"human\"}"
+        ],
+        "out": "undefined"
+      },
+      "col": 1,
+      "row": 0
+    },
+    {
+      "id": "n2",
+      "verb": "recall",
+      "primitive": "Select",
+      "accent": "#1c2f3a",
+      "detail": "6 hits",
+      "stats": {
+        "args": [
+          "validate auth token middleware",
+          "{\"kind\":\"code\",\"n\":6,\"body\":true}"
+        ],
+        "out": "[6 items]"
+      },
+      "col": 2,
+      "row": 0
+    },
+    {
+      "id": "n3",
+      "verb": "assemble",
+      "primitive": "Compress",
+      "accent": "#1c3a2e",
+      "detail": "6 kept · 307 tok",
+      "stats": {
+        "args": [
+          "[6 items]",
+          "{\"budget\":311}"
+        ],
+        "out": "{\"units\":[{\"id\":\"test/mcp.test.js#fixtureRepo\",\"role\":\"tool\",\"content\":\"/** Buil"
+      },
+      "col": 3,
+      "row": 0
+    },
+    {
+      "id": "n4",
+      "verb": "compress",
+      "primitive": "Compress",
+      "accent": "#1c3a2e",
+      "detail": "signature · 20 tok",
+      "stats": {
+        "args": [
+          "{\"text\":\"/** Build a throwaway repo on disk; returns its root. */\\nfunction fixt",
+          "{\"level\":\"signature\"}"
+        ],
+        "out": "/** Build a throwaway repo on disk; ret…"
+      },
+      "col": 4,
+      "row": 0
+    },
+    {
+      "id": "n5",
+      "verb": "stash",
+      "primitive": "Isolate",
+      "accent": "#2f1c3a",
+      "detail": "scratch:run1 parked",
+      "stats": {
+        "args": [
+          "scratch:run1",
+          "a large intermediate result parked out …"
+        ],
+        "out": "undefined"
+      },
+      "col": 5,
+      "row": 0
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": ""
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": ""
+    },
+    {
+      "from": "n2",
+      "to": "n3",
+      "label": ""
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": ""
+    },
+    {
+      "from": "n4",
+      "to": "n5",
+      "label": ""
+    }
+  ],
+  "taxonomy": {
+    "Write": [
+      "remember",
+      "forget",
+      "write-gate"
+    ],
+    "Select": [
+      "recall",
+      "impact"
+    ],
+    "Compress": [
+      "assemble",
+      "compress",
+      "summaryWindow"
+    ],
+    "Isolate": [
+      "stash",
+      "peek",
+      "evict",
+      "scope"
+    ]
+  },
+  "primitives": [
+    "Write",
+    "Select",
+    "Compress",
+    "Isolate"
+  ]
+}

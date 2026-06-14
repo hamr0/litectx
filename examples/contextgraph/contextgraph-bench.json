@@ -1,0 +1,89 @@
+{
+  "nodes": [
+    {
+      "id": "n0",
+      "verb": "transcript",
+      "detail": "4 units · needle validateToken",
+      "col": 0,
+      "row": 0,
+      "stats": {
+        "units": 4,
+        "budget": 110,
+        "needle": "validateToken"
+      }
+    },
+    {
+      "id": "n1",
+      "verb": "assemble",
+      "detail": "COMPRESS on · budget 110",
+      "col": 1,
+      "row": 0,
+      "stats": {
+        "budget": 110,
+        "codeCompressed": true
+      }
+    },
+    {
+      "id": "n2",
+      "verb": "→ context",
+      "detail": "needle kept as signature",
+      "col": 2,
+      "row": 0,
+      "accent": "#1c3a2e",
+      "stats": {
+        "tokens": 108,
+        "kept": 3,
+        "compressed": 1,
+        "dropped": 0,
+        "needleRetained": true
+      }
+    },
+    {
+      "id": "n3",
+      "verb": "assemble",
+      "detail": "FIT only · budget 110",
+      "col": 1,
+      "row": 1,
+      "stats": {
+        "budget": 110,
+        "parseable": false
+      }
+    },
+    {
+      "id": "n4",
+      "verb": "→ context",
+      "detail": "needle LOST — dropped",
+      "col": 2,
+      "row": 1,
+      "accent": "#3a1c1c",
+      "stats": {
+        "tokens": 80,
+        "kept": 3,
+        "dropped": 1,
+        "needleRetained": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "n0",
+      "to": "n1",
+      "label": "4 units"
+    },
+    {
+      "from": "n1",
+      "to": "n2",
+      "label": "kept 3 · comp 1 · drop 0"
+    },
+    {
+      "from": "n0",
+      "to": "n3",
+      "label": "4 units (baseline)"
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "kept 3 · drop 1"
+    }
+  ]
+}
