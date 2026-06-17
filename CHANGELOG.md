@@ -6,6 +6,11 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-06-17
+
+### Documentation
+- **README rewritten value-first** around the **two cores** (active-decay memory + the write/select/compress/isolate toolkit) and **two ways to use it** (code-aware memory layer over MCP · context-engineering library in your loop). Mechanism moved to a single "Under the hood" section; PRD / benches-PRD / internal-doc links dropped. No package code changed.
+
 ## [0.16.1] — 2026-06-14
 
 ### Changed
