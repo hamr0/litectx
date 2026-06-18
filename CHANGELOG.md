@@ -4,6 +4,16 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.1] — 2026-06-18
+
+### Fixed
+- **Widen the `pdfjs-dist` peer range to `^4.0.0 || ^5.0.0 || ^6.0.0`** (was `^4.0.0`). The range was
+  pinned to the major the shipped tests run against (4.10.38), needlessly excluding the current 5.x/6.x
+  lines — a host on pdfjs-dist 5.x (e.g. a `peerOptional` conflict on install) was a **cosmetic** range
+  miss, not an API incompatibility. Verified: litectx's exact extraction path (`legacy/build/pdf.mjs` →
+  `getDocument/numPages/getPage/getTextContent/item.{str,transform,hasEOL}/destroy`) produces
+  **byte-identical** output (same sha256) on 4.x, 5.x, and 6.x against a real PDF. No code change.
+
 ## [0.17.0] — 2026-06-18
 
 ### Added
