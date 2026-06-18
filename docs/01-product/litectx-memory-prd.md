@@ -250,8 +250,18 @@ Design rules (DECIDED):
     and namespace ids per scope (defense-in-depth). **Optional `expiresAt`** (R5): once past, excluded from
     recall/get and reclaimed by `ctx.purge()`; the consumer owns the retention schedule, litectx the
     mechanism. Both default null (global/forever; backward-compatible).
+  - **Fail-closed scope (v0.18, multis M3 follow-up)** — R2 fences a *set* scope correctly, but the
+    *default* (a missing scope = see/write all) is the single-tenant origin leaking through, and a
+    per-call `scope` arg is forgettable. The durable fix is three additive pieces: **`strictScope: true`**
+    makes a missing doc scope **throw** on read *and* write (an un-scoped `ingest` silently publishing to
+    the shared tier is a *persistent* leak, so the write path fails closed too); **`GLOBAL`** is the
+    unambiguous shared-tier opt-in (a read/write sentinel, never a stored value → no migration, union
+    intact) so "deliberately global" ≠ "forgot"; **`ctx.scoped(scope)`** binds the scope once (the
+    doc-axis analogue of instance `owner`/`session`) so "forgot to pass scope" is a non-existent code
+    path. Flag off by default → single-tenant byte-identical. Doc/blob axis only — the `fact`/`episode`
+    memory axis is explicitly untouched (it is already bind-once-safe; flipping its default was a non-goal).
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
-  parser/chunker/store with litectx.)*
+  parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.

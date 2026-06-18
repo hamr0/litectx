@@ -861,12 +861,16 @@ export class Store {
    * to every scope; a fact/episode/file has no `doc_scope` row, so it is unaffected). This is what makes
    * "one customer never sees another's" hold for a *known/guessed* id, not only for search — bare
    * `getItem(id)` (no scope) is unchanged, so the existing `owner`/`session` fetch-by-id model is untouched.
+   * `global` (multis M3 fail-closed) fetches the shared tier ONLY: a row with a non-null `doc_scope.scope`
+   * returns null even though `scope` is null. It is how the facade serves a {@link GLOBAL} `get` — distinct
+   * from a bare `getItem(id)` (scope null, global false), which stays unfenced (the legacy by-id model).
    * @param {string} id
    * @param {number} [now]  epoch ms; when set, a row whose `expires_at <= now` returns null (R5)
    * @param {string|null} [scope]  when set, a row whose `doc_scope.scope` is non-null and ≠ `scope` returns null (R2)
+   * @param {boolean} [global]  when true, a row whose `doc_scope.scope` is non-null returns null (GLOBAL-only fetch)
    * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
    */
-  getItem(id, now, scope) {
+  getItem(id, now, scope, global) {
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
       this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(id) ??
         this.db
@@ -884,13 +888,17 @@ export class Store {
     // R5 expiry + R2 scope-fenced fetch: one doc_scope lookup gates both (a fact/file has no row → neither
     // applies). expires_at <= now → gone (purge reclaims later); a non-null scope ≠ the reader's → not yours
     // (a NULL/global scope stays visible to all). Only runs when a caller actually asks (now/scope set).
-    if (now != null || scope != null) {
+    if (now != null || scope != null || global) {
       const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
         this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
       );
       if (ds) {
         if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
-        if (scope != null && ds.scope != null && ds.scope !== scope) return null;
+        // GLOBAL fetch: only the shared tier (any tenant-scoped row is hidden). Tenant fetch: hide a
+        // row tagged with a DIFFERENT non-null scope. A bare get (scope null, global false) is unfenced.
+        if (global) {
+          if (ds.scope != null) return null;
+        } else if (scope != null && ds.scope != null && ds.scope !== scope) return null;
       }
     }
     let text = null;
@@ -1052,19 +1060,30 @@ export class Store {
    * taxed (the convex blend `(1-w)·own + w·spread` demoted well-ranked files whose neighbours
    * were mediocre; additive holds-or-beats it on every bench repo with fewer regressions). Spreading
    * re-ranks a wider pool than `limit` and is a no-op for kinds without edges (`doc`): order unchanged.
-   * `filter` (multis M3 R2/R5) narrows direct doc/blob rows via the `doc_scope` sidecar: `scope` keeps
-   * `scope ∪ NULL-global` (a scoped recall sees its own uploads + the global kb, never another scope);
-   * `now` (epoch ms) drops rows whose `expires_at <= now`. Both are no-ops when unset (`:x IS NULL`
-   * short-circuits) and on file-indexed rows (no `doc_scope` row → always global/forever).
+   * `filter` (multis M3 R2/R5) narrows direct doc/blob rows via the `doc_scope` sidecar. It is a
+   * **resolved** read filter (the strict-scope policy lives in the facade, not here — see
+   * `LiteCtx._resolveReadScope`); this method only executes the three modes it encodes:
+   *   - `seeAll: true`  → no scope predicate (every row, incl. all tenants) — the single-tenant /
+   *     admin / legacy-`null` default. This is the fail-OPEN mode the facade gates behind strictScope.
+   *   - `seeAll: false, scope: null` → the shared/global tier ONLY (`ds.scope IS NULL`) — the GLOBAL view.
+   *   - `seeAll: false, scope: "user:42"` → `scope ∪ NULL-global` (own uploads + the global kb, never
+   *     another tenant). This is the R2 union.
+   * `now` (epoch ms) drops rows whose `expires_at <= now`. All are no-ops on file-indexed rows (no
+   * `doc_scope` row → always global/forever) and ignored entirely by `fact`/`episode` (the mem branch,
+   * scoped by instance owner/session). `seeAll` defaults to "`scope == null`" so a direct caller passing
+   * only `{scope}` (or `{}`) keeps the pre-strict behaviour byte-identical.
    * @param {string} match  an FTS5 MATCH expression
    * @param {string} kind   the memory kind to scope to ("code" | "doc" | ...)
    * @param {number} [limit=10]
    * @param {number} [spreadWeight=0]  0 = pure BM25; ~0.4 = v1 default (set by the caller)
-   * @param {{ scope?: string|null, now?: number|null }} [filter]  R2 scope + R5 expiry narrowing
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null }} [filter]  resolved R2 scope + R5 expiry
    * @returns {Hit[]}
    */
   search(match, kind, limit = 10, spreadWeight = 0, filter = {}) {
     const scope = filter.scope ?? null;
+    // seeAll defaults to the legacy meaning of a null scope ("see everything") so any direct caller
+    // (tests, the MCP/CLI bins) is byte-identical pre-strict; the facade passes it explicitly.
+    const seeAll = (filter.seeAll ?? scope == null) ? 1 : 0;
     const now = filter.now ?? null;
     // written-memory kinds route to the stemmed `mem` table (§5.1) — their own ranking domain
     // (kinds never share a ranking, so no BM25 score ever merges across the two tables). No
@@ -1100,11 +1119,13 @@ export class Store {
           "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, -bm25(docs) AS score " +
             "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
             "WHERE docs MATCH :match AND docs.kind = :kind " +
-            "AND (:scope IS NULL OR ds.scope IS NULL OR ds.scope = :scope) " +
+            // tri-state fence (multis M3 fail-closed): seeAll=1 → every row; else global rows always,
+            // plus the reader's own tenant when a scope is set. seeAll=0 + scope NULL = global-only (GLOBAL).
+            "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
             "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
             "ORDER BY score DESC LIMIT :limit"
         )
-        .all({ match, kind, scope, now, limit: pool })
+        .all({ match, kind, scope, seeAll, now, limit: pool })
     );
     if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(rows.slice(0, limit));
 

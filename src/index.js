@@ -79,6 +79,20 @@ const SPREAD_WEIGHT = 0.3;
 export const KINDS = ["code", "doc", "fact", "episode"];
 
 /**
+ * The shared-tier scope sentinel (multis M3 fail-closed ask). Under `strictScope`, a missing scope
+ * THROWS — so reading or writing the global knowledge base needs an explicit, unambiguous opt-in that
+ * is never spelled the same as "I forgot." That is `GLOBAL`: pass it as a `scope` (to `recall`/`get`/
+ * `ingest`/`remember`) or bind a `ctx.scoped(GLOBAL)` view to act on the global tier deliberately.
+ *
+ * It is a **read/write sentinel, never a stored value**: on write it maps to "no `doc_scope` row"
+ * (`scope IS NULL`, exactly today's global rows); on read it maps to "`ds.scope IS NULL` only." So it
+ * needs no migration and leaves the `scope ∪ NULL` union untouched. A unique Symbol so it can never
+ * collide with a tenant scope string.
+ * @type {symbol}
+ */
+export const GLOBAL = Symbol("litectx:global");
+
+/**
  * @typedef {Object} LiteCtxConfig
  * @property {string} root                 repo root to index
  * @property {string[]} [include]          file extensions to index (default: ts/js/py/md)
@@ -97,6 +111,15 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  *                                         sets it (e.g. git email or OS user, resolved host-side) so a
  *                                         shared store isolates per actor; recall then returns own +
  *                                         global (NULL-owner) memory only.
+ * @property {boolean} [strictScope]       fail-closed multi-tenant mode for the DOC axis (multis M3 ask).
+ *                                         Default false = today's behaviour (a missing/`null` doc `scope`
+ *                                         means "see everything" — correct single-tenant, a footgun on a
+ *                                         shared store). When true, a missing scope on `recall({kind:'doc'})`,
+ *                                         `get`, `ingest`, and `remember({kind:'doc'})` THROWS instead of
+ *                                         returning/writing every tenant's rows; the only ways to act are an
+ *                                         explicit tenant scope (`scope ∪ global`) or {@link GLOBAL} (the
+ *                                         shared tier). Governs the doc/blob axis ONLY — `fact`/`episode`
+ *                                         (the `owner`/`session` memory axis) and `code` are untouched.
  * @property {string} [session]            scope key (§4.4) — the run that owns volatile `episode`s.
  *                                         Default unset = durable/unscoped: recall sees all sessions'
  *                                         episodes. A host running concurrent agents sets it so a run's
@@ -160,6 +183,9 @@ export class LiteCtx {
     // pre-scope behavior. A host threads identity in to isolate (owner = actor; session = run).
     this.owner = config.owner ?? null;
     this.session = config.session ?? null;
+    // fail-closed DOC-axis scope (multis M3 ask): off = legacy (null scope = see-all); on = a missing
+    // doc scope throws on read AND write, so a forgotten scope is a loud error, never a silent tenant leak.
+    this.strictScope = config.strictScope ?? false;
     this.store = new Store(this.dbPath, { owner: this.owner, session: this.session });
 
     // embeddings tier (slice 6) — off by default. The embedder is lazy: built on first use only when
@@ -289,6 +315,70 @@ export class LiteCtx {
   }
 
   /**
+   * Resolve a caller's `scope` arg for a READ (`recall`/`get`) into the store's tri-state filter,
+   * applying the strictScope policy (multis M3 fail-closed ask). The whole point: a *missing* scope
+   * and a *deliberate* all/global read must not share a spelling.
+   * - {@link GLOBAL} → the shared tier only (`{ scope: null, seeAll: false, global: true }`).
+   * - a tenant string → `scope ∪ global` (`{ scope, seeAll: false, global: false }`).
+   * - omitted/`null` → under `strict`, THROW; otherwise the legacy see-all (`{ seeAll: true }`).
+   * @param {string | symbol | null | undefined} scope
+   * @param {boolean} strict  enforce (throw on a missing scope) — the caller decides per-axis
+   * @param {string} op  label for the thrown error
+   * @returns {{ scope: string|null, seeAll: boolean, global: boolean }}
+   */
+  _resolveReadScope(scope, strict, op) {
+    if (scope === GLOBAL) return { scope: null, seeAll: false, global: true };
+    if (scope == null) {
+      if (strict) throw new Error(`litectx: ${op} requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL (got none)`);
+      return { scope: null, seeAll: true, global: false };
+    }
+    if (typeof scope !== "string") throw new Error(`litectx: scope must be a string, GLOBAL, or omitted (got ${typeof scope})`);
+    return { scope, seeAll: false, global: false };
+  }
+
+  /**
+   * Resolve a caller's `scope` arg for a WRITE (`ingest`/`remember` on the doc axis) into the stored
+   * `doc_scope` value, applying strictScope. {@link GLOBAL} and omitted-when-not-strict both map to
+   * `null` (the shared tier = no `doc_scope` row); a missing scope under `strict` THROWS — so an
+   * accidental publish-to-everyone is impossible, the persistent-leak half of the ask.
+   * @param {string | symbol | null | undefined} scope
+   * @param {boolean} strict
+   * @param {string} op
+   * @returns {string | null}
+   */
+  _resolveWriteScope(scope, strict, op) {
+    if (scope === GLOBAL) return null;
+    if (scope == null) {
+      if (strict) throw new Error(`litectx: ${op} requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL to write the shared tier (got none)`);
+      return null;
+    }
+    if (typeof scope !== "string") throw new Error(`litectx: scope must be a string, GLOBAL, or omitted (got ${typeof scope})`);
+    return scope;
+  }
+
+  /**
+   * A scope-bound view (multis M3 fail-closed ask, layer c) — the doc-axis equivalent of binding
+   * `owner`/`session` on the instance. `ctx.scoped('user:42')` returns a handle whose `recall`/`get`/
+   * `ingest`/`remember` carry that scope automatically, so "forgot to pass a scope" becomes a
+   * non-existent code path (the per-call `scope` is gone, there is nothing to omit). This is the
+   * blessed multi-tenant pattern: it works regardless of `strictScope`, but pairs with it (the flag
+   * makes the BASE methods safe; the view makes the safe path the only path the caller touches).
+   *
+   * Pass {@link GLOBAL} for a shared-tier (KB) view. A bad bind (null/omitted/non-string-non-GLOBAL)
+   * throws HERE, at creation — a scope-bound view with no scope is the very footgun this closes, so
+   * it can never be constructed. The bound scope is fixed: the returned methods ignore any `scope`
+   * passed in their opts.
+   * @param {string | symbol} scope  a tenant scope string, or {@link GLOBAL} for the shared tier
+   * @returns {ScopedView}
+   */
+  scoped(scope) {
+    if (scope !== GLOBAL && typeof scope !== "string") {
+      throw new Error("litectx: scoped(scope) requires a tenant scope string or GLOBAL (a scope-bound view can't have no scope)");
+    }
+    return new ScopedView(this, scope);
+  }
+
+  /**
    * Ranked recall over the index, scoped by memory `kind`.
    *
    * Kinds never share a ranking, so high-volume prose can't bury code (§5): each kind is
@@ -325,18 +415,18 @@ export class LiteCtx {
    *
    * @overload
    * @param {string} query
-   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean, scope?: string }} opts
+   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} opts
    * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
-   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean, scope?: string }} [opts]
+   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} [opts]
    * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
-   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string }} [opts]
+   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    */
   async recall(query, opts = {}) {
@@ -345,8 +435,13 @@ export class LiteCtx {
     const qvec = this.embeddings && match ? await this._embedQuery(query) : null;
     const terms = keywords(query); // for chunk localization — same split the FTS body uses
     // R2 scope + R5 expiry narrowing for direct doc/blob rows (no-op for code/file rows + fact/episode).
+    // strictScope is enforced only when the query TOUCHES the doc axis ('doc' = the per-upload-scoped
+    // kind); 'code' is repo-global and 'fact'/'episode' scope via owner/session, so a missing scope on
+    // those never throws (the memory axis is explicitly untouched — see the ask's non-goals).
+    const touchesDoc = typeof opts.kind === "string" ? opts.kind === "doc" : (Array.isArray(opts.kind) ? opts.kind : KINDS).includes("doc");
+    const rs = this._resolveReadScope(opts.scope, this.strictScope && touchesDoc, "recall({ kind: 'doc' })");
     // `now` is stamped once so a recall is internally consistent; expired rows are excluded live here.
-    const filter = { scope: opts.scope ?? null, now: Date.now() };
+    const filter = { scope: rs.scope, seeAll: rs.seeAll, now: Date.now() };
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
       const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec, filter), terms);
@@ -525,18 +620,26 @@ export class LiteCtx {
    * for a doc/blob tagged with a *different* scope returns `null` (a global/null-scope row stays visible
    * to every scope; fact/episode/file rows are unaffected). This is the load-bearing half of "one customer
    * never sees another's" — recall alone fences search, but ids can be guessed, so a customer-reachable
-   * fetch must pass the requesting scope. Omit it and `get` behaves exactly as before (unfenced by id).
+   * fetch must pass the requesting scope. Pass {@link GLOBAL} to fetch only shared-tier rows.
+   *
+   * Under `strictScope` (multis M3 fail-closed ask), a **bare `get(id)` THROWS** — because `get` can't
+   * know a guessable id's scope without fetching it, so a missing scope on a strict store is a leak, not
+   * a convenience. Pass a tenant `scope` or `GLOBAL` to fetch. With strictScope off, `get(id)` is unfenced
+   * by id (the legacy behaviour), exactly as before.
    *
    * Sync (no embedder involved). Returns `null` for an unknown id.
    *
    * @param {string} id  a written-memory id, a stashed payload's id, or an indexed file's repo-relative path
-   * @param {{ log?: boolean, scope?: string }} [opts]
+   * @param {{ log?: boolean, scope?: string | symbol }} [opts]
    * @returns {Item | null}
    */
   get(id, opts = {}) {
-    // pass now → an expired direct doc/blob (R5) reads as gone; pass scope → another scope's row reads as
-    // absent (R2 — fences the by-id handle, not only recall; bare get(id) stays unfenced, owner-model intact).
-    const r = this.store.getItem(id, Date.now(), opts.scope ?? null);
+    // strictScope: a bare get(id) throws (can't fence a guessable id without a scope). GLOBAL → shared
+    // tier only; a tenant scope → R2 handle fence; omitted (non-strict) → unfenced (owner-model intact).
+    const rs = this._resolveReadScope(opts.scope, this.strictScope, "get(id)");
+    // pass now → an expired direct doc/blob (R5) reads as gone; pass scope/global → another scope's row
+    // reads as absent (R2 — fences the by-id handle, not only recall).
+    const r = this.store.getItem(id, Date.now(), rs.scope, rs.global);
     if (!r) return null;
     let text = r.text;
     if (r.source === "file") {
@@ -559,7 +662,7 @@ export class LiteCtx {
    *
    * @param {string} id    caller key / identity (lands in the row's `path`)
    * @param {string} text  the content
-   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high", scope?: string|null, expiresAt?: number|null }} [opts]
+   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high", scope?: string|symbol|null, expiresAt?: number|null }} [opts]
    *   `kind` ∈ {fact, episode, doc} (default `fact`); `by` = provenance `"human"|"agent"` (default
    *   `"agent"`); `injectionRisk` = OPTIONAL guardrails shape flag forwarded to a wired `writeGate`
    *   (litectx core never computes it — a guardrails tier sets it; ignored when no `writeGate`);
@@ -579,6 +682,10 @@ export class LiteCtx {
     }
     const by = opts.by ?? "agent";
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
+    // strictScope is the DOC axis only: a doc-row write needs an explicit scope or GLOBAL (else throw),
+    // resolving the GLOBAL sentinel → null (the shared tier). fact/episode scope via instance owner/session,
+    // never doc_scope — their `scope` opt is inert (and must not leak the symbol into the store), so force null.
+    const writeScope = kind === "doc" ? this._resolveWriteScope(opts.scope, this.strictScope, "remember({ kind: 'doc' })") : null;
     // write-gate + audit (§10.1) — runs when EITHER a gate or an audit sink is wired. The gate (when
     // present) checks BEFORE any side effect (no embedding spent, no episode prune, no write), so a denied
     // write is a true no-op. litectx states the SOURCE (`provenance:by`) + passes through an optional
@@ -604,7 +711,7 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: opts.scope, expiresAt: opts.expiresAt });
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, expiresAt: opts.expiresAt });
   }
 
   /**
@@ -652,7 +759,7 @@ export class LiteCtx {
    * a shorter (or format-changed) re-ingest never leaves orphans.
    *
    * @param {Uint8Array} buffer  the file bytes (e.g. a chat upload)
-   * @param {{ filename?: string, format?: string, id?: string, scope?: string|null, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts]
+   * @param {{ filename?: string, format?: string, id?: string, scope?: string|symbol|null, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts]
    *   `filename` drives extension routing; `format` overrides it; `id` = stable base id (else derived
    *   from the filename); `scope`/`expiresAt` = per-upload recall scope + retention (default null =
    *   global/forever); `meta` = opaque passthrough; `maxSize`/`maxPages`/`parseTimeoutMs` = the
@@ -663,6 +770,11 @@ export class LiteCtx {
     if (!(buffer instanceof Uint8Array)) throw new Error("ingest: expected a Buffer/Uint8Array of file bytes");
     const cls = classifyDocument(opts.filename, opts.format);
     const id = opts.id ?? deriveDocId(opts.filename);
+    // strictScope: ingest is ALWAYS the doc axis, so an explicit scope (or GLOBAL) is required. Resolve
+    // once up front so a missing scope fails fast — BEFORE any (expensive, untrusted) parse work — and so
+    // the blob branch has its stored scope value. The chunked branch passes the raw scope to remember,
+    // which re-resolves identically (passing the resolved null would wrongly re-trip the strict throw).
+    const writeScope = this._resolveWriteScope(opts.scope, this.strictScope, "ingest");
     if (cls.mode === "blob") {
       // byte-exact store (R3): no parser, body never chunked — the filename is the searchable surface.
       const maxSize = opts.maxSize ?? DEFAULT_MAX_SIZE;
@@ -670,7 +782,7 @@ export class LiteCtx {
       const filename = opts.filename ?? `${id}.${cls.format}`;
       const meta = opts.meta != null ? JSON.stringify(opts.meta) : null;
       this.store.forgetMemory({ idPrefix: id }); // upsert: drop any prior row/segments + bytes for this id
-      this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: opts.scope, expiresAt: opts.expiresAt });
+      this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: writeScope, expiresAt: opts.expiresAt });
       return { id, kind: "doc", format: cls.format, mode: "blob", chunks: 0 };
     }
     const { format, segments } = await documentToSegments(buffer, {
@@ -831,6 +943,46 @@ export class LiteCtx {
 
   close() {
     this.store.close();
+  }
+}
+
+/**
+ * A scope-bound facade over a {@link LiteCtx} (multis M3 fail-closed ask). Created by {@link LiteCtx#scoped},
+ * never directly. Every doc-axis verb carries the view's bound scope automatically; there is no per-call
+ * `scope` to pass, so it cannot be forgotten — the structural fix that mirrors how the memory axis binds
+ * `owner`/`session` once on the instance. The bound scope is final: any `scope` in a call's opts is ignored.
+ */
+export class ScopedView {
+  /** @param {LiteCtx} ctx  the underlying instance @param {string | symbol} scope  the bound scope (string | GLOBAL) */
+  constructor(ctx, scope) {
+    /** @type {LiteCtx} */
+    this._ctx = ctx;
+    /** @type {string | symbol} */
+    this._scope = scope;
+  }
+
+  /** Scope-bound {@link LiteCtx#recall}. @param {string} query @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean }} [opts] */
+  recall(query, opts = {}) {
+    // narrow `kind` so the call lands on a single recall overload (the union satisfies neither directly);
+    // `kind:` after the spread overrides `...opts`'s widened type with the narrowed one.
+    return typeof opts.kind === "string"
+      ? this._ctx.recall(query, { ...opts, kind: opts.kind, scope: this._scope })
+      : this._ctx.recall(query, { ...opts, kind: opts.kind, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#get}. @param {string} id @param {{ log?: boolean }} [opts] */
+  get(id, opts = {}) {
+    return this._ctx.get(id, { ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#ingest}. @param {Uint8Array} buffer @param {{ filename?: string, format?: string, id?: string, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts] */
+  ingest(buffer, opts = {}) {
+    return this._ctx.ingest(buffer, { ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#remember}. @param {string} id @param {string} text @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high", expiresAt?: number|null }} [opts] */
+  remember(id, text, opts = {}) {
+    return this._ctx.remember(id, text, { ...opts, scope: this._scope });
   }
 }
 

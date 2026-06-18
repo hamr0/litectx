@@ -4,6 +4,29 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-06-18
+
+### Added
+- **Fail-closed multi-tenant scope for the doc axis (`strictScope`, `GLOBAL`, `ctx.scoped()`).** On a
+  shared store holding per-upload-scoped docs/blobs, a *missing* `scope` previously meant "see/write
+  everything" — correct for the single-tenant origin, a silent cross-tenant leak the moment the store
+  carries scopes. Three additive, backward-compatible pieces close it (multis M3 ask):
+  - **`new LiteCtx({ strictScope: true })`** — a missing scope on `recall({kind:'doc'})`, `get`,
+    `ingest`, or `remember({kind:'doc'})` now **throws** instead of returning/writing every tenant's
+    rows (read *and* write — an un-scoped `ingest` silently publishing to the shared tier is a
+    *persistent* leak, so the write path fails closed too). Default **off** → existing single-tenant
+    callers are byte-identical. Governs the **doc/blob axis only**: `fact`/`episode` (the
+    `owner`/`session` memory axis) and `code` are untouched.
+  - **`GLOBAL`** (exported sentinel) — the unambiguous opt-in for the shared tier on read *or* write, so
+    "deliberately global" is never spelled the same as "I forgot." A read/write **sentinel, never a
+    stored value** (maps to `doc_scope.scope IS NULL`) → no migration, the `scope ∪ NULL` union intact.
+  - **`ctx.scoped(scope)`** → a `ScopedView` whose `recall`/`get`/`ingest`/`remember` carry the bound
+    scope automatically — no per-call `scope` to forget (the doc-axis analogue of binding `owner`/
+    `session` once on the instance). Binding with no scope throws at creation. Pairs with `strictScope`:
+    the flag makes the base methods safe, the view makes the safe path the only path a call site touches.
+- A *set* tenant scope is unchanged: `recall`/`get` still return `scope ∪ NULL-global` and never another
+  tenant. No schema change (the `doc_scope` sidecar already existed for R2).
+
 ## [0.17.1] — 2026-06-18
 
 ### Fixed

@@ -141,6 +141,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
 | `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. `code`/`doc` are never scoped. |
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
+| `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the DOC axis.** Off (default) = legacy: a missing/`null` doc `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall({kind:'doc'})`, `get`, `ingest`, or `remember({kind:'doc'})` **throws** instead of returning/writing every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Governs the **doc/blob axis only** — `fact`/`episode` (the `owner`/`session` memory axis) and `code` are untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
 | `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** — records one JSONL decision line per `remember()`. Fires whether or not a `writeGate` is wired: with a gate it logs the gate's decision; **without one it logs a synthetic `allow` (`reason: "no-gate"`)**, so a sink alone gives a complete write paper-trail. The sink (`opts.sink`) defaults to an in-memory `this.lines` array — the host wires a file/db writer. Ships **no** secret patterns: a host-supplied `redact(action)` scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
 | `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
@@ -155,6 +156,16 @@ config files — the adopter passes everything in.
 > `(:me IS NULL OR owner IS NULL OR owner = :me) AND (:sid IS NULL OR session IS NULL OR session = :sid)`
 > on **both** the BM25 and the embeddings/KNN paths. Scope lives in a non-FTS sibling table (`mem_scope`)
 > so adding it needed no migration of existing data.
+
+> **Doc-axis scope is a *separate* per-upload axis** from `owner`/`session`. Uploaded docs/blobs
+> (`ingest`, `remember({kind:'doc'})`) carry a per-row `scope` string (a chat/customer id) in a
+> `doc_scope` sidecar — passed per call, not bound to the instance. A *set* doc `scope` reads
+> `scope ∪ NULL-global` (own uploads + the shared KB, never another scope). The danger is the
+> **default**: with `strictScope` **off**, a missing doc `scope` reads/writes *every* tenant's rows
+> (the single-tenant legacy default). On a shared store this is a footgun — turn on **`strictScope`**
+> to make a missing scope **throw** (read *and* write), and use **`GLOBAL`** / **`ctx.scoped(scope)`**
+> for the deliberate paths. `GLOBAL` is a read/write **sentinel, never a stored value** (it maps to
+> `doc_scope.scope IS NULL`), so it needs no migration and leaves the `scope ∪ NULL` union intact.
 
 ## Public API
 
@@ -215,13 +226,16 @@ return shape follows the `kind` argument:
   a file hit returns its **localized chunk** (the indexed text that ranked — drift-free), or the
   whole file when nothing localized; `null` when the file is gone or the id is unknown. A **blob hit**
   (a byte-exact upload, R3) has no text body — `body` is `null`; fetch its bytes with `get(id).bytes`.
-- `opts.scope?: string` — **narrow direct doc/blob rows** to this scope (multis M3 R2). Returns `scope
-  ∪ null-global` and **nothing from another scope** — a chat sees its own uploads + the global knowledge
-  base, never another chat's. Unset = unscoped (sees everything; backward-compatible). Code/file rows and
-  `fact`/`episode` are unaffected (the latter scope via the instance `owner`/`session`). **Expired rows
-  (`expiresAt`, set at `ingest`) are always excluded**, scope or not — a recall never returns a stale upload.
-  **Fencing recall is only half of isolation** — pass the same `scope` to `get` too (ids are guessable);
-  see `get`'s tenant-isolation note.
+- `opts.scope?: string | typeof GLOBAL` — **narrow direct doc/blob rows** to this scope (multis M3 R2).
+  A tenant string returns `scope ∪ null-global` and **nothing from another scope** — a chat sees its own
+  uploads + the global knowledge base, never another chat's. `GLOBAL` returns **only** the shared tier.
+  Unset = unscoped (sees everything; backward-compatible) — **unless `strictScope` is on**, where an
+  omitted scope on a doc-touching recall **throws** (a forgotten scope must be a loud error, not a silent
+  all-tenant read). Code/file rows and `fact`/`episode` are unaffected (the latter scope via the instance
+  `owner`/`session`); a `fact`/`episode`/`code`-only recall never requires a scope, strict or not.
+  **Expired rows (`expiresAt`, set at `ingest`) are always excluded**, scope or not — a recall never
+  returns a stale upload. **Fencing recall is only half of isolation** — pass the same `scope` to `get`
+  too (ids are guessable); see `get`'s tenant-isolation note. The leak-proof pattern is `ctx.scoped(scope)`.
 - No usable query terms → `[]` (single kind) or all-empty groups.
 - `opts.log?: boolean` (default `true`) — set `false` to skip the recall audit log. The log
   is a **demand signal**: queries from dashboards, CI checks, batch tooling, or a read-only
@@ -312,11 +326,14 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
   scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
   `log: false` for non-demand consumers, same as `recall`.
-- `opts.scope?: string` (multis M3 R2) — **fences the direct handle**, the same way
+- `opts.scope?: string | typeof GLOBAL` (multis M3 R2) — **fences the direct handle**, the same way
   `recall({ scope })` fences discovery. A `get` for a doc/blob tagged with a *different* scope
-  returns `null`; a global (null-scope) row stays visible to every scope; fact/episode/file rows
-  are unaffected (they have no `doc_scope` row — they isolate via `owner`/`session`). Omit it and
-  `get` is **unfenced by id** (unchanged — the `owner`/`session` fetch model is untouched).
+  returns `null`; a global (null-scope) row stays visible to every scope; `GLOBAL` fetches **only**
+  shared-tier rows (a tenant row reads as `null`); fact/episode/file rows are unaffected (they have no
+  `doc_scope` row — they isolate via `owner`/`session`). Omit it and `get` is **unfenced by id**
+  (unchanged — the `owner`/`session` fetch model is untouched) — **unless `strictScope` is on**, where
+  a **bare `get(id)` throws** (a guessable id can't be fenced without a scope, so a missing one is a
+  leak; pass a tenant `scope` or `GLOBAL` to fetch).
 
 > **Tenant isolation needs BOTH (R2).** `recall({ scope })` fences *search*, but ids can be
 > guessed (a derived id slugs the filename), so a customer-reachable `get` must pass the requesting
@@ -325,11 +342,40 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
 > (1) **always pass the requesting `scope`** to *both* `recall` and `get`, (2) **never expose a bare
 > `get(id)`** (it is an unfenced capability fetch by design), and (3) **namespace ids per scope**
 > (e.g. `"chat-42:report"`) as cheap defense-in-depth so handles aren't cross-scope guessable. The
-> mechanism is litectx's; wiring the scope through on every call is the host's.
+> mechanism is litectx's; wiring the scope through on every call is the host's. **The leak-proof way to
+> meet (1)+(2): `ctx.scoped(scope)`** (below) — a handle with no per-call `scope` to forget, ideally on
+> a `strictScope: true` instance so the base methods fail closed behind it.
 >
 > **Egress trust.** `get` returns blob bytes **verbatim** (untrusted uploaded content). litectx never
 > parses them, so the *store* is safe, but the *host* must treat retrieved bytes as untrusted on the
 > way out — serve with `Content-Disposition: attachment`, never inline-render an uploaded HTML/SVG.
+
+### `ctx.scoped(scope)` → `ScopedView`
+A **scope-bound view** (multis M3 fail-closed ask) — the doc-axis equivalent of binding `owner`/`session`
+on the instance. `ctx.scoped("chat-42")` returns a handle whose `recall` / `get` / `ingest` / `remember`
+carry that scope **automatically**, so "forgot to pass a scope" becomes a non-existent code path (there
+is no per-call `scope` to omit). This is the blessed multi-tenant pattern: pair it with `strictScope: true`
+and the leak class is structurally impossible — the flag makes the *base* methods fail closed, the view
+makes the *safe* path the only one a call site touches.
+
+- `scope: string | typeof GLOBAL` — the bound scope (a tenant id, or `GLOBAL` for a shared-tier/KB view).
+- The bound scope is **final**: any `scope` passed in a call's `opts` is ignored.
+- A bad bind (no scope / `null` / a non-string non-`GLOBAL`) **throws at creation** — a scope-bound view
+  with no scope is the very footgun this closes, so it can't be constructed. (Throws even when
+  `strictScope` is off — the view's own invariant.)
+- Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember` with the same signatures **minus**
+  `opts.scope`. `impact`/`index`/`recent`/`promotions` are not on the view (they're the code or
+  instance-`owner`/`session` axes, not the per-upload doc scope).
+
+```js
+import { LiteCtx, GLOBAL } from "litectx";
+const ctx = new LiteCtx({ root, dbPath, strictScope: true }); // base methods fail closed
+const chat = ctx.scoped(`chat-${chatId}`);                    // bind once
+await chat.ingest(buf, { filename });                          // writes are scoped — nothing to forget
+const hits = await chat.recall("invoice total", { kind: "doc" }); // reads scope ∪ global, never another chat
+const kb = ctx.scoped(GLOBAL);                                 // a deliberate shared-tier view
+await kb.ingest(policyPdf, { filename: "refund-policy.pdf" }); // publish to the KB, explicitly
+```
 
 ### `await ctx.impact(symbol)` → `Promise<Impact | null>`
 The **impact** view (§7): *if I change this symbol, what's the blast radius and how risky?*
@@ -826,6 +872,10 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).
+- `GLOBAL: symbol` — the shared-tier scope sentinel (the `strictScope` / `scoped()` opt-in for the
+  doc axis). A read/write **sentinel, never stored** (maps to `doc_scope.scope IS NULL`); pass it as a
+  `scope` or bind `ctx.scoped(GLOBAL)` to act on the global KB deliberately. See the scope note + `scoped()`.
+- `ScopedView` — the class `ctx.scoped(scope)` returns (exposed for typing; construct via `scoped()`, not directly).
 - `Store` — the SQLite/FTS5 store class (used internally by `LiteCtx`; exposed for
   tooling and tests). Notable read methods: `count()`, `nodeCount()`,
   `nodesForPath(path)` → `{ symbol, node_type, start_line, end_line }[]`.
