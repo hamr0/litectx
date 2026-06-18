@@ -318,22 +318,22 @@ export class LiteCtx {
    * Resolve a caller's `scope` arg for a READ (`recall`/`get`) into the store's tri-state filter,
    * applying the strictScope policy (multis M3 fail-closed ask). The whole point: a *missing* scope
    * and a *deliberate* all/global read must not share a spelling.
-   * - {@link GLOBAL} → the shared tier only (`{ scope: null, seeAll: false, global: true }`).
-   * - a tenant string → `scope ∪ global` (`{ scope, seeAll: false, global: false }`).
+   * - {@link GLOBAL} → the shared tier only (`{ scope: null, seeAll: false, globalOnly: true }`).
+   * - a tenant string → `scope ∪ global` (`{ scope, seeAll: false, globalOnly: false }`).
    * - omitted/`null` → under `strict`, THROW; otherwise the legacy see-all (`{ seeAll: true }`).
    * @param {string | symbol | null | undefined} scope
    * @param {boolean} strict  enforce (throw on a missing scope) — the caller decides per-axis
    * @param {string} op  label for the thrown error
-   * @returns {{ scope: string|null, seeAll: boolean, global: boolean }}
+   * @returns {{ scope: string|null, seeAll: boolean, globalOnly: boolean }}
    */
   _resolveReadScope(scope, strict, op) {
-    if (scope === GLOBAL) return { scope: null, seeAll: false, global: true };
+    if (scope === GLOBAL) return { scope: null, seeAll: false, globalOnly: true };
     if (scope == null) {
       if (strict) throw new Error(`litectx: ${op} requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL (got none)`);
-      return { scope: null, seeAll: true, global: false };
+      return { scope: null, seeAll: true, globalOnly: false };
     }
     if (typeof scope !== "string") throw new Error(`litectx: scope must be a string, GLOBAL, or omitted (got ${typeof scope})`);
-    return { scope, seeAll: false, global: false };
+    return { scope, seeAll: false, globalOnly: false };
   }
 
   /**
@@ -639,7 +639,7 @@ export class LiteCtx {
     const rs = this._resolveReadScope(opts.scope, this.strictScope, "get(id)");
     // pass now → an expired direct doc/blob (R5) reads as gone; pass scope/global → another scope's row
     // reads as absent (R2 — fences the by-id handle, not only recall).
-    const r = this.store.getItem(id, Date.now(), rs.scope, rs.global);
+    const r = this.store.getItem(id, Date.now(), rs.scope, rs.globalOnly);
     if (!r) return null;
     let text = r.text;
     if (r.source === "file") {

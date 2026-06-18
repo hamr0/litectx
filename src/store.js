@@ -861,16 +861,16 @@ export class Store {
    * to every scope; a fact/episode/file has no `doc_scope` row, so it is unaffected). This is what makes
    * "one customer never sees another's" hold for a *known/guessed* id, not only for search — bare
    * `getItem(id)` (no scope) is unchanged, so the existing `owner`/`session` fetch-by-id model is untouched.
-   * `global` (multis M3 fail-closed) fetches the shared tier ONLY: a row with a non-null `doc_scope.scope`
+   * `globalOnly` (multis M3 fail-closed) fetches the shared tier ONLY: a row with a non-null `doc_scope.scope`
    * returns null even though `scope` is null. It is how the facade serves a {@link GLOBAL} `get` — distinct
-   * from a bare `getItem(id)` (scope null, global false), which stays unfenced (the legacy by-id model).
+   * from a bare `getItem(id)` (scope null, globalOnly false), which stays unfenced (the legacy by-id model).
    * @param {string} id
    * @param {number} [now]  epoch ms; when set, a row whose `expires_at <= now` returns null (R5)
    * @param {string|null} [scope]  when set, a row whose `doc_scope.scope` is non-null and ≠ `scope` returns null (R2)
-   * @param {boolean} [global]  when true, a row whose `doc_scope.scope` is non-null returns null (GLOBAL-only fetch)
+   * @param {boolean} [globalOnly]  when true, a row whose `doc_scope.scope` is non-null returns null (GLOBAL-only fetch)
    * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
    */
-  getItem(id, now, scope, global) {
+  getItem(id, now, scope, globalOnly) {
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
       this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(id) ??
         this.db
@@ -888,15 +888,15 @@ export class Store {
     // R5 expiry + R2 scope-fenced fetch: one doc_scope lookup gates both (a fact/file has no row → neither
     // applies). expires_at <= now → gone (purge reclaims later); a non-null scope ≠ the reader's → not yours
     // (a NULL/global scope stays visible to all). Only runs when a caller actually asks (now/scope set).
-    if (now != null || scope != null || global) {
+    if (now != null || scope != null || globalOnly) {
       const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
         this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
       );
       if (ds) {
         if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
         // GLOBAL fetch: only the shared tier (any tenant-scoped row is hidden). Tenant fetch: hide a
-        // row tagged with a DIFFERENT non-null scope. A bare get (scope null, global false) is unfenced.
-        if (global) {
+        // row tagged with a DIFFERENT non-null scope. A bare get (scope null, globalOnly false) is unfenced.
+        if (globalOnly) {
           if (ds.scope != null) return null;
         } else if (scope != null && ds.scope != null && ds.scope !== scope) return null;
       }
