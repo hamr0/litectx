@@ -42,10 +42,18 @@
     "web-tree-sitter": "0.22.6"
   },
   "peerDependencies": {
-    "@huggingface/transformers": "^4.2.0"
+    "@huggingface/transformers": "^4.2.0",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^4.0.0"
   },
   "peerDependenciesMeta": {
     "@huggingface/transformers": {
+      "optional": true
+    },
+    "mammoth": {
+      "optional": true
+    },
+    "pdfjs-dist": {
       "optional": true
     }
   },
@@ -83,6 +91,8 @@
   "devDependencies": {
     "@huggingface/transformers": "^4.2.0",
     "@types/node": "^22.19.19",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^4.0.0",
     "typescript": "^5.9.3"
   }
 }

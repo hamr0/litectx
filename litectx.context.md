@@ -442,6 +442,68 @@ a force pass clears and re-reads **file-sourced data only** — written memory, 
 text/embeddings, and the audit log are never touched (nothing about them is re-derivable
 from disk).
 
+### `await ctx.ingestDocument(buffer, opts?)` → `Promise<{ id, kind: "doc", format: "pdf" | "docx", chunks }>`
+Ingest a **whole document** (PDF/DOCX **bytes**) as recallable `doc`-kind content — the third ingest
+path, distinct from `index()` (sweeps a disk root) and `remember()` (stores text whole, unchunked). It
+**converts the document to markdown, splits it into segments, and stores each as its own
+`source='direct'` doc row** — so a later `recall(query, { kind: "doc", body: true })` surfaces the
+matching passage. Built for the **chat-upload flow**: bytes in, no on-disk file needed.
+
+- **PDF** (`pdfjs-dist`) → flat text (lossy by nature: reading order is best-effort, columns/tables
+  degrade, **scanned/image-only PDFs are not OCR'd** — they fail with a clear "no extractable text").
+  Since PDF text has no headings/blank lines, paragraphs are **reconstructed from the vertical gap
+  between lines**, then packed — **whole paragraphs only** — into segments kept under ~800 chars (so
+  recall returns a tight passage, not the whole document as one blob). A **paragraph or word is never
+  split or truncated**; the only segment that exceeds the cap is a single paragraph longer than it,
+  which rides whole rather than be cut.
+- **DOCX** (`mammoth.convertToMarkdown`) → clean markdown that **keeps heading structure**; segments
+  follow the existing markdown chunker (one section per segment).
+- Resulting rows carry the reserved **`format: "pdf" | "docx"` under `kind: "doc"`** (no schema
+  migration); they rank alongside `md` docs and **survive every `index()` pass** (they're `direct`).
+
+`opts`:
+- `filename?: string` — drives format detection (`"manual.pdf"` → `pdf`). Also derives the `id` when none is given.
+- `format?: string` — explicit `"pdf" | "docx"` override when the filename is absent/misleading.
+- `id?: string` — stable **base id** (else derived from the filename, e.g. `"doc:manual"`). Segments are
+  stored as `"<id>#0"`, `"<id>#1"`, … (each is the `path` you see in recall / pass to `get`). **Re-ingesting
+  the same `id` is an upsert** — prior segments are dropped first, so a shorter re-ingest leaves no orphans.
+- `meta?: Record<string, unknown>` — opaque passthrough (e.g. `{ chat: "c-42" }`), attached to **every** segment.
+- `maxSize?: number` (default **10 MB**), `maxPages?: number` (default **2000**), `parseTimeoutMs?: number`
+  (default **30 s**) — the **untrusted-input bounds** (§ below).
+
+**Untrusted input is bounded; failures are clear and write nothing.** Oversized / over-page / corrupt /
+encrypted / no-text inputs throw a **specific** error and leave the index intact (never a crash, never a
+garbage row). `maxSize` and `maxPages` are deterministic caps; `parseTimeoutMs` is a **per-page** wall-clock
+budget checked between pages (it bounds a many-page document — a single pathological page is bounded by
+`maxSize`/`maxPages`, since JS can't preempt synchronous CPU work without a worker thread). PDF JS execution
+and `eval` are disabled (`isEvalSupported: false`, scripting/XFA off — mitigating the pdf.js font-path RCE
+class), and DOCX XML is parsed without external-entity resolution (no XXE file-read / SSRF).
+
+> **Deploying with fully-untrusted uploads (e.g. a public chat).** Two residual limits are inherent to
+> in-process parsing, so handle them at the call site: (1) `maxSize` bounds the **input** bytes, not the
+> **decompressed** size — a 10 MB zip/PDF stream can inflate far larger in memory (a decompression bomb), so
+> keep `maxSize` conservative and run the host under a memory limit; (2) a CPU-bound parse **cannot be
+> interrupted** by `parseTimeoutMs`, so a malicious single-page document can block the event loop — for
+> hostile input, call `ingestDocument` inside a **worker thread** (or subprocess) you can terminate. These
+> are deployment choices litectx can't make for you; the in-library bounds are the floor, not the ceiling.
+
+**Optional peer deps, lazy-loaded.** `pdfjs-dist` and `mammoth` are **optional** (like the embeddings tier):
+`npm i litectx` stays lean and offline-capable, and neither is imported until the **first** `ingestDocument`
+call. A consumer who never ingests a document pays nothing; if a parser is missing, the call throws a helpful
+`npm i pdfjs-dist` / `npm i mammoth` message. **Not scoped:** like all `doc`/`code`, ingested documents are
+global knowledge — `owner`/`session` isolation applies to `fact`/`episode` only.
+
+```js
+// chat-upload flow: bytes in (no file on disk)
+const { id, format, chunks } = await ctx.ingestDocument(uploadBuffer, {
+  filename: "acme-manual.pdf",
+  meta: { chat: "c-42" },
+});
+// → { id: "doc:acme-manual", kind: "doc", format: "pdf", chunks: 7 }
+const hits = await ctx.recall("how do I reset the device", { kind: "doc", body: true });
+// hits[0].format === "pdf"; hits[0].body === the matching passage's text
+```
+
 ### `ctx.forget(idOrQuery)` → `number`
 Delete directly-written memory. Returns the number of rows removed.
 

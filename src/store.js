@@ -544,7 +544,9 @@ export class Store {
    * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
    * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
    * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
-   * @param {{ id?: string, kind?: string, provenance?: string }} sel
+   * @param {{ id?: string, idPrefix?: string, kind?: string, provenance?: string }} sel
+   *   `idPrefix` matches a base id and all `<base>#<n>` rows under it — the clean-re-ingest handle
+   *   for a multi-segment document ({@link LiteCtx#ingestDocument}); still direct-rows-only.
    * @returns {number}
    */
   forgetMemory(sel) {
@@ -553,6 +555,12 @@ export class Store {
     /** @type {Record<string, string>} */
     const params = {};
     if (sel.id != null) (clauses.push("path = @id"), (params.id = sel.id));
+    if (sel.idPrefix != null) {
+      // the base id itself OR any `<base>#<segment>` row. Escape LIKE metacharacters in the base.
+      clauses.push("(path = @idExact OR path LIKE @idLike ESCAPE '\\')");
+      params.idExact = sel.idPrefix;
+      params.idLike = sel.idPrefix.replace(/[\\%_]/g, "\\$&") + "#%";
+    }
     if (sel.kind != null) (clauses.push("kind = @kind"), (params.kind = sel.kind));
     if (sel.provenance != null) (clauses.push("provenance = @provenance"), (params.provenance = sel.provenance));
     // Refuse an empty selector. With no clause the `mem` condition would degrade to `1=1` and wipe

@@ -227,9 +227,15 @@ ACT-R memory (short- and long-term), not just a code index.
 Design rules (DECIDED):
 - **Doc *formats* are a `format` field under `kind=doc`** (`md` in v1; `pdf`/`docx`/`txt`
   later), **not** new top-level kinds — so adding PDF support never migrates the schema.
-- **PDF/DOCX deferred** (DEFERRED): markdown is a trivial local chunker; PDF/DOCX need
-  extraction libraries (heavier, less local-first-clean) → a future `doc` format tier.
-  **v1 sticks to md**, but the schema + decay map are ready for the rest.
+- **PDF/DOCX** (SHIPPED — `ctx.ingestDocument(buffer)`): markdown is a trivial local chunker;
+  PDF/DOCX need extraction libraries, so they ride an **optional, lazy-loaded peer-dep tier**
+  (`pdfjs-dist` + `mammoth`, mirroring the embeddings tier) — `npm i litectx` stays lean/offline,
+  and nothing is imported until the first ingest. A document is converted to markdown, segmented
+  (DOCX keeps headings → the md chunker; flat PDF → paragraphs reconstructed from inter-line
+  vertical gaps, packed whole into <800-char segments), and stored as `source='direct'` `doc` rows
+  carrying the reserved `format` (`pdf`/`docx`) — no schema migration, as designed. Untrusted input
+  is bounded (`maxSize`/`maxPages`/per-page `parseTimeoutMs`); scanned/image-only PDFs are not OCR'd.
+  *(Was DEFERRED through v0.16; the schema + decay map were ready, as planned.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
@@ -1305,7 +1311,8 @@ package** (§7).
 - **Content guardrails** — secret/PII/injection scanning, policy enforcement — bareguard.
 - **LLM orchestration / task decomposition / agent spawning** — AURORA's `soar`/`reasoning`.
 - **Multi-provider LLM clients / embeddings-as-default** — provider-agnostic; ML is opt-in.
-- **PDF/DOCX extraction in v1** — schema-reserved (§3.1), deferred.
+- ~~**PDF/DOCX extraction in v1** — schema-reserved (§3.1), deferred.~~ **SHIPPED** post-v0.16 via
+  `ctx.ingestDocument()` on the optional `pdfjs-dist`/`mammoth` tier (§3.1). OCR (scanned PDFs) remains a non-goal.
 - **A server / daemon / hosted service** — local library only.
 - **Linting** — mature per-language linters exist; do not wrap them.
 - **Being "bare"** — litectx is a real library, not a ≤150-LOC primitive.

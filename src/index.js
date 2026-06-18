@@ -19,6 +19,7 @@ import { ftsMatch, keywords } from "./tokenize.js";
 import { Embedder, cosine } from "./embedder.js";
 import { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
 import { observe } from "./contextgraph.js";
+import { documentToSegments } from "./docparse.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 
@@ -45,6 +46,13 @@ const KNN_K = 8;
 const ACTIVE_EPISODE_DAYS = 30;
 const EPISODE_PROMOTE_THRESHOLD = 10;
 const DAY_MS = 86_400_000;
+
+/** Derive a stable base id for an ingested document from its filename. @param {string} [filename] @returns {string} */
+function deriveDocId(filename) {
+  const base = (filename ?? "document").replace(/\.[^.]+$/, "").trim();
+  const slug = base.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return `doc:${slug || "document"}`;
+}
 
 /** Min–max normalise to [0,1] so BM25-spread scores and cosine compose on one scale. @param {number[]} a */
 function minmax(a) {
@@ -586,6 +594,47 @@ export class LiteCtx {
     if (typeof sel === "string") return this.store.forgetMemory({ id: sel });
     if (sel.kind == null && sel.by == null) throw new Error("forget(query) needs at least { kind } or { by }");
     return this.store.forgetMemory({ kind: sel.kind, provenance: sel.by });
+  }
+
+  /**
+   * Ingest a whole document (PDF/DOCX bytes) as recallable `doc`-kind content — the third ingest
+   * path, distinct from {@link index} (sweeps a disk root) and {@link remember} (stores text whole,
+   * unchunked). The document is converted to markdown, split into segments (DOCX keeps its heading
+   * structure → one section per segment; a flat PDF is reconstructed into paragraphs and packed),
+   * and each segment is written as its own `source='direct'` doc row — so it ranks alongside `md`
+   * docs in `recall(q, { kind: 'doc' })`, survives every `index()` pass, and carries the reserved
+   * `format` ("pdf" | "docx") under `kind='doc'` (no schema migration).
+   *
+   * Untrusted input is BOUNDED: oversized / over-page / slow / corrupt / encrypted / no-text inputs
+   * throw a clear, specific error and write NOTHING (the index is left intact). The two parsers
+   * (`pdfjs-dist`, `mammoth`) are optional peer deps, lazy-loaded on first ingest.
+   *
+   * Re-ingesting the same `id` is an upsert: prior segments of that document are dropped first, so a
+   * shorter re-ingest never leaves orphaned tail segments.
+   *
+   * @param {Uint8Array} buffer  the document bytes (e.g. a chat upload)
+   * @param {{ filename?: string, format?: string, id?: string, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts]
+   *   `filename` drives format detection; `format` overrides it ("pdf"|"docx"); `id` = stable base id
+   *   (else derived from the filename); `meta` = opaque passthrough attached to every segment;
+   *   `maxSize`/`maxPages`/`parseTimeoutMs` = the untrusted-input bounds (defaults 10 MB / 2000 / 30 s).
+   * @returns {Promise<{ id: string, kind: "doc", format: "pdf" | "docx", chunks: number }>}
+   */
+  async ingestDocument(buffer, opts = {}) {
+    const { format, segments } = await documentToSegments(buffer, {
+      filename: opts.filename,
+      format: opts.format,
+      maxSize: opts.maxSize,
+      maxPages: opts.maxPages,
+      parseTimeoutMs: opts.parseTimeoutMs,
+    });
+    const id = opts.id ?? deriveDocId(opts.filename);
+    // re-ingest = upsert: drop any prior segments of THIS document first (direct rows only).
+    this.store.forgetMemory({ idPrefix: id });
+    // one direct doc row per segment, ids `<base>#<n>` — each independently ranked + recallable.
+    for (let i = 0; i < segments.length; i++) {
+      await this.remember(`${id}#${i}`, segments[i], { kind: "doc", format, meta: opts.meta });
+    }
+    return { id, kind: "doc", format, chunks: segments.length };
   }
 
   /**

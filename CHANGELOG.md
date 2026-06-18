@@ -6,6 +6,34 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **`ctx.ingestDocument(buffer, opts?)` — PDF/DOCX document ingest** (the reserved `format` field under
+  `kind=doc`, now built; PRD "PDF/DOCX deferred"). Converts a document **buffer** (the chat-upload flow —
+  no on-disk file) to markdown, segments it, and stores each segment as a `source='direct'` doc row that
+  ranks alongside `md` docs, carries `format: "pdf" | "docx"` under `kind:"doc"` (no schema migration), and
+  survives every `index()` pass. **DOCX** (`mammoth`) keeps heading structure → one section per segment;
+  **PDF** (`pdfjs-dist`) is flat text, so paragraphs are **reconstructed from inter-line vertical gaps** and
+  packed — **whole paragraphs only, never splitting a paragraph or word** — into segments kept under ~800
+  chars (recall returns a tight passage, not the whole doc as one blob; a lone paragraph longer than the cap
+  rides whole rather than be truncated).
+  Re-ingesting the same `id` is an upsert (orphaned tail segments dropped). Scanned/image-only PDFs are not
+  OCR'd (clear "no extractable text"); not per-customer scoped (`doc` is global, like `code`).
+- **Untrusted-input bounds** on ingest (§4): `maxSize` (10 MB), `maxPages` (2000), and a **per-page**
+  `parseTimeoutMs` (30 s) — oversized / over-page / corrupt / encrypted / no-text inputs throw a specific
+  error and write nothing. (A whole-parse `setTimeout` race was dropped after a POC proved it can't interrupt
+  pdfjs's microtask-bound CPU work; `maxSize`/`maxPages` bound the single-page case.)
+- **`pdfjs-dist` + `mammoth` as optional peer deps** (`peerDependenciesMeta.optional`, mirroring
+  `@huggingface/transformers`) — lazy-loaded on the first `ingestDocument` call, so `npm i litectx` stays
+  lean/offline and a consumer who never ingests a document pays neither install nor import cost.
+
+### Security
+- Document ingest hardens the untrusted-input boundary: PDF JS execution + `eval` disabled
+  (`isEvalSupported: false`, scripting/XFA off — mitigating the pdf.js font-path RCE class, CVE-2024-4367),
+  `useSystemFonts: false` (no local font enumeration — text extraction never renders glyphs), and DOCX XML
+  parsed without external-entity resolution (no XXE file-read/SSRF; verified against `@xmldom`). `litectx.context.md`
+  documents the two residual, deployment-shaped limits for fully-untrusted uploads (decompressed-size isn't
+  bounded by `maxSize`; a CPU-bound parse can't be preempted — run hostile input in a worker thread).
+
 ## [0.16.2] — 2026-06-17
 
 ### Documentation
