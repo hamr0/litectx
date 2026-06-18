@@ -1,0 +1,1152 @@
+[
+  {
+    "session_id": "healthwatch/0531-1740-7c0c25c1",
+    "anchor_signal": "interrupt_cascade",
+    "anchor_ts": "2026-05-31T15:49:57.137Z",
+    "peak_friction": 143.5,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/Documents/PycharmProjects/healthwatch/.claude/stash/2026-05-31-healthwatch-built-flightlog-shipped.md",
+      "/home/hamr/PycharmProjects/flightlog/docs/01-product/2026-05-31-prd.md",
+      "/home/hamr/PycharmProjects/flightlog/examples/ship.js",
+      "context.md",
+      "examples/ship.js",
+      "package.js"
+    ],
+    "tool_sequence": [
+      "Bash:error"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "error",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "built",
+      "claude",
+      "cont",
+      "context",
+      "documents",
+      "flightlog",
+      "hamr",
+      "healthwatch",
+      "home",
+      "pycharmprojects",
+      "shipped",
+      "stash"
+    ],
+    "user_context": [
+      "/home/hamr/Documents/PycharmProjects/healthwatch/.claude/stash/2026-05-31-healthwatch-built-flightlog-shipped.md cont from here for context"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "hamr/0602-1412-38dcbe62",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-02T13:01:07.636Z",
+    "peak_friction": 80,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.md",
+      "/home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.project-notes.md",
+      "privacy-agents-seo.project-notes.md"
+    ],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "agents",
+      "documents",
+      "files",
+      "fuck",
+      "hamr",
+      "home",
+      "notes",
+      "privacy",
+      "project",
+      "pycharmprojects"
+    ],
+    "user_context": [
+      "/home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.project-notes.md /home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.md why the fuck do i have two files?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "hamr/0602-1412-38dcbe62",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-02T13:04:29.688Z",
+    "peak_friction": 80,
+    "turns_in_window": 6,
+    "files": [
+      "CLAUDE.md",
+      "privacy-agents-seo.md",
+      "privacy-agents-seo.project-notes.md"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "advising",
+      "agents",
+      "done",
+      "fuck",
+      "fucking",
+      "generic",
+      "privacy",
+      "project",
+      "sake",
+      "shitty",
+      "stop"
+    ],
+    "user_context": [
+      "for fuck sake, stop advising per fucking project. fucking stop, are you fucking done with this fucking GENERIC agents seo privacy shitty doc or not"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "liteagents/0517-2206-fc50f372",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-05-17T20:45:37.550Z",
+    "peak_friction": 57.5,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "care",
+      "channel",
+      "claude",
+      "dont",
+      "feedback",
+      "following",
+      "fucking",
+      "listening",
+      "live",
+      "picking",
+      "receove",
+      "saying",
+      "shit"
+    ],
+    "user_context": [
+      "i am not following shit of what you're saying. do i need live-claude channel or not? and if not, why the other one is not picking up. i dont fucking care which one, i only want it to be fucking listening and receove feedback, why are you complicating this?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "liteagents/0517-2206-fc50f372",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-05-17T21:03:21.310Z",
+    "peak_friction": 57.5,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/.claude/skills/live-canvas/SKILL.md",
+      "/home/hamr/PycharmProjects/liteagents/packages/claude/skills/live-canvas/SKILL.md",
+      "SKILL.md"
+    ],
+    "tool_sequence": [
+      "Edit",
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit → Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "claude",
+      "fuck",
+      "landed",
+      "live",
+      "notng"
+    ],
+    "user_context": [
+      "notng landed in live-claude, fuck you"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "liteagents/0517-2206-fc50f372",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-18T06:55:54.322Z",
+    "peak_friction": 57.5,
+    "turns_in_window": 6,
+    "files": [
+      ".claude-design/feedback.js",
+      "/home/hamr/PycharmProjects/liteagents/packages/claude/skills/live-canvas/SKILL.md",
+      "ampcode/commands/live-canvas.md",
+      "droid/commands/live-canvas.md",
+      "feedback.js",
+      "ive-canvas-channel/server.js",
+      "opencode/command/live-canvas.md",
+      "server.js"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": true,
+    "keywords": [
+      "apply",
+      "busy",
+      "clicks",
+      "existing",
+      "feedback",
+      "json",
+      "jsonl",
+      "mode",
+      "next",
+      "pending",
+      "port",
+      "proceed",
+      "process",
+      "step",
+      "will"
+    ],
+    "user_context": [
+      "wrong window \n❯ ────────────────────────────────────────────────────────────────────────────────────────────────────\n───\n☐ Next step\n\nPort 8788 is busy. How do you want to proceed?\n\n1. Apply pending feedback in JSON mode\nI'll process the existing feedback.jsonl now. New clicks will write to JSON file (overlay already\nconfigured this way). No channel needed.\n❯ 2. Free the port first\nStop. I'll close /live-canvas in the other session, then you can pick Live here.\n3. Type something.\n───────────────"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "multis/0616-2012-153b4c58",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-16T21:02:31.163Z",
+    "peak_friction": 38,
+    "turns_in_window": 6,
+    "files": [
+      "/.multis/config.js",
+      "executor.js",
+      "src/skills/executor.js"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "anthropic",
+      "asked",
+      "bareagent",
+      "breaks",
+      "deeper",
+      "dont",
+      "indexed",
+      "loop",
+      "memory",
+      "order",
+      "over",
+      "papering",
+      "response",
+      "said",
+      "sending"
+    ],
+    "user_context": [
+      "dont have anthropic key, you are papering over this. i asked for  memory and it said 0 indexed, the response was not in order of sending, there is something deeper as in bareagent loop that breaks and if pin is not asked then its bareguard or what?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "multis/0616-2012-153b4c58",
+    "anchor_signal": "interrupt_cascade",
+    "anchor_ts": "2026-06-16T19:08:30.567Z",
+    "peak_friction": 38,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "beeperbox",
+      "best",
+      "chatbot",
+      "else",
+      "explanation",
+      "getting",
+      "homeserver",
+      "infrastructure",
+      "install",
+      "local",
+      "means",
+      "minutes",
+      "mode",
+      "multis",
+      "needs"
+    ],
+    "user_context": [
+      "understood, i have a homeserver, if i want to use it there i just install multis on homeserver (has gui) then this needs explanation what best for means here in personal/chatbot",
+      "Mode     What you get     What it needs     Best for\nTelegram     A private bot, working in minutes     A bot token. Nothing else.     Getting started, zero infrastructure\nbeeperbox — local     WhatsApp/Signal/Discord/… 50+ networks via Beeper, on the machine you already use     beeperbox running on your laptop     Everyday use on your own machine\nbeeperbox — remote     The same 50+ networks, off your daily driver     beeperbox on a Pi or VPS, reachable over the network     Always-on, no screen "
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "dwi/0527-1408-e775784b",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-27T12:39:38.488Z",
+    "peak_friction": 35,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/.claude/projects/-home-hamr-PycharmProjects-dwi/memory/MEMORY.md",
+      "context.md",
+      "customer-brief.md",
+      "dwi-engagement-context.md",
+      "hamr0-library-conventions.md",
+      "prd.md",
+      "user-reusable-libs.md",
+      "walk-me.md"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "dont",
+      "retrieval",
+      "stash",
+      "update",
+      "walk"
+    ],
+    "user_context": [
+      "dont update stash, stash is for retrieval, update prd, walk-me"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "litectx/0613-2226-5e66d8c1",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-13T20:32:18.117Z",
+    "peak_friction": 34.5,
+    "turns_in_window": 6,
+    "files": [
+      "audit.js",
+      "bash.js",
+      "budget.js",
+      "content.js",
+      "defer-rate.js",
+      "fs.js",
+      "gate.js",
+      "limits.js",
+      "net.js",
+      "secrets.js"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "agreed",
+      "baregaurd",
+      "bareguard",
+      "build",
+      "decide",
+      "detailed",
+      "pass",
+      "specfic",
+      "specific",
+      "will"
+    ],
+    "user_context": [
+      "no, i want you to decide what you need from bareguard to build, be specfic to what you need as agreed in ce prd, be detailed, specific and i will pass it to baregaurd then you can go with build b"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "privcloud/0611-0907-fee07212",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-11T18:06:44.549Z",
+    "peak_friction": 33.5,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "back",
+      "choose",
+      "command",
+      "copied",
+      "created",
+      "destination",
+      "directly",
+      "folder",
+      "give",
+      "hamr",
+      "immich",
+      "inside",
+      "media",
+      "number",
+      "path"
+    ],
+    "user_context": [
+      "\nOr type a path directly\n\nChoose [number, path, q=back]: /run/media/hamr/storage2/\n\nHow should \"immich\" be copied?\n1) The whole folder    → a \"immich\" folder is created inside the destination\n2) Only its contents   → files land directly in the destination\n0) Back\n\nSelect [1/2]: 1\n\nDestination will look like this:\n/run/media/hamr/storage2/\n└── immich/\n├── db\n└── photos\n\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n↓ One-time download: server → laptop\nFrom: ahassan@192.168.178.180:/mnt/federver/data/ba",
+      "no, give me command to make it root"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "liteagents/0526-0910-668e5fb2",
+    "anchor_signal": "interrupt_cascade",
+    "anchor_ts": "2026-05-26T07:17:59.974Z",
+    "peak_friction": 27,
+    "turns_in_window": 6,
+    "files": [
+      "/tmp/friction-exp/new/friction.js"
+    ],
+    "tool_sequence": [
+      "Read:ok",
+      "Read:ok"
+    ],
+    "errors": [
+      "331\t              (/Exit code [1-9]/.test(result) && !result.includes('Exit code 137')) ||"
+    ],
+    "preceding": {
+      "action": "Read → Read",
+      "result": "claimed success (exit 0)",
+      "error": "331\t              (/Exit code [1-9]/.test(result) && !result.includes('Exit code 137')) ||"
+    },
+    "self_suspect": false,
+    "keywords": [],
+    "user_context": [],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "wearecooked/0518-2037-fc34a1ae",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-18T21:04:22.001Z",
+    "peak_friction": 24,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/PycharmProjects/wearehere/chrome-extension/inject.js",
+      "detect-tosed.js",
+      "inject.js"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "browserleaks",
+      "chrome",
+      "console",
+      "detect",
+      "farble",
+      "farbledevmode",
+      "fulfilled",
+      "https",
+      "local",
+      "pending",
+      "promise",
+      "promiseresult",
+      "promisestate",
+      "prototype",
+      "storage"
+    ],
+    "user_context": [
+      "no wh-farble in console chrome.storage.local.set({ farbleDevMode: true }) \nPromise {<pending>}[[Prototype]]: Promise[[PromiseState]]: \"fulfilled\"[[PromiseResult]]: undefined\ndetect-tosed.js:126 \n GET https://browserleaks.com/terms 404 (Not Found)\nfetchAndScan    @    detect-tosed.js:126\n(anonymous)    @    detect-tosed.js:260\ndetect-tosed.js:126 \n GET https://browserleaks.com/privacy-policy 404 (Not Found)\nfetchAndScan    @    detect-tosed.js:126\n(anonymous)    @    detect-tosed.js:155\ndetect-to"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "gitdone/0602-1433-ccaf5d48",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-02T13:03:32.948Z",
+    "peak_friction": 23.5,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.md",
+      "/home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.project-notes.md",
+      "privacy-agents-seo.project-notes.md"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "agents",
+      "create",
+      "documents",
+      "dont",
+      "follow",
+      "fucking",
+      "hamr",
+      "home",
+      "privacy",
+      "pycharmprojects",
+      "shit",
+      "simple"
+    ],
+    "user_context": [
+      "dont fucking create shit, /home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.md did you follow this or not, simple fucking ask"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "plato/0524-2354-0e9f3a97",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-05-24T22:09:06.105Z",
+    "peak_friction": 22,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/.claude/projects/-home-hamr-PycharmProjects-plato/memory/project_terribic_deploy.md",
+      "config.example.js",
+      "config.js",
+      "project_terribic_deploy.md"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "forked",
+      "messy",
+      "shit",
+      "stop"
+    ],
+    "user_context": [
+      "no one forked this, stop the messy shit you've been doing"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "plato/0524-2354-0e9f3a97",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-24T22:09:06.105Z",
+    "peak_friction": 22,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/.claude/projects/-home-hamr-PycharmProjects-plato/memory/project_terribic_deploy.md",
+      "config.example.js",
+      "config.js",
+      "project_terribic_deploy.md"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "forked",
+      "messy",
+      "shit",
+      "stop"
+    ],
+    "user_context": [
+      "no one forked this, stop the messy shit you've been doing"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "litectx/0611-1600-813d60e5",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-11T14:04:18.422Z",
+    "peak_friction": 21.5,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "call",
+      "committed",
+      "confidence",
+      "edge",
+      "edges",
+      "gated",
+      "hurts",
+      "impact",
+      "latency",
+      "next",
+      "none",
+      "persist",
+      "post",
+      "real",
+      "recursive"
+    ],
+    "user_context": [
+      "No committed next slice. All remainders are trigger-gated post-v1 (PRD §15), none due:\n- Persist call edges (recursive CTE) — only when real impact() latency hurts.\n- Edge-confidence field — rides the next schema-touching slice; never a blocker.\n- jina-embeddings-v2-base-code model swap vs MiniLM — eval next --embeddings run.\n- Ergonomic graph accessors (codegraph/contextgraph views over the substrate).\n which of those are real add value and what is a bloat, to dev now"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "dwi/0604-2134-95c97950",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-04T20:41:17.572Z",
+    "peak_friction": 21,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "availability",
+      "closed",
+      "complete",
+      "custody",
+      "customer",
+      "every",
+      "later",
+      "profile",
+      "repo",
+      "repos",
+      "site",
+      "solved",
+      "story",
+      "stylists",
+      "transaction"
+    ],
+    "user_context": [
+      "on-site availability will be solved by customer. #2 custody transfer of what?",
+      "no, why? every repo is a closed transaction one customer one stylists, later/stylists profile can get to see all their repos, every repo is a story of one customer, one complete transaction. repo = transaction/po"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "bareagent/0529-1224-be7608c9",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-29T14:34:44.979Z",
+    "peak_friction": 20.5,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/.claude/projects/-home-hamr-PycharmProjects-bareagent/memory/reference_npm_publish.md",
+      "CHANGELOG.md",
+      "bareagent.context.md",
+      "context.md",
+      "package.js"
+    ],
+    "tool_sequence": [
+      "Read"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Read",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "manual"
+    ],
+    "user_context": [
+      "don't i want it manual"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "privcloud/0608-0916-59baef24",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-08T07:22:05.211Z",
+    "peak_friction": 20,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/PycharmProjects/privcloud/setup.sh"
+    ],
+    "tool_sequence": [
+      "Read"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Read",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "backup",
+      "cron",
+      "main",
+      "menu",
+      "persistent",
+      "steady",
+      "time",
+      "under"
+    ],
+    "user_context": [
+      "no, we need to add under backup 1) one time 2) steady/persistent cron like the one we have in main menu"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "bareagent/0612-2311-9b38119e",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-12T21:14:59.780Z",
+    "peak_friction": 18,
+    "turns_in_window": 6,
+    "files": [
+      "src/context-units.js"
+    ],
+    "tool_sequence": [
+      "AskUserQuestion"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "AskUserQuestion",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "agree",
+      "delieverd",
+      "didn",
+      "fuck",
+      "something"
+    ],
+    "user_context": [
+      "what the fuck is this? you delieverd something we didn't agree on?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "bareagent/0612-2311-9b38119e",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-12T21:21:32.055Z",
+    "peak_friction": 18,
+    "turns_in_window": 6,
+    "files": [
+      "../02-engineering/copy-pattern-studies.md",
+      "CLAUDE.md",
+      "context-units.js",
+      "decompose.py",
+      "docs/01-product/litectx-ce-prd.md",
+      "docs/plans/2026-06-12-graph-substrate-design.md",
+      "store.js",
+      "test/compress.test.js",
+      "test/graph.test.js"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "adapter",
+      "build",
+      "correction",
+      "first",
+      "fuck",
+      "fucking",
+      "hook",
+      "regression",
+      "smoke",
+      "test",
+      "tests",
+      "time",
+      "validate",
+      "will"
+    ],
+    "user_context": [
+      "fix the hook arg first, then build the adapter, and fuck you big time, you will fucking validate this after correction with fucking tests and regression and smoke test, fuck you again"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "litectx/0613-1554-a49d63a9",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-13T15:33:15.045Z",
+    "peak_friction": 16,
+    "turns_in_window": 6,
+    "files": [
+      "CLAUDE.md",
+      "hamr0/AGENT_RULES.md"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "addition",
+      "cleanly",
+      "didn",
+      "feeds",
+      "fuck",
+      "fucked",
+      "landed",
+      "ommision",
+      "origin",
+      "pause",
+      "projects",
+      "second",
+      "updates",
+      "your"
+    ],
+    "user_context": [
+      "fuck, you fucked the doc, didn't you. hamr0 is the origin and your updates should have landed there cleanly, addition no ommision. this feeds all other projects. pause for a second before doing anythign stupid. rollover suggested chanegs to hamr0 then copy it from there"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "gitdone/0602-0021-40231750",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-01T22:48:56.829Z",
+    "peak_friction": 15,
+    "turns_in_window": 6,
+    "files": [
+      "README.md"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "changes",
+      "gitdone",
+      "keep",
+      "last",
+      "revert"
+    ],
+    "user_context": [
+      "revert all last changes and just keep h1 as gitdone"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "addypin/0522-0814-adea3c3e",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-22T19:41:40.189Z",
+    "peak_friction": 14,
+    "turns_in_window": 6,
+    "files": [
+      ".claude/memory/AGENT_RULES.md",
+      "/home/hamr/Documents/PycharmProjects/gitdone/.claude/memory/AGENT_RULES.md",
+      "CLAUDE.md"
+    ],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "absolute",
+      "claude",
+      "commit",
+      "each",
+      "memory",
+      "push"
+    ],
+    "user_context": [
+      "don't use absolute, just use .claude/memory/AGENT_RULES.md and push and commit each with npm push if they had one"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "privcloud/0604-2053-b46bb9fd",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-05T09:49:52.672Z",
+    "peak_friction": 13,
+    "turns_in_window": 6,
+    "files": [
+      "AGENT_RULES.md",
+      "CHANGELOG.md",
+      "CLAUDE.md",
+      "docs/prd-backup-sync-ux.md",
+      "package.js"
+    ],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "again",
+      "changing",
+      "considers",
+      "copy",
+      "destination",
+      "diff",
+      "does",
+      "guess",
+      "manually",
+      "name",
+      "names",
+      "rename",
+      "renames",
+      "reorg",
+      "rsync"
+    ],
+    "user_context": [
+      "does rsync considers rename/subdir mov or no? i.e. changing names at source but not destination would copy the dir again if name is diff?",
+      "no, i just did some reorg, renames and i guess i would just have to do the renames manually"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "bareguard/0602-2302-6611b522",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-03T21:01:01.792Z",
+    "peak_friction": 11.5,
+    "turns_in_window": 6,
+    "files": [
+      "-generic.py",
+      "../../shared/error-codes.md",
+      "../../shared/managed-agents-events.md",
+      "../../shared/tool-use-concepts.md",
+      "./README.md",
+      "./tool-use.md",
+      ".agent.yaml",
+      ".environment.yaml",
+      "//github.com/anthropics/anthropic-sdk-typescript/blob/main/examples/tools-helpers-memory.ts",
+      "//github.com/tidwall/gjson/blob/master/SYNTAX.md"
+    ],
+    "tool_sequence": [
+      "Skill"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Skill",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "applications",
+      "aurora",
+      "base",
+      "build",
+      "building",
+      "bundled",
+      "claude",
+      "decomposer",
+      "directory",
+      "ended",
+      "first",
+      "helps",
+      "learned",
+      "loud",
+      "nascent"
+    ],
+    "user_context": [
+      "Base directory for this skill: /tmp/claude-1000/bundled-skills/2.1.160/b5719e9664e7783f6e30c2e123dfa34c/claude-api\n\n# Building LLM-Powered Applications with Claude\n\nThis skill helps you build LLM-powered applications with Claude. Choose the right surface based on your needs, detect the project language, then read the relevant language-specific documentation.\n\n## Before You Start\n\nScan the target file (or, if no target file, the prompt and project) for non-Anthropic provider markers — `import ope",
+      "no, i am still thinking out loud about it. i tried with aurora project at first before i learned a lot of stuff and ended up with very nascent decomposer, aur query woild take any question, look at code AST (that is the working well part) and then tries to match decomposed tasks with agents and every agent goes and ask and come back to orchestrator to answer with code aware, most of the decomposition was ok and what gave the answers some grounding was code-aware and doc string, code AST was ACT-"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "litectx-poc/0604-1444-05d668b1",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-06-05T03:45:12.715Z",
+    "peak_friction": 10,
+    "turns_in_window": 6,
+    "files": [
+      "/home/hamr/PycharmProjects/litectx/docs/00-context/README.md",
+      "CLAUDE.md",
+      "barecontext-prd.md",
+      "litectx-ce-prd.md"
+    ],
+    "tool_sequence": [
+      "Edit"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "core",
+      "memory",
+      "prep",
+      "right",
+      "until",
+      "wait",
+      "while",
+      "will",
+      "work"
+    ],
+    "user_context": [
+      "no, we will wait until we get core memory right #2 is there any other prep work we can do while we wait?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "bareagent/0601-1551-a1bfc5ce",
+    "anchor_signal": "user_curse",
+    "anchor_ts": "2026-06-02T06:56:58.250Z",
+    "peak_friction": 8,
+    "turns_in_window": 6,
+    "files": [],
+    "tool_sequence": [
+      "Bash"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "again",
+      "back",
+      "making",
+      "prior",
+      "shit",
+      "solutions",
+      "tailscale",
+      "transfer",
+      "work",
+      "working",
+      "wrong"
+    ],
+    "user_context": [
+      "it's working, was working prior transfer, tailscale solutions is wrong, you are making shit up. how can i make tailscale work back again?"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  },
+  {
+    "session_id": "plato/0518-1543-c26ca163",
+    "anchor_signal": "user_correction",
+    "anchor_ts": "2026-05-18T14:26:42.552Z",
+    "peak_friction": 8,
+    "turns_in_window": 6,
+    "files": [
+      "bin/stats.js"
+    ],
+    "tool_sequence": [],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "keywords": [
+      "bots",
+      "captured",
+      "count",
+      "distinguish",
+      "email",
+      "hashed",
+      "humans",
+      "lurker",
+      "magiclink",
+      "means",
+      "number",
+      "posting",
+      "registered",
+      "true",
+      "until"
+    ],
+    "user_context": [
+      "i did the posting",
+      "can the lurker count distinguish bots from humans?",
+      "no, users with magiclink also means that their hashed ids are captured so its a true number of registered users and an opp for them to try/see that no one will email them until they come back"
+    ],
+    "inhibitory_instruction": "# TODO: Write prevention instruction based on pattern above"
+  }
+]

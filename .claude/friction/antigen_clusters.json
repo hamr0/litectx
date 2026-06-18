@@ -1,0 +1,1041 @@
+[
+  {
+    "theme": "healthwatch healthwatch / healthwatch built / flightlog shipped / built flightlog",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "interrupt_cascade": 1
+    },
+    "anchor_signal": "interrupt_cascade",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "healthwatch/0531-1740-7c0c25c1"
+    ],
+    "projects": [
+      "healthwatch"
+    ],
+    "median_peak": 143.5,
+    "max_peak": 143.5,
+    "contexts": [
+      "/home/hamr/Documents/PycharmProjects/healthwatch/.claude/stash/2026-05-31-healthwatch-built-flightlog-shipped.md cont from here for context"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "error",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "healthwatch healthwatch",
+      "healthwatch built",
+      "flightlog shipped",
+      "built flightlog",
+      "shipped cont",
+      "cont context",
+      "healthwatch",
+      "flightlog",
+      "shipped",
+      "context"
+    ]
+  },
+  {
+    "theme": "fucking project / project fucking / fucking fucking / fucking generic",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 2
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "hamr/0602-1412-38dcbe62"
+    ],
+    "projects": [
+      "hamr"
+    ],
+    "median_peak": 80,
+    "max_peak": 80,
+    "contexts": [
+      "for fuck sake, stop advising per fucking project. fucking stop, are you fucking done with this fucking GENERIC agents seo privacy shitty doc or not"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "fucking project",
+      "project fucking",
+      "fucking fucking",
+      "fucking generic",
+      "privacy agents",
+      "generic agents",
+      "privacy shitty",
+      "project notes",
+      "notes privacy",
+      "stop advising"
+    ]
+  },
+  {
+    "theme": "already configured / fucking listening / listening receove / existing feedback",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 2,
+      "user_correction": 1
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "liteagents/0517-2206-fc50f372"
+    ],
+    "projects": [
+      "liteagents"
+    ],
+    "median_peak": 57.5,
+    "max_peak": 57.5,
+    "contexts": [
+      "wrong window \n❯ ────────────────────────────────────────────────────────────────────────────────────────────────────\n───\n☐ Next step\n\nPort 8788 is busy. How do you want to proceed?\n\n1. Apply pending feedback in JSON mode\nI'll process the existing feedback.jsonl now. New clicks will write to JSON file (overlay already\nconfigured this way). No channel needed.\n❯ 2. Free the port first\nStop. I'll close /live-canvas in the other session, then you can pick Live here.\n3. Type something.\n───────────────"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": true,
+    "top_keywords": [
+      "already configured",
+      "fucking listening",
+      "listening receove",
+      "existing feedback",
+      "receove feedback",
+      "why complicating",
+      "pending feedback",
+      "process existing",
+      "picking fucking",
+      "overlay already"
+    ]
+  },
+  {
+    "theme": "infrastructure beeperbox / understood homeserver / zero infrastructure / homeserver install",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1,
+      "interrupt_cascade": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "multis/0616-2012-153b4c58"
+    ],
+    "projects": [
+      "multis"
+    ],
+    "median_peak": 38,
+    "max_peak": 38,
+    "contexts": [
+      "Mode     What you get     What it needs     Best for\nTelegram     A private bot, working in minutes     A bot token. Nothing else.     Getting started, zero infrastructure\nbeeperbox — local     WhatsApp/Signal/Discord/… 50+ networks via Beeper, on the machine you already use     beeperbox running on your laptop     Everyday use on your own machine\nbeeperbox — remote     The same 50+ networks, off your daily driver     beeperbox on a Pi or VPS, reachable over the network     Always-on, no screen "
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "infrastructure beeperbox",
+      "understood homeserver",
+      "zero infrastructure",
+      "homeserver install",
+      "sending something",
+      "multis homeserver",
+      "needs explanation",
+      "already beeperbox",
+      "beeperbox running",
+      "machine beeperbox"
+    ]
+  },
+  {
+    "theme": "update retrieval / retrieval update / update prd / retrieval",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "dwi/0527-1408-e775784b"
+    ],
+    "projects": [
+      "dwi"
+    ],
+    "median_peak": 35,
+    "max_peak": 35,
+    "contexts": [
+      "dont update stash, stash is for retrieval, update prd, walk-me"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "update retrieval",
+      "retrieval update",
+      "update prd",
+      "retrieval",
+      "prd walk",
+      "update",
+      "walk",
+      "prd"
+    ]
+  },
+  {
+    "theme": "bareguard specfic / detailed specific / decide bareguard / specfic agreed",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "litectx/0613-2226-5e66d8c1"
+    ],
+    "projects": [
+      "litectx"
+    ],
+    "median_peak": 34.5,
+    "max_peak": 34.5,
+    "contexts": [
+      "no, i want you to decide what you need from bareguard to build, be specfic to what you need as agreed in ce prd, be detailed, specific and i will pass it to baregaurd then you can go with build b"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "bareguard specfic",
+      "detailed specific",
+      "decide bareguard",
+      "specfic agreed",
+      "pass baregaurd",
+      "specific pass",
+      "prd detailed",
+      "agreed prd",
+      "bareguard",
+      "baregaurd"
+    ]
+  },
+  {
+    "theme": "directly destination / inside destination / select destination / destination back",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "privcloud/0611-0907-fee07212"
+    ],
+    "projects": [
+      "privcloud"
+    ],
+    "median_peak": 33.5,
+    "max_peak": 33.5,
+    "contexts": [
+      "\nOr type a path directly\n\nChoose [number, path, q=back]: /run/media/hamr/storage2/\n\nHow should \"immich\" be copied?\n1) The whole folder    → a \"immich\" folder is created inside the destination\n2) Only its contents   → files land directly in the destination\n0) Back\n\nSelect [1/2]: 1\n\nDestination will look like this:\n/run/media/hamr/storage2/\n└── immich/\n├── db\n└── photos\n\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n↓ One-time download: server → laptop\nFrom: ahassan@192.168.178.180:/mnt/federver/data/ba"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "directly destination",
+      "inside destination",
+      "select destination",
+      "destination back",
+      "destination look",
+      "directly choose",
+      "destination its",
+      "download server",
+      "folder created",
+      "created inside"
+    ]
+  },
+  {
+    "theme": "friction",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "interrupt_cascade": 1
+    },
+    "anchor_signal": "interrupt_cascade",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "liteagents/0526-0910-668e5fb2"
+    ],
+    "projects": [
+      "liteagents"
+    ],
+    "median_peak": 27,
+    "max_peak": 27,
+    "contexts": [],
+    "errors": [
+      "331\t              (/Exit code [1-9]/.test(result) && !result.includes('Exit code 137')) ||"
+    ],
+    "preceding": {
+      "action": "Read → Read",
+      "result": "claimed success (exit 0)",
+      "error": "331\t              (/Exit code [1-9]/.test(result) && !result.includes('Exit code 137')) ||"
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "friction"
+    ]
+  },
+  {
+    "theme": "fulfilled promiseresult / promiseresult undefined / promisestate fulfilled / promise promisestate",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "wearecooked/0518-2037-fc34a1ae"
+    ],
+    "projects": [
+      "wearecooked"
+    ],
+    "median_peak": 24,
+    "max_peak": 24,
+    "contexts": [
+      "no wh-farble in console chrome.storage.local.set({ farbleDevMode: true }) \nPromise {<pending>}[[Prototype]]: Promise[[PromiseState]]: \"fulfilled\"[[PromiseResult]]: undefined\ndetect-tosed.js:126 \n GET https://browserleaks.com/terms 404 (Not Found)\nfetchAndScan    @    detect-tosed.js:126\n(anonymous)    @    detect-tosed.js:260\ndetect-tosed.js:126 \n GET https://browserleaks.com/privacy-policy 404 (Not Found)\nfetchAndScan    @    detect-tosed.js:126\n(anonymous)    @    detect-tosed.js:155\ndetect-to"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "fulfilled promiseresult",
+      "promiseresult undefined",
+      "promisestate fulfilled",
+      "promise promisestate",
+      "fetchandscan detect",
+      "farbledevmode true",
+      "https browserleaks",
+      "found fetchandscan",
+      "set farbledevmode",
+      "pending prototype"
+    ]
+  },
+  {
+    "theme": "fucking create / privacy agents / simple fucking / follow simple",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "gitdone/0602-1433-ccaf5d48"
+    ],
+    "projects": [
+      "gitdone"
+    ],
+    "median_peak": 23.5,
+    "max_peak": 23.5,
+    "contexts": [
+      "dont fucking create shit, /home/hamr/Documents/PycharmProjects/hamr0/privacy-agents-seo.md did you follow this or not, simple fucking ask"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "fucking create",
+      "privacy agents",
+      "simple fucking",
+      "follow simple",
+      "shit privacy",
+      "create shit",
+      "fucking ask",
+      "agents seo",
+      "seo follow",
+      "fucking"
+    ]
+  },
+  {
+    "theme": "forked stop / shit you've / stop messy / messy shit",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 1,
+      "user_correction": 1
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "plato/0524-2354-0e9f3a97"
+    ],
+    "projects": [
+      "plato"
+    ],
+    "median_peak": 22,
+    "max_peak": 22,
+    "contexts": [
+      "no one forked this, stop the messy shit you've been doing"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "forked stop",
+      "shit you've",
+      "stop messy",
+      "messy shit",
+      "forked",
+      "you've",
+      "messy",
+      "stop",
+      "shit"
+    ]
+  },
+  {
+    "theme": "codegraph contextgraph / accessors codegraph / remainders trigger / contextgraph views",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "litectx/0611-1600-813d60e5"
+    ],
+    "projects": [
+      "litectx"
+    ],
+    "median_peak": 21.5,
+    "max_peak": 21.5,
+    "contexts": [
+      "No committed next slice. All remainders are trigger-gated post-v1 (PRD §15), none due:\n- Persist call edges (recursive CTE) — only when real impact() latency hurts.\n- Edge-confidence field — rides the next schema-touching slice; never a blocker.\n- jina-embeddings-v2-base-code model swap vs MiniLM — eval next --embeddings run.\n- Ergonomic graph accessors (codegraph/contextgraph views over the substrate).\n which of those are real add value and what is a bloat, to dev now"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "codegraph contextgraph",
+      "accessors codegraph",
+      "remainders trigger",
+      "contextgraph views",
+      "slice remainders",
+      "confidence field",
+      "edges recursive",
+      "edge confidence",
+      "schema touching",
+      "jina embeddings"
+    ]
+  },
+  {
+    "theme": "transaction customer / complete transaction / availability solved / closed transaction",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "dwi/0604-2134-95c97950"
+    ],
+    "projects": [
+      "dwi"
+    ],
+    "median_peak": 21,
+    "max_peak": 21,
+    "contexts": [
+      "no, why? every repo is a closed transaction one customer one stylists, later/stylists profile can get to see all their repos, every repo is a story of one customer, one complete transaction. repo = transaction/po"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "transaction customer",
+      "complete transaction",
+      "availability solved",
+      "closed transaction",
+      "site availability",
+      "customer stylists",
+      "customer complete",
+      "customer custody",
+      "custody transfer",
+      "stylists profile"
+    ]
+  },
+  {
+    "theme": "don't manual / manual / don't",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "bareagent/0529-1224-be7608c9"
+    ],
+    "projects": [
+      "bareagent"
+    ],
+    "median_peak": 20.5,
+    "max_peak": 20.5,
+    "contexts": [
+      "don't i want it manual"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Read",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "don't manual",
+      "manual",
+      "don't"
+    ]
+  },
+  {
+    "theme": "steady persistent / persistent cron / under backup / backup time",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "privcloud/0608-0916-59baef24"
+    ],
+    "projects": [
+      "privcloud"
+    ],
+    "median_peak": 20,
+    "max_peak": 20,
+    "contexts": [
+      "no, we need to add under backup 1) one time 2) steady/persistent cron like the one we have in main menu"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Read",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "steady persistent",
+      "persistent cron",
+      "under backup",
+      "backup time",
+      "time steady",
+      "persistent",
+      "add under",
+      "cron menu",
+      "backup",
+      "steady"
+    ]
+  },
+  {
+    "theme": "delieverd something / validate correction / correction fucking / fucking regression",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 2
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "bareagent/0612-2311-9b38119e"
+    ],
+    "projects": [
+      "bareagent"
+    ],
+    "median_peak": 18,
+    "max_peak": 18,
+    "contexts": [
+      "fix the hook arg first, then build the adapter, and fuck you big time, you will fucking validate this after correction with fucking tests and regression and smoke test, fuck you again"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "delieverd something",
+      "validate correction",
+      "correction fucking",
+      "fucking regression",
+      "something didn't",
+      "fucking validate",
+      "regression smoke",
+      "fuck delieverd",
+      "first adapter",
+      "didn't agree"
+    ]
+  },
+  {
+    "theme": "rollover suggested / addition ommision / suggested chanegs / cleanly addition",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 1
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "litectx/0613-1554-a49d63a9"
+    ],
+    "projects": [
+      "litectx"
+    ],
+    "median_peak": 16,
+    "max_peak": 16,
+    "contexts": [
+      "fuck, you fucked the doc, didn't you. hamr0 is the origin and your updates should have landed there cleanly, addition no ommision. this feeds all other projects. pause for a second before doing anythign stupid. rollover suggested chanegs to hamr0 then copy it from there"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "rollover suggested",
+      "addition ommision",
+      "suggested chanegs",
+      "cleanly addition",
+      "second anythign",
+      "anythign stupid",
+      "stupid rollover",
+      "origin updates",
+      "updates landed",
+      "landed cleanly"
+    ]
+  },
+  {
+    "theme": "last changes / changes keep / keep gitdone / revert last",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "gitdone/0602-0021-40231750"
+    ],
+    "projects": [
+      "gitdone"
+    ],
+    "median_peak": 15,
+    "max_peak": 15,
+    "contexts": [
+      "revert all last changes and just keep h1 as gitdone"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "last changes",
+      "changes keep",
+      "keep gitdone",
+      "revert last",
+      "changes",
+      "gitdone",
+      "revert",
+      "last",
+      "keep"
+    ]
+  },
+  {
+    "theme": "don't absolute / absolute push / push commit / commit each",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "addypin/0522-0814-adea3c3e"
+    ],
+    "projects": [
+      "addypin"
+    ],
+    "median_peak": 14,
+    "max_peak": 14,
+    "contexts": [
+      "don't use absolute, just use .claude/memory/AGENT_RULES.md and push and commit each with npm push if they had one"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "don't absolute",
+      "absolute push",
+      "push commit",
+      "commit each",
+      "absolute",
+      "each npm",
+      "npm push",
+      "commit",
+      "don't",
+      "push"
+    ]
+  },
+  {
+    "theme": "source destination / considers rename / destination copy / renames manually",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "privcloud/0604-2053-b46bb9fd"
+    ],
+    "projects": [
+      "privcloud"
+    ],
+    "median_peak": 13,
+    "max_peak": 13,
+    "contexts": [
+      "does rsync considers rename/subdir mov or no? i.e. changing names at source but not destination would copy the dir again if name is diff?"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "source destination",
+      "considers rename",
+      "destination copy",
+      "renames manually",
+      "rsync considers",
+      "changing names",
+      "rename subdir",
+      "reorg renames",
+      "renames guess",
+      "guess renames"
+    ]
+  },
+  {
+    "theme": "specific documentation / powered applications / applications choose / documentation start",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "bareguard/0602-2302-6611b522"
+    ],
+    "projects": [
+      "bareguard"
+    ],
+    "median_peak": 11.5,
+    "max_peak": 11.5,
+    "contexts": [
+      "no, i am still thinking out loud about it. i tried with aurora project at first before i learned a lot of stuff and ended up with very nascent decomposer, aur query woild take any question, look at code AST (that is the working well part) and then tries to match decomposed tasks with agents and every agent goes and ask and come back to orchestrator to answer with code aware, most of the decomposition was ok and what gave the answers some grounding was code-aware and doc string, code AST was ACT-"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Skill",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "specific documentation",
+      "powered applications",
+      "applications choose",
+      "documentation start",
+      "orchestrator answer",
+      "applications helps",
+      "anthropic provider",
+      "nascent decomposer",
+      "most decomposition",
+      "decomposition gave"
+    ]
+  },
+  {
+    "theme": "wait until / until core / core right / right prep",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "litectx-poc/0604-1444-05d668b1"
+    ],
+    "projects": [
+      "litectx-poc"
+    ],
+    "median_peak": 10,
+    "max_peak": 10,
+    "contexts": [
+      "no, we will wait until we get core memory right #2 is there any other prep work we can do while we wait?"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Edit",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "wait until",
+      "until core",
+      "core right",
+      "right prep",
+      "work while",
+      "while wait",
+      "prep work",
+      "until",
+      "right",
+      "while"
+    ]
+  },
+  {
+    "theme": "tailscale solutions / transfer tailscale / working working / solutions wrong",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_curse": 1
+    },
+    "anchor_signal": "user_curse",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "bareagent/0601-1551-a1bfc5ce"
+    ],
+    "projects": [
+      "bareagent"
+    ],
+    "median_peak": 8,
+    "max_peak": 8,
+    "contexts": [
+      "it's working, was working prior transfer, tailscale solutions is wrong, you are making shit up. how can i make tailscale work back again?"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "Bash",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "tailscale solutions",
+      "transfer tailscale",
+      "working working",
+      "solutions wrong",
+      "prior transfer",
+      "tailscale work",
+      "working prior",
+      "how tailscale",
+      "it's working",
+      "wrong making"
+    ]
+  },
+  {
+    "theme": "count distinguish / number registered / distinguish bots / registered users",
+    "suggested_artifact": "episode",
+    "confidence": "low",
+    "severity": "severe",
+    "signals": {
+      "user_correction": 1
+    },
+    "anchor_signal": "user_correction",
+    "tool_pattern": "episode/severe",
+    "count": 1,
+    "score": 2,
+    "sessions": 1,
+    "session_ids": [
+      "plato/0518-1543-c26ca163"
+    ],
+    "projects": [
+      "plato"
+    ],
+    "median_peak": 8,
+    "max_peak": 8,
+    "contexts": [
+      "no, users with magiclink also means that their hashed ids are captured so its a true number of registered users and an opp for them to try/see that no one will email them until they come back"
+    ],
+    "errors": [],
+    "preceding": {
+      "action": "none",
+      "result": "unknown",
+      "error": null
+    },
+    "self_suspect": false,
+    "top_keywords": [
+      "count distinguish",
+      "number registered",
+      "distinguish bots",
+      "registered users",
+      "users magiclink",
+      "magiclink means",
+      "lurker count",
+      "means hashed",
+      "ids captured",
+      "captured its"
+    ]
+  }
+]

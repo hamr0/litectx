@@ -1,0 +1,706 @@
+{
+  "analyzed_at": "2026-06-17T10:18:23.088Z",
+  "sessions_analyzed": 739,
+  "config_used": {
+    "weights": {
+      "user_correction": 8,
+      "user_curse": 8,
+      "interrupt_cascade": 8,
+      "tool_loop": 6,
+      "repeated_question": 5,
+      "request_interrupted": 3,
+      "exit_error": 0.5,
+      "false_success": 1,
+      "no_resolution": 0.5,
+      "session_abandoned": 1,
+      "user_intervention": 1,
+      "rapid_exit": 1,
+      "long_silence": 0.5,
+      "compaction": 0.5,
+      "sibling_tool_error": 0.5,
+      "exit_success": 0,
+      "checkpoint": 0
+    },
+    "thresholds": {
+      "friction_peak": 15,
+      "intervention_predictability": 0.5,
+      "signal_noise_ratio": 1.5,
+      "long_silence_minutes": 10
+    },
+    "notes": {
+      "model": "Threshold monitor - friction accumulates, no subtraction",
+      "exit_error": "Single error = noise (+1)",
+      "exit_success": "Zero weight - tracked as momentum only",
+      "user_intervention": "Gold signal - user gave up (/stash)",
+      "user_curse": "Reliable frustration indicator",
+      "false_success": "Trust violation - LLM claimed success but failed",
+      "tool_loop": "Agent stuck - same tool 3x",
+      "user_negation": "Low weight - still noisy after filtering",
+      "request_interrupted": "User hit Ctrl+C / Escape - impatience signal",
+      "long_silence": "User walked away >10 min - disengagement",
+      "repeated_question": "User asked same thing twice - confusion/frustration",
+      "compaction": "Context overflow - memory loss indicator",
+      "interrupt_cascade": "Multiple ESC/Ctrl+C within 60s - escalating frustration",
+      "rapid_exit": "Quick quit (<3 turns) after error - immediate rejection",
+      "no_resolution": "Errors without success - unresolved session",
+      "session_abandoned": "High friction at end, no clean exit - gave up silently",
+      "sibling_tool_error": "SDK cascade - parallel tool batch canceled when one fails"
+    }
+  },
+  "aggregate_by_source": {
+    "user": {
+      "sessions_with_signals": 253,
+      "total_friction": 2132,
+      "avg_friction_per_session": 8.42687747035573,
+      "top_signals": {
+        "checkpoint": 1328,
+        "repeated_question": 321,
+        "request_interrupted": 86,
+        "user_intervention": 29,
+        "user_correction": 18,
+        "user_curse": 9,
+        "interrupt_cascade": 3
+      }
+    },
+    "session": {
+      "sessions_with_signals": 43,
+      "total_friction": 28.5,
+      "avg_friction_per_session": 0.6627906976744186,
+      "top_signals": {
+        "no_resolution": 27,
+        "checkpoint": 21,
+        "rapid_exit": 11,
+        "session_abandoned": 4
+      }
+    },
+    "tool": {
+      "sessions_with_signals": 109,
+      "total_friction": 113.5,
+      "avg_friction_per_session": 1.0412844036697249,
+      "top_signals": {
+        "exit_error": 227,
+        "exit_success": 3
+      }
+    },
+    "llm": {
+      "sessions_with_signals": 99,
+      "total_friction": 657,
+      "avg_friction_per_session": 6.636363636363637,
+      "top_signals": {
+        "false_success": 141,
+        "tool_loop": 86
+      }
+    }
+  },
+  "by_project": {
+    "hamr": {
+      "total_sessions": 12,
+      "interactive_sessions": 12,
+      "bad_sessions": 1,
+      "bad_rate": 0.08,
+      "avg_friction": 9.8,
+      "avg_duration_min": 611.8,
+      "avg_turns": 12.7
+    },
+    "addypin": {
+      "total_sessions": 7,
+      "interactive_sessions": 7,
+      "bad_sessions": 1,
+      "bad_rate": 0.14,
+      "avg_friction": 5.4,
+      "avg_duration_min": 950.7,
+      "avg_turns": 9.7
+    },
+    "agentic-toolkit": {
+      "total_sessions": 3,
+      "interactive_sessions": 3,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0.3,
+      "avg_duration_min": 31.3,
+      "avg_turns": 4.3
+    },
+    "ama": {
+      "total_sessions": 8,
+      "interactive_sessions": 8,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 5.1,
+      "avg_duration_min": 148.8,
+      "avg_turns": 5.9
+    },
+    "bareagent": {
+      "total_sessions": 19,
+      "interactive_sessions": 18,
+      "bad_sessions": 2,
+      "bad_rate": 0.11,
+      "avg_friction": 8.2,
+      "avg_duration_min": 985.2,
+      "avg_turns": 13.9
+    },
+    "barebrowse": {
+      "total_sessions": 15,
+      "interactive_sessions": 15,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 4.8,
+      "avg_duration_min": 230.4,
+      "avg_turns": 11.1
+    },
+    "bareguard": {
+      "total_sessions": 91,
+      "interactive_sessions": 16,
+      "bad_sessions": 1,
+      "bad_rate": 0.06,
+      "avg_friction": 2.6,
+      "avg_duration_min": 220.8,
+      "avg_turns": 4.2
+    },
+    "bareguard-harness-code-mode": {
+      "total_sessions": 150,
+      "interactive_sessions": 0,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0,
+      "avg_duration_min": 0,
+      "avg_turns": 1
+    },
+    "baremobile": {
+      "total_sessions": 5,
+      "interactive_sessions": 5,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 6.6,
+      "avg_duration_min": 252.4,
+      "avg_turns": 11.8
+    },
+    "beeperbox": {
+      "total_sessions": 9,
+      "interactive_sessions": 9,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 9.3,
+      "avg_duration_min": 2663.4,
+      "avg_turns": 14.2
+    },
+    "dwi": {
+      "total_sessions": 7,
+      "interactive_sessions": 6,
+      "bad_sessions": 2,
+      "bad_rate": 0.33,
+      "avg_friction": 9.4,
+      "avg_duration_min": 3843.4,
+      "avg_turns": 17
+    },
+    "flightlog": {
+      "total_sessions": 2,
+      "interactive_sessions": 2,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 5,
+      "avg_duration_min": 1418.5,
+      "avg_turns": 16.5
+    },
+    "flowithmel": {
+      "total_sessions": 2,
+      "interactive_sessions": 2,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 1.5,
+      "avg_duration_min": 78.5,
+      "avg_turns": 14.5
+    },
+    "gitcore": {
+      "total_sessions": 2,
+      "interactive_sessions": 2,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 4.8,
+      "avg_duration_min": 41.5,
+      "avg_turns": 7.5
+    },
+    "gitdone": {
+      "total_sessions": 12,
+      "interactive_sessions": 12,
+      "bad_sessions": 1,
+      "bad_rate": 0.08,
+      "avg_friction": 20.3,
+      "avg_duration_min": 2749.3,
+      "avg_turns": 16.3
+    },
+    "hamr0": {
+      "total_sessions": 3,
+      "interactive_sessions": 3,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 19.7,
+      "avg_duration_min": 239.7,
+      "avg_turns": 8
+    },
+    "healthwatch": {
+      "total_sessions": 1,
+      "interactive_sessions": 1,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 143.5,
+      "avg_duration_min": 2494,
+      "avg_turns": 83
+    },
+    "knowless": {
+      "total_sessions": 9,
+      "interactive_sessions": 9,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 1.3,
+      "avg_duration_min": 194.3,
+      "avg_turns": 8.7
+    },
+    "latefyi": {
+      "total_sessions": 3,
+      "interactive_sessions": 3,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 27.8,
+      "avg_duration_min": 11935.3,
+      "avg_turns": 16
+    },
+    "liteagents": {
+      "total_sessions": 8,
+      "interactive_sessions": 8,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 30.4,
+      "avg_duration_min": 4122.9,
+      "avg_turns": 27.5
+    },
+    "litectx": {
+      "total_sessions": 287,
+      "interactive_sessions": 46,
+      "bad_sessions": 3,
+      "bad_rate": 0.07,
+      "avg_friction": 1.4,
+      "avg_duration_min": 113.3,
+      "avg_turns": 3.4
+    },
+    "litectx-poc": {
+      "total_sessions": 3,
+      "interactive_sessions": 3,
+      "bad_sessions": 1,
+      "bad_rate": 0.33,
+      "avg_friction": 5,
+      "avg_duration_min": 534,
+      "avg_turns": 15.3
+    },
+    "mailproof": {
+      "total_sessions": 12,
+      "interactive_sessions": 12,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 8.1,
+      "avg_duration_min": 1048.1,
+      "avg_turns": 11.5
+    },
+    "mcp-gov": {
+      "total_sessions": 1,
+      "interactive_sessions": 1,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 13,
+      "avg_duration_min": 296,
+      "avg_turns": 17
+    },
+    "mcprune": {
+      "total_sessions": 1,
+      "interactive_sessions": 1,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 2,
+      "avg_duration_min": 42,
+      "avg_turns": 8
+    },
+    "multis": {
+      "total_sessions": 10,
+      "interactive_sessions": 10,
+      "bad_sessions": 1,
+      "bad_rate": 0.1,
+      "avg_friction": 22.7,
+      "avg_duration_min": 5199.8,
+      "avg_turns": 18.7
+    },
+    "notes-smol": {
+      "total_sessions": 1,
+      "interactive_sessions": 1,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0,
+      "avg_duration_min": 60,
+      "avg_turns": 7
+    },
+    "notes-smol-bank-tx": {
+      "total_sessions": 2,
+      "interactive_sessions": 2,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0,
+      "avg_duration_min": 1,
+      "avg_turns": 3
+    },
+    "plato": {
+      "total_sessions": 16,
+      "interactive_sessions": 16,
+      "bad_sessions": 1,
+      "bad_rate": 0.06,
+      "avg_friction": 7.5,
+      "avg_duration_min": 397.4,
+      "avg_turns": 12.4
+    },
+    "privcloud": {
+      "total_sessions": 15,
+      "interactive_sessions": 15,
+      "bad_sessions": 3,
+      "bad_rate": 0.2,
+      "avg_friction": 10.5,
+      "avg_duration_min": 1622.8,
+      "avg_turns": 17.5
+    },
+    "privpn": {
+      "total_sessions": 3,
+      "interactive_sessions": 3,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 4,
+      "avg_duration_min": 65.7,
+      "avg_turns": 11.3
+    },
+    "wearecooked": {
+      "total_sessions": 2,
+      "interactive_sessions": 2,
+      "bad_sessions": 1,
+      "bad_rate": 0.5,
+      "avg_friction": 14.5,
+      "avg_duration_min": 423.5,
+      "avg_turns": 20.5
+    },
+    "wearehere": {
+      "total_sessions": 16,
+      "interactive_sessions": 16,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 12.6,
+      "avg_duration_min": 263.3,
+      "avg_turns": 16.1
+    },
+    "tmp": {
+      "total_sessions": 1,
+      "interactive_sessions": 0,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0,
+      "avg_duration_min": 0,
+      "avg_turns": 1
+    },
+    "tmp-litectx-e2e": {
+      "total_sessions": 1,
+      "interactive_sessions": 0,
+      "bad_sessions": 0,
+      "bad_rate": 0,
+      "avg_friction": 0,
+      "avg_duration_min": 0,
+      "avg_turns": 1
+    }
+  },
+  "overall": {
+    "total_sessions": 739,
+    "interactive_sessions": 269,
+    "bad_sessions": 18,
+    "bad_rate": 0.07,
+    "avg_friction": 4,
+    "avg_duration_min": 479.8,
+    "avg_turns": 6
+  },
+  "daily_stats": [
+    {
+      "date": "2026-05-12",
+      "total": 1,
+      "interactive": 1,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 88
+    },
+    {
+      "date": "2026-05-13",
+      "total": 1,
+      "interactive": 1,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 69
+    },
+    {
+      "date": "2026-05-17",
+      "total": 5,
+      "interactive": 5,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 17.4
+    },
+    {
+      "date": "2026-05-18",
+      "total": 18,
+      "interactive": 18,
+      "bad": 1,
+      "bad_rate": 0.06,
+      "avg_friction": 6.5
+    },
+    {
+      "date": "2026-05-19",
+      "total": 15,
+      "interactive": 15,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 12.1
+    },
+    {
+      "date": "2026-05-20",
+      "total": 7,
+      "interactive": 7,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 14.3
+    },
+    {
+      "date": "2026-05-21",
+      "total": 7,
+      "interactive": 7,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 0.9
+    },
+    {
+      "date": "2026-05-22",
+      "total": 13,
+      "interactive": 13,
+      "bad": 1,
+      "bad_rate": 0.08,
+      "avg_friction": 3.8
+    },
+    {
+      "date": "2026-05-23",
+      "total": 9,
+      "interactive": 9,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 3.3
+    },
+    {
+      "date": "2026-05-24",
+      "total": 17,
+      "interactive": 17,
+      "bad": 1,
+      "bad_rate": 0.06,
+      "avg_friction": 5.3
+    },
+    {
+      "date": "2026-05-25",
+      "total": 5,
+      "interactive": 5,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 16.7
+    },
+    {
+      "date": "2026-05-26",
+      "total": 3,
+      "interactive": 3,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 19.2
+    },
+    {
+      "date": "2026-05-27",
+      "total": 6,
+      "interactive": 6,
+      "bad": 1,
+      "bad_rate": 0.17,
+      "avg_friction": 7.8
+    },
+    {
+      "date": "2026-05-28",
+      "total": 9,
+      "interactive": 9,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 10.7
+    },
+    {
+      "date": "2026-05-29",
+      "total": 17,
+      "interactive": 17,
+      "bad": 1,
+      "bad_rate": 0.06,
+      "avg_friction": 8.6
+    },
+    {
+      "date": "2026-05-30",
+      "total": 3,
+      "interactive": 3,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 23.2
+    },
+    {
+      "date": "2026-05-31",
+      "total": 11,
+      "interactive": 11,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 15.1
+    },
+    {
+      "date": "2026-06-01",
+      "total": 9,
+      "interactive": 9,
+      "bad": 1,
+      "bad_rate": 0.11,
+      "avg_friction": 13.9
+    },
+    {
+      "date": "2026-06-02",
+      "total": 26,
+      "interactive": 16,
+      "bad": 2,
+      "bad_rate": 0.13,
+      "avg_friction": 8.5
+    },
+    {
+      "date": "2026-06-03",
+      "total": 4,
+      "interactive": 4,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 9.4
+    },
+    {
+      "date": "2026-06-04",
+      "total": 7,
+      "interactive": 7,
+      "bad": 3,
+      "bad_rate": 0.43,
+      "avg_friction": 7.4
+    },
+    {
+      "date": "2026-06-05",
+      "total": 13,
+      "interactive": 13,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 8.8
+    },
+    {
+      "date": "2026-06-08",
+      "total": 3,
+      "interactive": 3,
+      "bad": 1,
+      "bad_rate": 0.33,
+      "avg_friction": 10.8
+    },
+    {
+      "date": "2026-06-09",
+      "total": 3,
+      "interactive": 3,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 12
+    },
+    {
+      "date": "2026-06-10",
+      "total": 11,
+      "interactive": 5,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 1.4
+    },
+    {
+      "date": "2026-06-11",
+      "total": 13,
+      "interactive": 13,
+      "bad": 2,
+      "bad_rate": 0.15,
+      "avg_friction": 8
+    },
+    {
+      "date": "2026-06-12",
+      "total": 82,
+      "interactive": 11,
+      "bad": 1,
+      "bad_rate": 0.09,
+      "avg_friction": 2.2
+    },
+    {
+      "date": "2026-06-13",
+      "total": 155,
+      "interactive": 11,
+      "bad": 2,
+      "bad_rate": 0.18,
+      "avg_friction": 0.9
+    },
+    {
+      "date": "2026-06-14",
+      "total": 27,
+      "interactive": 6,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 2.6
+    },
+    {
+      "date": "2026-06-15",
+      "total": 225,
+      "interactive": 9,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 0.3
+    },
+    {
+      "date": "2026-06-16",
+      "total": 11,
+      "interactive": 11,
+      "bad": 1,
+      "bad_rate": 0.09,
+      "avg_friction": 22.5
+    },
+    {
+      "date": "2026-06-17",
+      "total": 1,
+      "interactive": 1,
+      "bad": 0,
+      "bad_rate": 0,
+      "avg_friction": 0
+    }
+  ],
+  "best_session": {
+    "session_id": "hamr/0525-1218-412fe212",
+    "quality": "OK",
+    "peak_friction": 0,
+    "turns": 15,
+    "duration_min": 35
+  },
+  "worst_session": {
+    "session_id": "healthwatch/0531-1740-7c0c25c1",
+    "quality": "FRICTION",
+    "peak_friction": 143.5,
+    "turns": 83,
+    "duration_min": 2494
+  },
+  "correlations": {
+    "high_friction_sessions": 61,
+    "intervention_sessions": 18,
+    "intervention_predictability": 0.3
+  },
+  "common_sequences": [],
+  "verdict": {
+    "status": "INCONCLUSIVE",
+    "reasons": [
+      "Intervention predictability: 30% (threshold: 50%)"
+    ],
+    "recommended_actions": []
+  }
+}

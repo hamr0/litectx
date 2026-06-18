@@ -71,3 +71,8 @@ Few unit (pure logic/algorithms) · many integration (real components, `:memory:
 SQLite) · some E2E. Test behavior not implementation. Tests come **after** the
 design stabilizes — do not TDD the POC. Every bug fix ships a regression test.
 JS test runner: Vitest.
+
+<!-- MEMORY:START -->
+@.claude/memory/MEMORY.md
+<!-- MEMORY:END -->
+
