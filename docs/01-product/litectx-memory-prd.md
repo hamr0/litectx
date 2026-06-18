@@ -227,15 +227,31 @@ ACT-R memory (short- and long-term), not just a code index.
 Design rules (DECIDED):
 - **Doc *formats* are a `format` field under `kind=doc`** (`md` in v1; `pdf`/`docx`/`txt`
   later), **not** new top-level kinds — so adding PDF support never migrates the schema.
-- **PDF/DOCX** (SHIPPED — `ctx.ingestDocument(buffer)`): markdown is a trivial local chunker;
-  PDF/DOCX need extraction libraries, so they ride an **optional, lazy-loaded peer-dep tier**
-  (`pdfjs-dist` + `mammoth`, mirroring the embeddings tier) — `npm i litectx` stays lean/offline,
-  and nothing is imported until the first ingest. A document is converted to markdown, segmented
-  (DOCX keeps headings → the md chunker; flat PDF → paragraphs reconstructed from inter-line
-  vertical gaps, packed whole into <800-char segments), and stored as `source='direct'` `doc` rows
-  carrying the reserved `format` (`pdf`/`docx`) — no schema migration, as designed. Untrusted input
-  is bounded (`maxSize`/`maxPages`/per-page `parseTimeoutMs`); scanned/image-only PDFs are not OCR'd.
-  *(Was DEFERRED through v0.16; the schema + decay map were ready, as planned.)*
+- **Unified file ingest** (SHIPPED — `ctx.ingest(buffer, { filename, scope?, expiresAt? })`, the
+  chat-upload flow; supersedes the unreleased `ingestDocument`). Routed by extension:
+  - **md/pdf/docx → chunkable**: markdown is a trivial local chunker; PDF/DOCX need extraction libs, so
+    they ride an **optional, lazy-loaded peer-dep tier** (`pdfjs-dist` + `mammoth`, mirroring embeddings)
+    — `npm i litectx` stays lean/offline, nothing imported until the first chunkable ingest. Converted to
+    markdown, segmented (DOCX keeps headings → the md chunker; flat PDF → paragraphs reconstructed from
+    inter-line vertical gaps, packed whole into <800-char segments), stored as `source='direct'` `doc`
+    rows carrying the reserved `format` — no schema migration. Untrusted input bounded
+    (`maxSize`/`maxPages`/per-page `parseTimeoutMs`); scanned PDFs not OCR'd.
+  - **any other type (csv/xlsx/xml/code/binary) → byte-exact blob** (multis M3 R3): stored verbatim in a
+    SQLite `BLOB` (POC-proven byte-identical round-trip), **filename indexed** for recall, body never
+    parsed/chunked; `get(id)` returns the original bytes. litectx is the single durable store. A blob is
+    never parsed → none of the parser-RCE/XXE surface, only the `maxSize` cap.
+  - **Per-upload `scope`** (R2) fences doc/blob rows on **both retrieval paths**: `recall({ scope })` returns
+    `scope ∪ null-global` (never another scope), and `get(id, { scope })` applies the same fence to the
+    **direct handle** — a by-id fetch with a mismatched scope returns `null` (fencing search alone is
+    insufficient: derived ids are guessable). Bare `get(id)` stays unfenced (backward-compatible; the
+    customer-tenant path opts into the stricter check via the `scope` arg — a threat-model-justified
+    asymmetry, the `owner`/`session` fact model untouched). Distinct axis from `owner`/`session`. **Consumer
+    must** pass `scope` to both `recall` and `get` on customer-reachable paths, never expose a bare `get(id)`,
+    and namespace ids per scope (defense-in-depth). **Optional `expiresAt`** (R5): once past, excluded from
+    recall/get and reclaimed by `ctx.purge()`; the consumer owns the retention schedule, litectx the
+    mechanism. Both default null (global/forever; backward-compatible).
+  *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
+  parser/chunker/store with litectx.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
@@ -1312,7 +1328,10 @@ package** (§7).
 - **LLM orchestration / task decomposition / agent spawning** — AURORA's `soar`/`reasoning`.
 - **Multi-provider LLM clients / embeddings-as-default** — provider-agnostic; ML is opt-in.
 - ~~**PDF/DOCX extraction in v1** — schema-reserved (§3.1), deferred.~~ **SHIPPED** post-v0.16 via
-  `ctx.ingestDocument()` on the optional `pdfjs-dist`/`mammoth` tier (§3.1). OCR (scanned PDFs) remains a non-goal.
+  `ctx.ingest()` on the optional `pdfjs-dist`/`mammoth` tier (§3.1) — now the unified file-ingest path
+  (md/pdf/docx → chunked; any other type → byte-exact blob; per-upload `scope` + `expiresAt`). OCR
+  (scanned PDFs) remains a non-goal; **body-search for non-md/pdf/docx types is opt-in** (convert + send
+  as md) — litectx stores arbitrary types byte-exact but parses only the three.
 - **A server / daemon / hosted service** — local library only.
 - **Linting** — mature per-language linters exist; do not wrap them.
 - **Being "bare"** — litectx is a real library, not a ≤150-LOC primitive.

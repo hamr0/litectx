@@ -4,27 +4,43 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.17.0] — 2026-06-18
 
 ### Added
-- **`ctx.ingestDocument(buffer, opts?)` — PDF/DOCX document ingest** (the reserved `format` field under
-  `kind=doc`, now built; PRD "PDF/DOCX deferred"). Converts a document **buffer** (the chat-upload flow —
-  no on-disk file) to markdown, segments it, and stores each segment as a `source='direct'` doc row that
-  ranks alongside `md` docs, carries `format: "pdf" | "docx"` under `kind:"doc"` (no schema migration), and
-  survives every `index()` pass. **DOCX** (`mammoth`) keeps heading structure → one section per segment;
-  **PDF** (`pdfjs-dist`) is flat text, so paragraphs are **reconstructed from inter-line vertical gaps** and
-  packed — **whole paragraphs only, never splitting a paragraph or word** — into segments kept under ~800
-  chars (recall returns a tight passage, not the whole doc as one blob; a lone paragraph longer than the cap
-  rides whole rather than be truncated).
-  Re-ingesting the same `id` is an upsert (orphaned tail segments dropped). Scanned/image-only PDFs are not
-  OCR'd (clear "no extractable text"); not per-customer scoped (`doc` is global, like `code`).
-- **Untrusted-input bounds** on ingest (§4): `maxSize` (10 MB), `maxPages` (2000), and a **per-page**
-  `parseTimeoutMs` (30 s) — oversized / over-page / corrupt / encrypted / no-text inputs throw a specific
-  error and write nothing. (A whole-parse `setTimeout` race was dropped after a POC proved it can't interrupt
-  pdfjs's microtask-bound CPU work; `maxSize`/`maxPages` bound the single-page case.)
+- **`ctx.ingest(buffer, opts?)` — unified file ingest** (the chat-upload flow — bytes + filename, no on-disk
+  file; the third ingest path beside `index()` and `remember()`). Routed by extension:
+  - **md / pdf / docx → chunkable**: converted to markdown, segmented, stored as `source='direct'` doc rows
+    that rank alongside file `md` docs, carry `format` under `kind:"doc"`, and survive every `index()` pass.
+    **md** segments directly; **DOCX** (`mammoth`) keeps heading structure → one section per segment; **PDF**
+    (`pdfjs-dist`) is flat text, so paragraphs are **reconstructed from inter-line vertical gaps** and packed
+    — **whole paragraphs only, never splitting a paragraph or word** — under ~800 chars (a lone over-cap
+    paragraph rides whole rather than be truncated). Scanned/image-only PDFs are not OCR'd (clear "no
+    extractable text").
+  - **everything else (csv / xlsx / xml / code / binary) → byte-exact blob**: stored verbatim in a SQLite
+    `BLOB` (round-trips byte-identical, incl. non-UTF8), **filename indexed** for recall but body **never
+    parsed/chunked**; `get(id)` returns the **original bytes** (`item.bytes`, `item.text === null`). litectx
+    becomes the single durable store — no parallel file store needed.
+
+  Re-ingesting the same `id` is an upsert (orphaned segments **and** any prior blob dropped, even across a
+  chunked↔blob switch). (Supersedes the unreleased `ingestDocument` — never published, so no migration.)
+- **Per-upload `scope` fences both `recall` AND `get`** (multis M3 R2). Tag each `ingest`/`remember` doc/blob
+  with a `scope` (e.g. a chat id). A scoped `recall({ scope })` returns **`scope ∪ null-global`** and nothing
+  from another scope; `get(id, { scope })` applies the **same fence to the direct handle** — a doc/blob
+  tagged with another scope returns `null` (global/null-scope rows stay visible to all). Fencing the handle
+  too is load-bearing: ids are guessable, so isolation can't rest on search alone. `get(id)` **without**
+  `scope` is unchanged (unfenced by id — the `owner`/`session` fetch model is untouched; the customer-tenant
+  path opts into the stricter check because it has the stricter threat model). Unset = global
+  (backward-compatible). A distinct axis from the instance `owner`/`session` (which scope `fact`/`episode`).
+- **Per-record expiry `expiresAt` + `ctx.purge(opts?)`** (multis M3 R5). An upload may carry `expiresAt`
+  (epoch ms; unset = keep forever); once past, it is **excluded from `recall`/`get`** and reclaimed (bytes and
+  all) by `purge()`. The consumer owns the retention *schedule*; litectx owns the honor + reclaim.
+- **Untrusted-input bounds** on ingest (§4): `maxSize` (10 MB, also caps a blob), `maxPages` (2000), and a
+  **per-page** `parseTimeoutMs` (30 s) — oversized / over-page / corrupt / encrypted / no-text inputs throw a
+  specific error and write nothing. (A whole-parse `setTimeout` race was dropped after a POC proved it can't
+  interrupt pdfjs's microtask-bound CPU work; `maxSize`/`maxPages` bound the single-page case.)
 - **`pdfjs-dist` + `mammoth` as optional peer deps** (`peerDependenciesMeta.optional`, mirroring
-  `@huggingface/transformers`) — lazy-loaded on the first `ingestDocument` call, so `npm i litectx` stays
-  lean/offline and a consumer who never ingests a document pays neither install nor import cost.
+  `@huggingface/transformers`) — lazy-loaded on the first chunkable (pdf/docx) ingest, so `npm i litectx`
+  stays lean/offline; a blob or md ingest needs neither, and a consumer who never ingests pays nothing.
 
 ### Security
 - Document ingest hardens the untrusted-input boundary: PDF JS execution + `eval` disabled
@@ -33,6 +49,16 @@ All notable changes to this project are documented here, following
   parsed without external-entity resolution (no XXE file-read/SSRF; verified against `@xmldom`). `litectx.context.md`
   documents the two residual, deployment-shaped limits for fully-untrusted uploads (decompressed-size isn't
   bounded by `maxSize`; a CPU-bound parse can't be preempted — run hostile input in a worker thread).
+- The **blob path is never parsed** (bytes stored verbatim), so it carries none of the parser-RCE/XXE surface
+  — its only bound is `maxSize`. All new storage (scope/expiry sidecar, blob bytes, `purge`) uses bound
+  parameters; the byte-exact `BLOB` round-trip + cross-scope fencing + expiry exclusion are POC-proven with
+  negative controls (a `TEXT` column mangles non-UTF8; an unscoped recall sees all).
+- **Tenant isolation hardened (security review).** The scope fence was extended from `recall` to `get` — a
+  by-id fetch with a mismatched `scope` now returns `null`, closing a cross-scope read of a *guessed* id
+  (derived ids slug the filename). Consumer obligations documented in `litectx.context.md`: pass `scope` to
+  **both** `recall` and `get` on customer-reachable paths, never expose a bare `get(id)`, and namespace ids
+  per scope (defense-in-depth). Blob bytes are returned **verbatim** — the host must treat them as untrusted
+  on egress (`Content-Disposition: attachment`; no inline render).
 
 ## [0.16.2] — 2026-06-17
 

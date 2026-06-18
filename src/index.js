@@ -19,7 +19,7 @@ import { ftsMatch, keywords } from "./tokenize.js";
 import { Embedder, cosine } from "./embedder.js";
 import { toWriteAction, WriteAudit, WriteDeniedError } from "./writegate.js";
 import { observe } from "./contextgraph.js";
-import { documentToSegments } from "./docparse.js";
+import { documentToSegments, classifyDocument, DEFAULT_MAX_SIZE } from "./docparse.js";
 
 const DEFAULT_INCLUDE = [".ts", ".js", ".mjs", ".cjs", ".py", ".md"];
 
@@ -128,7 +128,10 @@ export const KINDS = ["code", "doc", "fact", "episode"];
  * @property {string|null} provenance    "human" | "agent" for written memory; null for indexed files
  * @property {number|null} occurredAt    episode timestamp (epoch ms); null otherwise
  * @property {string|null} text          the full body — written memory verbatim as remembered, files
- *                                       read fresh from disk; null only when the file is gone
+ *                                       read fresh from disk; null when the file is gone, or for a blob
+ *                                       (a byte-exact upload — its payload is in `bytes`, not text)
+ * @property {Buffer|null} bytes         a byte-exact upload's original bytes (R3); null for every other
+ *                                       kind and for file rows
  * @property {Record<string, unknown>|null} meta  opaque caller metadata (RT-3 #3) as supplied to
  *                                       `remember`, returned verbatim; null for files and for memory
  *                                       with none
@@ -311,22 +314,29 @@ export class LiteCtx {
    * `body: true` inlines each hit's content as `hit.body` (off by default — recall returns pointers,
    * not payloads). litectx owns this because *where the body lives is kind-dependent*: written memory
    * comes back VERBATIM; a file hit returns its localized chunk's indexed text, or the whole file when
-   * nothing localized. Opt in when mounting litectx as a memory store or feeding an assembler.
+   * nothing localized. Opt in when mounting litectx as a memory store or feeding an assembler. (A blob
+   * hit — a byte-exact upload, R3 — has no text body: `body` is null; fetch its bytes with {@link get}.)
+   *
+   * `scope` (multis M3 R2) narrows direct doc/blob rows to `scope ∪ null-global` — a recall scoped to a
+   * chat sees that chat's uploads + the global knowledge base, never another chat's. Unset = unscoped =
+   * sees everything (backward-compatible). Code/file rows and fact/episode are unaffected (always global
+   * on this axis; fact/episode scope via the instance `owner`/`session`). Expired rows (R5 `expiresAt`)
+   * are always excluded, scope or not.
    *
    * @overload
    * @param {string} query
-   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean }} opts
+   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean, scope?: string }} opts
    * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
-   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean }} [opts]
+   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean, scope?: string }} [opts]
    * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
-   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean }} [opts]
+   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    */
   async recall(query, opts = {}) {
@@ -334,9 +344,12 @@ export class LiteCtx {
     // embed the query ONCE up front (cached) when the tier is on; per-kind ranking is then sync.
     const qvec = this.embeddings && match ? await this._embedQuery(query) : null;
     const terms = keywords(query); // for chunk localization — same split the FTS body uses
+    // R2 scope + R5 expiry narrowing for direct doc/blob rows (no-op for code/file rows + fact/episode).
+    // `now` is stamped once so a recall is internally consistent; expired rows are excluded live here.
+    const filter = { scope: opts.scope ?? null, now: Date.now() };
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
-      const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec), terms);
+      const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec, filter), terms);
       if (MEM_KINDS.has(opts.kind)) this.store.attachMemMeta(hits); // slice 5c: surface provenance/use/occurredAt — read, never scored
       this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(hits); // RT-3 inline-body — content, not a pointer
@@ -350,7 +363,7 @@ export class LiteCtx {
     /** @type {Record<string, import("./store.js").Hit[]>} */
     const grouped = {};
     for (const k of kinds) {
-      grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec), terms);
+      grouped[k] = this.store.attachChunks(this._rankKind(match, k, n, qvec, filter), terms);
       if (MEM_KINDS.has(k)) this.store.attachMemMeta(grouped[k]); // slice 5c: written-memory columns (read, never scored)
       this._attachMeta(grouped[k]); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(grouped[k]); // RT-3 inline-body — content, not a pointer
@@ -429,11 +442,12 @@ export class LiteCtx {
    * @param {string} kind
    * @param {number} n
    * @param {Float32Array|null} qvec
+   * @param {{ scope?: string|null, now?: number|null }} [filter]  R2 scope + R5 expiry (docs/blobs only)
    * @returns {import("./store.js").Hit[]}
    */
-  _rankKind(match, kind, n, qvec) {
-    if (!qvec) return match ? this.store.search(match, kind, n, SPREAD_WEIGHT) : []; // dual path (unchanged contract)
-    const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT) : [];
+  _rankKind(match, kind, n, qvec, filter = {}) {
+    if (!qvec) return match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path (unchanged contract)
+    const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)));
     const cand = pool.concat(knn);
     if (cand.length < 2) return cand.slice(0, n);
@@ -504,14 +518,25 @@ export class LiteCtx {
    * demand would double-count every retrieval (the fetch-toll). Nothing reads the tag yet; it earns
    * weight (if any) at the action-signal bench. `log: false` opts out, same as `recall`.
    *
+   * A **blob** (a byte-exact upload, R3) returns its original bytes in `bytes` with `text: null` — the
+   * round-trip is byte-identical. An **expired** row (R5) returns `null`, exactly like recall hides it.
+   *
+   * `scope` (multis M3 R2) **fences the direct handle** like `recall({scope})` fences discovery: a `get`
+   * for a doc/blob tagged with a *different* scope returns `null` (a global/null-scope row stays visible
+   * to every scope; fact/episode/file rows are unaffected). This is the load-bearing half of "one customer
+   * never sees another's" — recall alone fences search, but ids can be guessed, so a customer-reachable
+   * fetch must pass the requesting scope. Omit it and `get` behaves exactly as before (unfenced by id).
+   *
    * Sync (no embedder involved). Returns `null` for an unknown id.
    *
    * @param {string} id  a written-memory id, a stashed payload's id, or an indexed file's repo-relative path
-   * @param {{ log?: boolean }} [opts]
+   * @param {{ log?: boolean, scope?: string }} [opts]
    * @returns {Item | null}
    */
   get(id, opts = {}) {
-    const r = this.store.getItem(id);
+    // pass now → an expired direct doc/blob (R5) reads as gone; pass scope → another scope's row reads as
+    // absent (R2 — fences the by-id handle, not only recall; bare get(id) stays unfenced, owner-model intact).
+    const r = this.store.getItem(id, Date.now(), opts.scope ?? null);
     if (!r) return null;
     let text = r.text;
     if (r.source === "file") {
@@ -522,7 +547,7 @@ export class LiteCtx {
       }
     }
     if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch");
-    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, meta: r.meta != null ? JSON.parse(r.meta) : null };
+    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, bytes: r.bytes ?? null, meta: r.meta != null ? JSON.parse(r.meta) : null };
   }
 
   /**
@@ -534,7 +559,7 @@ export class LiteCtx {
    *
    * @param {string} id    caller key / identity (lands in the row's `path`)
    * @param {string} text  the content
-   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high" }} [opts]
+   * @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high", scope?: string|null, expiresAt?: number|null }} [opts]
    *   `kind` ∈ {fact, episode, doc} (default `fact`); `by` = provenance `"human"|"agent"` (default
    *   `"agent"`); `injectionRisk` = OPTIONAL guardrails shape flag forwarded to a wired `writeGate`
    *   (litectx core never computes it — a guardrails tier sets it; ignored when no `writeGate`);
@@ -542,7 +567,9 @@ export class LiteCtx {
    *   `format` defaults to `md` for docs, `text` otherwise. `meta` = an opaque caller dict (RT-3 #3)
    *   stored verbatim and returned untouched by `get`/`recall` — small structured tags ({sessionId,
    *   tag, …}), NEVER searched or ranked; park large payloads in `stash`, not here. Re-`remember`ing
-   *   without `meta` clears any prior meta.
+   *   without `meta` clears any prior meta. `scope`/`expiresAt` (multis M3 R2/R5) tag a `doc` row's
+   *   recall scope + retention (both default null = global/forever); ignored for fact/episode (they
+   *   scope via the instance `owner`/`session`). Usually set via {@link ingest}, not here directly.
    * @returns {Promise<void>}
    */
   async remember(id, text, opts = {}) {
@@ -577,7 +604,7 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding });
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: opts.scope, expiresAt: opts.expiresAt });
   }
 
   /**
@@ -597,44 +624,82 @@ export class LiteCtx {
   }
 
   /**
-   * Ingest a whole document (PDF/DOCX bytes) as recallable `doc`-kind content — the third ingest
-   * path, distinct from {@link index} (sweeps a disk root) and {@link remember} (stores text whole,
-   * unchunked). The document is converted to markdown, split into segments (DOCX keeps its heading
-   * structure → one section per segment; a flat PDF is reconstructed into paragraphs and packed),
-   * and each segment is written as its own `source='direct'` doc row — so it ranks alongside `md`
-   * docs in `recall(q, { kind: 'doc' })`, survives every `index()` pass, and carries the reserved
-   * `format` ("pdf" | "docx") under `kind='doc'` (no schema migration).
+   * Ingest an uploaded file (bytes + filename) — the third ingest path, distinct from {@link index}
+   * (sweeps a disk root) and {@link remember} (stores text whole, unchunked). Built for transient chat
+   * uploads (a buffer, not a repo file). Routed by extension (multis M3):
+   *
+   * - **md / pdf / docx** → converted to markdown, split into segments, each written as its own
+   *   `source='direct'` `doc` row — so it ranks alongside `md` docs in `recall(q,{kind:'doc'})`,
+   *   survives every `index()` pass, and carries its `format` ("md"|"pdf"|"docx") under `kind='doc'`.
+   * - **everything else** (csv / xlsx / xml / code / binary) → stored BYTE-EXACT as a blob; its
+   *   **filename** is indexed for recall but the body is never parsed/chunked, and {@link get} returns
+   *   the original bytes. Getting body-search for those types is the consumer's opt-in (send md/pdf/docx).
    *
    * Untrusted input is BOUNDED: oversized / over-page / slow / corrupt / encrypted / no-text inputs
    * throw a clear, specific error and write NOTHING (the index is left intact). The two parsers
-   * (`pdfjs-dist`, `mammoth`) are optional peer deps, lazy-loaded on first ingest.
+   * (`pdfjs-dist`, `mammoth`) are optional peer deps, lazy-loaded on first chunkable ingest (a blob
+   * needs neither). Every row may carry a `scope` (R2 — recall fences `scope ∪ null-global`) and an
+   * `expiresAt` (R5 — excluded from recall/get once past, reclaimed by {@link purge}).
    *
-   * Re-ingesting the same `id` is an upsert: prior segments of that document are dropped first, so a
-   * shorter re-ingest never leaves orphaned tail segments.
+   * **A wired `writeGate` screens the CHUNKABLE path only (per segment, via {@link remember}); a BLOB
+   * write is NOT gated.** This is deliberate: the gate judges searchable *text* for injection-risk, and a
+   * blob has none — its bytes are opaque and never reach an LLM (the only path that turns blob content
+   * into context is converting + sending as md/pdf/docx, which IS the gated chunked route). Screen
+   * uploads at the call site (size/type/AV) and treat retrieved bytes as untrusted on egress; don't rely
+   * on `writeGate` for blobs.
    *
-   * @param {Uint8Array} buffer  the document bytes (e.g. a chat upload)
-   * @param {{ filename?: string, format?: string, id?: string, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts]
-   *   `filename` drives format detection; `format` overrides it ("pdf"|"docx"); `id` = stable base id
-   *   (else derived from the filename); `meta` = opaque passthrough attached to every segment;
-   *   `maxSize`/`maxPages`/`parseTimeoutMs` = the untrusted-input bounds (defaults 10 MB / 2000 / 30 s).
-   * @returns {Promise<{ id: string, kind: "doc", format: "pdf" | "docx", chunks: number }>}
+   * Re-ingesting the same `id` is an upsert: prior segments/blob of that document are dropped first, so
+   * a shorter (or format-changed) re-ingest never leaves orphans.
+   *
+   * @param {Uint8Array} buffer  the file bytes (e.g. a chat upload)
+   * @param {{ filename?: string, format?: string, id?: string, scope?: string|null, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts]
+   *   `filename` drives extension routing; `format` overrides it; `id` = stable base id (else derived
+   *   from the filename); `scope`/`expiresAt` = per-upload recall scope + retention (default null =
+   *   global/forever); `meta` = opaque passthrough; `maxSize`/`maxPages`/`parseTimeoutMs` = the
+   *   untrusted-input bounds (defaults 10 MB / 2000 / 30 s; `maxSize` also caps a blob).
+   * @returns {Promise<{ id: string, kind: "doc", format: string, mode: "chunked" | "blob", chunks: number }>}
    */
-  async ingestDocument(buffer, opts = {}) {
+  async ingest(buffer, opts = {}) {
+    if (!(buffer instanceof Uint8Array)) throw new Error("ingest: expected a Buffer/Uint8Array of file bytes");
+    const cls = classifyDocument(opts.filename, opts.format);
+    const id = opts.id ?? deriveDocId(opts.filename);
+    if (cls.mode === "blob") {
+      // byte-exact store (R3): no parser, body never chunked — the filename is the searchable surface.
+      const maxSize = opts.maxSize ?? DEFAULT_MAX_SIZE;
+      if (buffer.length > maxSize) throw new Error(`ingest: file exceeds maxSize (${buffer.length} > ${maxSize} bytes)`);
+      const filename = opts.filename ?? `${id}.${cls.format}`;
+      const meta = opts.meta != null ? JSON.stringify(opts.meta) : null;
+      this.store.forgetMemory({ idPrefix: id }); // upsert: drop any prior row/segments + bytes for this id
+      this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: opts.scope, expiresAt: opts.expiresAt });
+      return { id, kind: "doc", format: cls.format, mode: "blob", chunks: 0 };
+    }
     const { format, segments } = await documentToSegments(buffer, {
-      filename: opts.filename,
-      format: opts.format,
+      mode: cls.mode,
+      format: cls.format,
       maxSize: opts.maxSize,
       maxPages: opts.maxPages,
       parseTimeoutMs: opts.parseTimeoutMs,
     });
-    const id = opts.id ?? deriveDocId(opts.filename);
-    // re-ingest = upsert: drop any prior segments of THIS document first (direct rows only).
+    // re-ingest = upsert: drop any prior segments/blob of THIS document first (direct rows only).
     this.store.forgetMemory({ idPrefix: id });
     // one direct doc row per segment, ids `<base>#<n>` — each independently ranked + recallable.
     for (let i = 0; i < segments.length; i++) {
-      await this.remember(`${id}#${i}`, segments[i], { kind: "doc", format, meta: opts.meta });
+      await this.remember(`${id}#${i}`, segments[i], { kind: "doc", format, meta: opts.meta, scope: opts.scope, expiresAt: opts.expiresAt });
     }
-    return { id, kind: "doc", format, chunks: segments.length };
+    return { id, kind: "doc", format, mode: "chunked", chunks: segments.length };
+  }
+
+  /**
+   * Reclaim expired uploads (multis M3 R5) — the retention sweep's mechanism. Every direct doc/blob row
+   * whose `expiresAt` has passed `now` (default `Date.now()`) is deleted and its storage (including the
+   * byte-exact blob) reclaimed, leaving no orphans. The CONSUMER owns the schedule (when/how often);
+   * litectx owns the delete. Note recall/get already EXCLUDE expired rows the instant they expire — so
+   * this is a storage-reclamation pass, not a correctness gate. Returns the number of rows reclaimed.
+   * @param {{ now?: number }} [opts]  `now` = the cutoff (epoch ms); rows with `expiresAt <= now` go
+   * @returns {number}
+   */
+  purge(opts = {}) {
+    return this.store.purge(opts.now ?? Date.now());
   }
 
   /**

@@ -177,6 +177,18 @@ const SCHEMA = [
   // the Store) sees everything (single-tenant default). One row per scoped written id; refreshed on
   // re-write, dropped by `forgetMemory`. `code`/`doc` are the per-worktree FS index, never scoped here.
   "CREATE TABLE IF NOT EXISTS mem_scope(path TEXT PRIMARY KEY, owner TEXT, session TEXT)",
+  // per-upload scope + expiry for DIRECT doc/blob rows (multis M3 R2 + R5). Distinct from `mem_scope`:
+  //   - `mem_scope` is instance IDENTITY (owner/session, derived from the Store) on fact/episode rows.
+  //   - `doc_scope` is per-upload CONTENT TAGS (scope/expires_at, passed at ingest) on direct docs/blobs.
+  // Both NULL = global / never-expire. A SIBLING table (the `docs` FTS5 table takes no ALTER ADD COLUMN),
+  // mirroring `mem_scope`/`mem_meta`: a `CREATE TABLE IF NOT EXISTS` is the most additive migration (old
+  // DBs gain an empty table; a missing row LEFT-JOINs to NULL/NULL = global/forever = byte-identical to
+  // pre-R2 recall). `scope` fences one customer's uploads from another's (recall filter = `scope ∪ NULL`,
+  // so the global kb stays visible from any chat); `expires_at` (epoch ms) excludes expired rows from
+  // recall/get and is reclaimed by `purge()`. File-indexed (`source='file'`) rows never get a row here —
+  // they are always global/forever, which is exactly the LEFT-JOIN-NULL default.
+  "CREATE TABLE IF NOT EXISTS doc_scope(path TEXT PRIMARY KEY, scope TEXT, expires_at INTEGER)",
+  "CREATE INDEX IF NOT EXISTS doc_scope_expires ON doc_scope(expires_at)",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
   // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
@@ -202,6 +214,14 @@ const SCHEMA = [
   // (session state) / R-W4 (notes) get their OWN tables; R-I3 summary / R-I1 scope are a cheap nullable
   // ALTER on this plain table if/when built — not reserved here (we don't speculate; AGENT_RULES).
   "CREATE TABLE IF NOT EXISTS stash(path TEXT PRIMARY KEY, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
+  // byte-exact store for non-chunkable uploads (multis M3 R3): csv/xlsx/xml/code/binary that the consumer
+  // wants kept and retrievable but NOT body-searched. The bytes live here as a BLOB (POC-proven byte-exact
+  // round-trip; a TEXT column mangles non-UTF8 — the column type is load-bearing). Each blob ALSO gets a
+  // direct `docs` row whose FTS `body` is ONLY the filename, so recall finds it by name without parsing the
+  // bytes; `get(id)` returns the original bytes from here. 1:1 with the `docs` row by `path`; dropped by
+  // `forgetMemory`/`purge` alongside it. Distinct from `stash` (parked agent payloads, reached only by id,
+  // never recallable): a blob IS recallable by filename and carries scope/expiry like any uploaded doc.
+  "CREATE TABLE IF NOT EXISTS blobs(path TEXT PRIMARY KEY, bytes BLOB NOT NULL, filename TEXT NOT NULL)",
 ];
 
 /** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
@@ -289,6 +309,8 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS recall_log");
     this.db.exec("DROP TABLE IF EXISTS mem");
     this.db.exec("DROP TABLE IF EXISTS mem_text");
+    this.db.exec("DROP TABLE IF EXISTS doc_scope");
+    this.db.exec("DROP TABLE IF EXISTS blobs");
     for (const stmt of SCHEMA) this.db.exec(stmt);
   }
 
@@ -411,8 +433,9 @@ export class Store {
    * Stored **whole** (no chunking); the FTS body is identifier-split like any other (`indexBody`).
    * `meta` (RT-3 #3) is an opaque JSON string stored verbatim in the sealed `mem_meta` table and
    * never indexed; `null`/omitted clears any prior meta (the row reflects the latest write, like
-   * `mem_text`).
-   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array }} m
+   * `mem_text`). `scope`/`expiresAt` (multis M3 R2/R5) tag a DIRECT `doc` row in the `doc_scope`
+   * sidecar — both NULL = global/forever; ignored for `fact`/`episode` (those scope via `mem_scope`).
+   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null }} m
    */
   writeMemory(m) {
     const tx = this.db.transaction(() => {
@@ -442,6 +465,9 @@ export class Store {
               "VALUES (@path, @kind, @format, 'direct', @provenance, @occurred_at, @body)"
           )
           .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+        // R2/R5 per-upload sidecar: refresh by delete-then-insert (mirrors mem_scope); a row only when
+        // actually scoped/expiring — NULL/NULL is identical to absent under the recall LEFT JOIN.
+        this.setDocScope(m.id, m.scope ?? null, m.expiresAt ?? null);
       }
       // raw text alongside the searchable surface (slice 9): the FTS body is processed
       // (indexBody) and there is no file behind a written row, so this is the only copy
@@ -464,6 +490,52 @@ export class Store {
           .run({ path: m.id, dim: m.embedding.length, vec: Buffer.from(m.embedding.buffer, m.embedding.byteOffset, m.embedding.byteLength) });
       } else {
         this.db.prepare("DELETE FROM file_embeddings WHERE path = ?").run(m.id);
+      }
+    });
+    tx();
+  }
+
+  /**
+   * Set (or clear) the per-upload scope/expiry of a direct doc/blob row (multis M3 R2/R5). Refresh by
+   * delete-then-insert; a row is written ONLY when actually scoped or expiring, so NULL/NULL leaves no
+   * row — identical to absent under the recall LEFT JOIN (byte-identical to pre-R2 behavior when unset).
+   * @param {string} id @param {string|null} scope @param {number|null} expiresAt
+   */
+  setDocScope(id, scope, expiresAt) {
+    this.db.prepare("DELETE FROM doc_scope WHERE path = ?").run(id);
+    if (scope != null || expiresAt != null) {
+      this.db.prepare("INSERT INTO doc_scope(path, scope, expires_at) VALUES (?, ?, ?)").run(id, scope, expiresAt);
+    }
+  }
+
+  /**
+   * Store an uploaded file BYTE-EXACT (multis M3 R3) — the non-chunkable ingest path. The bytes go to
+   * the `blobs` BLOB column verbatim (POC-proven round-trip; TEXT would mangle non-UTF8); a direct
+   * `docs` row carries ONLY the filename as its FTS body, so recall finds the file by NAME without ever
+   * parsing or chunking the bytes. `get(id)` returns the original bytes. Upsert by `id` (drops any prior
+   * direct row + blob for that id first). Scope/expiry ride the same `doc_scope` sidecar as docs; `meta`
+   * is the sealed `mem_meta` passthrough (small tags only). Never embedded (bytes aren't meaning-searchable).
+   * @param {{ id: string, bytes: Uint8Array, filename: string, format: string, meta?: string|null, scope?: string|null, expiresAt?: number|null }} b
+   */
+  writeBlob(b) {
+    const bytes = Buffer.isBuffer(b.bytes) ? b.bytes : Buffer.from(b.bytes);
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(b.id);
+      // FTS body = the FILENAME only (folded through indexBody like any other body); never the bytes.
+      this.db
+        .prepare(
+          "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
+            "VALUES (@path, 'doc', @format, 'direct', NULL, NULL, @body)"
+        )
+        .run({ path: b.id, format: b.format, body: indexBody({ path: b.id, body: b.filename }) });
+      this.db
+        .prepare("INSERT INTO blobs(path, bytes, filename) VALUES (@path, @bytes, @filename) ON CONFLICT(path) DO UPDATE SET bytes = excluded.bytes, filename = excluded.filename")
+        .run({ path: b.id, bytes, filename: b.filename });
+      this.setDocScope(b.id, b.scope ?? null, b.expiresAt ?? null);
+      if (b.meta != null) {
+        this.db.prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta").run({ path: b.id, meta: b.meta });
+      } else {
+        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(b.id);
       }
     });
     tx();
@@ -546,7 +618,7 @@ export class Store {
    * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
    * @param {{ id?: string, idPrefix?: string, kind?: string, provenance?: string }} sel
    *   `idPrefix` matches a base id and all `<base>#<n>` rows under it — the clean-re-ingest handle
-   *   for a multi-segment document ({@link LiteCtx#ingestDocument}); still direct-rows-only.
+   *   for a multi-segment document ({@link LiteCtx#ingest}); still direct-rows-only.
    * @returns {number}
    */
   forgetMemory(sel) {
@@ -588,10 +660,42 @@ export class Store {
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
+      const delDocScope = this.db.prepare("DELETE FROM doc_scope WHERE path = ?"); // R2/R5 sidecar
+      const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?"); // R3 bytes (forget reclaims them)
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delDocScope.run(p), delBlob.run(p), delEmb.run(p), delLog.run(p));
       return removed;
+    });
+    return tx();
+  }
+
+  /**
+   * Reclaim expired direct doc/blob rows (multis M3 R5) — the retention sweep's mechanism (the consumer
+   * owns the schedule; litectx owns the delete). Drops every row whose `doc_scope.expires_at <= now`
+   * across `docs` + `doc_scope` + `blobs` + `mem_text`/`mem_meta` + embeddings + `recall_log`, so a
+   * single store leaves NO orphaned bytes. Recall/get already EXCLUDE expired rows live (so a row is
+   * invisible the instant it expires, before any purge); `purge` is what actually frees the storage.
+   * Touches only rows with a non-NULL `expires_at` that has passed — `null`-expiry (keep-forever) and
+   * file-indexed rows are never reached. Returns rows removed.
+   * @param {number} now  epoch ms — the cutoff; rows with `expires_at <= now` are reclaimed
+   * @returns {number}
+   */
+  purge(now) {
+    const tx = this.db.transaction(() => {
+      const dead = /** @type {{ path: string }[]} */ (
+        this.db.prepare("SELECT path FROM doc_scope WHERE expires_at IS NOT NULL AND expires_at <= ?").all(now)
+      ).map((r) => r.path);
+      if (!dead.length) return 0;
+      const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'");
+      const delDocScope = this.db.prepare("DELETE FROM doc_scope WHERE path = ?");
+      const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?");
+      const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
+      const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
+      for (const p of dead) (delDoc.run(p), delDocScope.run(p), delBlob.run(p), delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
+      return dead.length;
     });
     return tx();
   }
@@ -747,10 +851,22 @@ export class Store {
    * collision of a written id with a file path the written row wins (it has no other home; ids are
    * namespaced by convention). A pre-slice-9 written row with no `mem_text` falls back to its
    * stored FTS body — degraded (path tokens folded in) but preserved.
+   *
+   * A **blob** row (multis M3 R3) returns its original BYTES in `bytes` with `text: null` — the bytes,
+   * never the filename, are the deliverable. Everything else returns `bytes: null`. When `now` (epoch
+   * ms) is passed, an **expired** direct row (R5) returns `null` — fetch honors expiry exactly like recall.
+   *
+   * `scope` (multis M3 R2) fences the **direct handle** the same way `recall({scope})` fences discovery:
+   * when set, a row tagged with a *different* scope returns `null` (a NULL-scope global row stays visible
+   * to every scope; a fact/episode/file has no `doc_scope` row, so it is unaffected). This is what makes
+   * "one customer never sees another's" hold for a *known/guessed* id, not only for search — bare
+   * `getItem(id)` (no scope) is unchanged, so the existing `owner`/`session` fetch-by-id model is untouched.
    * @param {string} id
-   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, meta: string|null } | null}
+   * @param {number} [now]  epoch ms; when set, a row whose `expires_at <= now` returns null (R5)
+   * @param {string|null} [scope]  when set, a row whose `doc_scope.scope` is non-null and ≠ `scope` returns null (R2)
+   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
    */
-  getItem(id) {
+  getItem(id, now, scope) {
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
       this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(id) ??
         this.db
@@ -763,17 +879,36 @@ export class Store {
       // only; it is absent from KINDS/MEM_KINDS, so recall never reaches it.
       const s = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM stash WHERE path = ?").get(id));
       if (!s) return null;
-      return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text, meta: null };
+      return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text, bytes: null, meta: null };
+    }
+    // R5 expiry + R2 scope-fenced fetch: one doc_scope lookup gates both (a fact/file has no row → neither
+    // applies). expires_at <= now → gone (purge reclaims later); a non-null scope ≠ the reader's → not yours
+    // (a NULL/global scope stays visible to all). Only runs when a caller actually asks (now/scope set).
+    if (now != null || scope != null) {
+      const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
+        this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
+      );
+      if (ds) {
+        if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
+        if (scope != null && ds.scope != null && ds.scope !== scope) return null;
+      }
     }
     let text = null;
+    /** @type {Buffer|null} */
+    let bytes = null;
     let meta = null;
     if (row.source === "direct") {
-      const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
-      text = raw ? raw.text : row.body;
+      // a blob: bytes are the deliverable, the docs body is only the filename → never return it as text.
+      const blob = /** @type {{ bytes: Buffer } | undefined} */ (this.db.prepare("SELECT bytes FROM blobs WHERE path = ?").get(id));
+      if (blob) bytes = blob.bytes;
+      else {
+        const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
+        text = raw ? raw.text : row.body;
+      }
       const mrow = /** @type {{ meta: string } | undefined} */ (this.db.prepare("SELECT meta FROM mem_meta WHERE path = ?").get(id));
       meta = mrow ? mrow.meta : null;
     }
-    return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text, meta };
+    return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text, bytes, meta };
   }
 
   /**
@@ -917,13 +1052,20 @@ export class Store {
    * taxed (the convex blend `(1-w)·own + w·spread` demoted well-ranked files whose neighbours
    * were mediocre; additive holds-or-beats it on every bench repo with fewer regressions). Spreading
    * re-ranks a wider pool than `limit` and is a no-op for kinds without edges (`doc`): order unchanged.
+   * `filter` (multis M3 R2/R5) narrows direct doc/blob rows via the `doc_scope` sidecar: `scope` keeps
+   * `scope ∪ NULL-global` (a scoped recall sees its own uploads + the global kb, never another scope);
+   * `now` (epoch ms) drops rows whose `expires_at <= now`. Both are no-ops when unset (`:x IS NULL`
+   * short-circuits) and on file-indexed rows (no `doc_scope` row → always global/forever).
    * @param {string} match  an FTS5 MATCH expression
    * @param {string} kind   the memory kind to scope to ("code" | "doc" | ...)
    * @param {number} [limit=10]
    * @param {number} [spreadWeight=0]  0 = pure BM25; ~0.4 = v1 default (set by the caller)
+   * @param {{ scope?: string|null, now?: number|null }} [filter]  R2 scope + R5 expiry narrowing
    * @returns {Hit[]}
    */
-  search(match, kind, limit = 10, spreadWeight = 0) {
+  search(match, kind, limit = 10, spreadWeight = 0, filter = {}) {
+    const scope = filter.scope ?? null;
+    const now = filter.now ?? null;
     // written-memory kinds route to the stemmed `mem` table (§5.1) — their own ranking domain
     // (kinds never share a ranking, so no BM25 score ever merges across the two tables). No
     // spreading: facts/episodes have no edges. Shape matches `docs` hits (`git` → null).
@@ -950,10 +1092,19 @@ export class Store {
     // top results. 200 covers the validated bench depth; bounded so the neighbour query's
     // bind-parameter count stays well under SQLite's limit.
     const pool = spreadWeight > 0 ? Math.min(Math.max(limit, 200), 400) : limit;
+    // LEFT JOIN doc_scope so file rows (no sidecar row) stay visible (NULL = global/forever). bm25(docs)
+    // + `docs MATCH` take the real table name, not an alias — so `docs` is unaliased and doc_scope is `ds`.
     const rows = /** @type {Hit[]} */ (
       this.db
-        .prepare("SELECT path, kind, format, -bm25(docs) AS score FROM docs WHERE docs MATCH ? AND kind = ? ORDER BY score DESC LIMIT ?")
-        .all(match, kind, pool)
+        .prepare(
+          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, -bm25(docs) AS score " +
+            "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
+            "WHERE docs MATCH :match AND docs.kind = :kind " +
+            "AND (:scope IS NULL OR ds.scope IS NULL OR ds.scope = :scope) " +
+            "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
+            "ORDER BY score DESC LIMIT :limit"
+        )
+        .all({ match, kind, scope, now, limit: pool })
     );
     if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(rows.slice(0, limit));
 

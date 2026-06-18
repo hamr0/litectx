@@ -86,6 +86,9 @@ export function liteCtxAsStore(lc, opts = {}) {
     get(id) {
       const item = lc.get(id);
       if (!item) return null;
+      // This is a TEXT-content KV view (fact/episode memory). A litectx blob (a byte-exact upload, R3)
+      // has `text: null` — its payload is in `item.bytes`, which this adapter deliberately does NOT
+      // surface. Blobs aren't this store's model; reach `ctx.get(id).bytes` directly for upload bytes.
       return { id: item.id, content: item.text, metadata: reassembleMeta(item) };
     },
 

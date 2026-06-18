@@ -21,22 +21,37 @@ import { chunkAndImports } from "./chunker.js";
 
 const CHUNK_BUDGET = 800; // chars/segment for headless docs — POC sweet spot (500 fragments, 1200 drops coverage)
 const GAP_FACTOR = 1.5; // a line-gap > GAP_FACTOR × the page's median leading marks a paragraph break
-const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10 MB — decompression-bomb / OOM bound (§4)
+export const DEFAULT_MAX_SIZE = 10 * 1024 * 1024; // 10 MB — decompression-bomb / OOM bound (§4); also caps a blob (R3)
 const DEFAULT_MAX_PAGES = 2000; // page bound (§4)
 const DEFAULT_PARSE_TIMEOUT_MS = 30000; // wall-clock parse bound (§4)
 
-const FORMAT_BY_EXT = { pdf: "pdf", docx: "docx" };
+// How each chunkable extension reaches segments: "convert" routes through a parser (pdf/docx → md),
+// "markdown" segments md text directly. Anything not here is a BLOB — stored byte-exact, filename
+// indexed, body never parsed (multis M3 R3). The consumer opts into body-search by sending md/pdf/docx;
+// every other file type (csv/xlsx/xml/code/binary) is a keep-the-bytes store, not a search index.
+const CHUNKABLE_MODE = { pdf: "convert", docx: "convert", md: "markdown", markdown: "markdown" };
 
 /**
- * Classify a document into its `format` from an explicit hint or the filename extension.
- * @param {string} [filename]
- * @param {string} [explicit]  caller override, e.g. "pdf" | "docx"
- * @returns {"pdf" | "docx" | null}
+ * @typedef {{ mode: "convert" | "markdown" | "blob", format: string }} DocClass
  */
-function detectFormat(filename, explicit) {
-  if (explicit) return /** @type {"pdf"|"docx"|null} */ (FORMAT_BY_EXT[explicit.toLowerCase()] ?? null);
-  const ext = (filename ?? "").split(".").pop()?.toLowerCase() ?? "";
-  return /** @type {"pdf"|"docx"|null} */ (FORMAT_BY_EXT[ext] ?? null);
+
+/**
+ * Classify an ingest by filename extension (or an explicit `format` override) into a routing `mode`
+ * and the `format` tag stored on the row. `convert`/`markdown` are chunkable (body-searchable);
+ * `blob` is stored byte-exact with only its filename indexed. `format` is the lowercased extension
+ * ("md" canonicalizes "markdown"; a blob with no extension is "bin").
+ * @param {string} [filename]
+ * @param {string} [explicit]  caller override, e.g. "pdf" | "docx" | "csv"
+ * @returns {DocClass}
+ */
+export function classifyDocument(filename, explicit) {
+  const raw = (explicit ?? (filename ?? "").split(".").pop() ?? "").toLowerCase();
+  const mode = /** @type {"convert"|"markdown"|undefined} */ (CHUNKABLE_MODE[raw]);
+  if (mode) return { mode, format: raw === "markdown" ? "md" : raw };
+  // A blob's `format` is just a display/grouping tag — but it's filename-derived (caller-influenced),
+  // so bound it: a short alphanumeric extension passes; anything else (no extension, a path-y or
+  // overlong filename) falls back to "bin". Keeps a user string from becoming an unbounded stored tag.
+  return { mode: "blob", format: /^[a-z0-9]{1,16}$/.test(raw) ? raw : "bin" };
 }
 
 /** Lazy-import pdfjs-dist (optional peer dep). @returns {Promise<any>} the module's `getDocument`. */
@@ -215,48 +230,47 @@ function mapParseError(e, fmt) {
   const name = (e && /** @type {any} */ (e).name) || "";
   const msg = (e && /** @type {any} */ (e).message) || String(e);
   if (/password|encrypt/i.test(name) || /password|encrypt/i.test(msg)) {
-    return new Error(`ingestDocument: the ${fmt} is encrypted/password-protected — cannot extract text`);
+    return new Error(`ingest: the ${fmt} is encrypted/password-protected — cannot extract text`);
   }
-  if (/exceeds max|parseTimeoutMs/i.test(msg)) return new Error(`ingestDocument: ${msg}`);
-  return new Error(`ingestDocument: failed to parse ${fmt} — ${msg}`);
+  if (/exceeds max|parseTimeoutMs/i.test(msg)) return new Error(`ingest: ${msg}`);
+  return new Error(`ingest: failed to parse ${fmt} — ${msg}`);
 }
 
 /**
  * @typedef {object} DocSegmentOptions
- * @property {string} [filename]  drives format detection (e.g. "manual.pdf")
- * @property {string} [format]    explicit format override ("pdf" | "docx")
+ * @property {"convert"|"markdown"} mode  routing from {@link classifyDocument} — "convert" runs a
+ *   parser (pdf/docx), "markdown" segments md text directly. (Blobs never reach here.)
+ * @property {string} format    the resolved format tag ("pdf" | "docx" | "md")
  * @property {number} [maxSize]   byte cap; over → reject before parse (default 10 MB)
  * @property {number} [maxPages]  page cap for PDF (default 2000)
  * @property {number} [parseTimeoutMs]  wall-clock parse cap (default 30 s)
  */
 
 /**
- * Convert an untrusted document buffer to recall-ready markdown segments, BOUNDED and failing with
- * a CLEAR, specific error (never a crash; never an empty/garbage unit). The conversion + segmentation
- * half of {@link LiteCtx#ingestDocument}; storage is the caller's.
+ * Convert a chunkable document buffer (pdf/docx/md) to recall-ready markdown segments, BOUNDED and
+ * failing with a CLEAR, specific error (never a crash; never an empty/garbage unit). The conversion +
+ * segmentation half of {@link LiteCtx#ingest}; storage is the caller's. Routing (`mode`/`format`)
+ * comes from {@link classifyDocument} — blobs are handled by the caller and never reach here.
  * @param {Uint8Array} buffer  the document bytes
- * @param {DocSegmentOptions} [opts]
- * @returns {Promise<{ format: "pdf" | "docx", segments: string[] }>}
+ * @param {DocSegmentOptions} opts
+ * @returns {Promise<{ format: string, segments: string[] }>}
  */
-export async function documentToSegments(buffer, opts = {}) {
+export async function documentToSegments(buffer, opts) {
   const maxSize = opts.maxSize ?? DEFAULT_MAX_SIZE;
   const maxPages = opts.maxPages ?? DEFAULT_MAX_PAGES;
   const parseTimeoutMs = opts.parseTimeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
+  const fmt = opts.format;
 
-  if (!(buffer instanceof Uint8Array)) throw new Error("ingestDocument: expected a Buffer/Uint8Array of document bytes");
-  if (buffer.length > maxSize) throw new Error(`ingestDocument: document exceeds maxSize (${buffer.length} > ${maxSize} bytes)`);
-  const fmt = detectFormat(opts.filename, opts.format);
-  if (!fmt) {
-    throw new Error(
-      `ingestDocument: unsupported or undetected format (filename=${JSON.stringify(opts.filename)}, ` +
-        `format=${JSON.stringify(opts.format)}); supported: pdf, docx`
-    );
-  }
+  if (!(buffer instanceof Uint8Array)) throw new Error("ingest: expected a Buffer/Uint8Array of document bytes");
+  if (buffer.length > maxSize) throw new Error(`ingest: document exceeds maxSize (${buffer.length} > ${maxSize} bytes)`);
 
   /** @type {string[]} */
   let segments;
   try {
-    if (fmt === "pdf") {
+    if (opts.mode === "markdown") {
+      // md arrives already as text — decode and segment directly (headings → md chunker; flat → pack).
+      segments = await segmentsFromMarkdown(Buffer.from(buffer).toString("utf8"), CHUNK_BUDGET);
+    } else if (fmt === "pdf") {
       const paras = await pdfToParagraphs(buffer, maxPages, parseTimeoutMs);
       segments = packSegments(paras, CHUNK_BUDGET);
     } else {
@@ -269,7 +283,7 @@ export async function documentToSegments(buffer, opts = {}) {
   }
 
   if (!segments.length || !segments.some((s) => s.trim())) {
-    throw new Error(`ingestDocument: no extractable text from the ${fmt} (scanned/image-only? OCR is out of scope)`);
+    throw new Error(`ingest: no extractable text from the ${fmt} (scanned/image-only? OCR is out of scope)`);
   }
   return { format: fmt, segments };
 }

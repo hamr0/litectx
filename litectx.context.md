@@ -213,7 +213,15 @@ return shape follows the `kind` argument:
   default: recall returns **pointers**, not payloads. Opt in to skip the follow-up `get()`s when
   mounting litectx as a memory store or feeding an assembler. Written memory comes back **verbatim**;
   a file hit returns its **localized chunk** (the indexed text that ranked — drift-free), or the
-  whole file when nothing localized; `null` when the file is gone or the id is unknown.
+  whole file when nothing localized; `null` when the file is gone or the id is unknown. A **blob hit**
+  (a byte-exact upload, R3) has no text body — `body` is `null`; fetch its bytes with `get(id).bytes`.
+- `opts.scope?: string` — **narrow direct doc/blob rows** to this scope (multis M3 R2). Returns `scope
+  ∪ null-global` and **nothing from another scope** — a chat sees its own uploads + the global knowledge
+  base, never another chat's. Unset = unscoped (sees everything; backward-compatible). Code/file rows and
+  `fact`/`episode` are unaffected (the latter scope via the instance `owner`/`session`). **Expired rows
+  (`expiresAt`, set at `ingest`) are always excluded**, scope or not — a recall never returns a stale upload.
+  **Fencing recall is only half of isolation** — pass the same `scope` to `get` too (ids are guessable);
+  see `get`'s tenant-isolation note.
 - No usable query terms → `[]` (single kind) or all-empty groups.
 - `opts.log?: boolean` (default `true`) — set `false` to skip the recall audit log. The log
   is a **demand signal**: queries from dashboards, CI checks, batch tooling, or a read-only
@@ -277,21 +285,25 @@ involved). Any id works:
   disk** — the index stores the searchable surface, not a copy of your files, so you always
   see the current content (`text: null` only when the file has vanished since the last
   `index()`; the next pass sweeps the row).
+- a **blob id** (a byte-exact upload, R3) → its **original bytes** in `bytes` (round-trips
+  byte-identical), with `text: null`.
 
 ```ts
 Item = {
   id: string,                        // the written id, or the repo-relative path
   kind: string,                      // "code" | "doc" | "fact" | "episode"
-  format: string,                    // "ts" | "js" | "py" | "md" | "text" | ...
-  source: "file" | "direct",         // indexed from disk vs written via remember()
+  format: string,                    // "ts" | "js" | "py" | "md" | "text" | "csv" | "xlsx" | ...
+  source: "file" | "direct",         // indexed from disk vs written via remember()/ingest()
   provenance: "human"|"agent"|null,  // written memory only; null for files
   occurredAt: number | null,         // episode timestamp (epoch ms)
-  text: string | null,               // the full body
+  text: string | null,               // the full body; null for a blob (bytes hold the payload)
+  bytes: Buffer | null,              // a byte-exact upload's original bytes (R3); null otherwise
   meta: Record<string, unknown>|null,// opaque caller metadata, verbatim; null for files / none
 }
 ```
 
-Unknown id → `null`. On the (pathological) collision of a written id with a real file
+Unknown id → `null`. An **expired** upload (`expiresAt` past — multis M3 R5) also returns `null`,
+exactly as recall hides it. On the (pathological) collision of a written id with a real file
 path, the written row wins — namespace your ids (`"fact:…"`) and it never comes up.
 
 - `opts.log?: boolean` (default `true`) — each `get` appends an `action: 'fetch'` row to
@@ -300,6 +312,24 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
   scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
   `log: false` for non-demand consumers, same as `recall`.
+- `opts.scope?: string` (multis M3 R2) — **fences the direct handle**, the same way
+  `recall({ scope })` fences discovery. A `get` for a doc/blob tagged with a *different* scope
+  returns `null`; a global (null-scope) row stays visible to every scope; fact/episode/file rows
+  are unaffected (they have no `doc_scope` row — they isolate via `owner`/`session`). Omit it and
+  `get` is **unfenced by id** (unchanged — the `owner`/`session` fetch model is untouched).
+
+> **Tenant isolation needs BOTH (R2).** `recall({ scope })` fences *search*, but ids can be
+> guessed (a derived id slugs the filename), so a customer-reachable `get` must pass the requesting
+> scope too — `get(id, { scope })` is what makes "one customer never sees another's" hold for a
+> *known* id, not only a searched one. **Consumer obligations:** on any customer-/LLM-reachable path,
+> (1) **always pass the requesting `scope`** to *both* `recall` and `get`, (2) **never expose a bare
+> `get(id)`** (it is an unfenced capability fetch by design), and (3) **namespace ids per scope**
+> (e.g. `"chat-42:report"`) as cheap defense-in-depth so handles aren't cross-scope guessable. The
+> mechanism is litectx's; wiring the scope through on every call is the host's.
+>
+> **Egress trust.** `get` returns blob bytes **verbatim** (untrusted uploaded content). litectx never
+> parses them, so the *store* is safe, but the *host* must treat retrieved bytes as untrusted on the
+> way out — serve with `Content-Disposition: attachment`, never inline-render an uploaded HTML/SVG.
 
 ### `await ctx.impact(symbol)` → `Promise<Impact | null>`
 The **impact** view (§7): *if I change this symbol, what's the blast radius and how risky?*
@@ -442,34 +472,44 @@ a force pass clears and re-reads **file-sourced data only** — written memory, 
 text/embeddings, and the audit log are never touched (nothing about them is re-derivable
 from disk).
 
-### `await ctx.ingestDocument(buffer, opts?)` → `Promise<{ id, kind: "doc", format: "pdf" | "docx", chunks }>`
-Ingest a **whole document** (PDF/DOCX **bytes**) as recallable `doc`-kind content — the third ingest
-path, distinct from `index()` (sweeps a disk root) and `remember()` (stores text whole, unchunked). It
-**converts the document to markdown, splits it into segments, and stores each as its own
-`source='direct'` doc row** — so a later `recall(query, { kind: "doc", body: true })` surfaces the
-matching passage. Built for the **chat-upload flow**: bytes in, no on-disk file needed.
+### `await ctx.ingest(buffer, opts?)` → `Promise<{ id, kind: "doc", format, mode: "chunked" | "blob", chunks }>`
+Ingest an **uploaded file** (bytes + filename) — the third ingest path, distinct from `index()` (sweeps a
+disk root) and `remember()` (stores text whole, unchunked). Built for the **chat-upload flow**: bytes in, no
+on-disk file needed. Routed by **filename extension**:
 
-- **PDF** (`pdfjs-dist`) → flat text (lossy by nature: reading order is best-effort, columns/tables
-  degrade, **scanned/image-only PDFs are not OCR'd** — they fail with a clear "no extractable text").
-  Since PDF text has no headings/blank lines, paragraphs are **reconstructed from the vertical gap
-  between lines**, then packed — **whole paragraphs only** — into segments kept under ~800 chars (so
-  recall returns a tight passage, not the whole document as one blob). A **paragraph or word is never
-  split or truncated**; the only segment that exceeds the cap is a single paragraph longer than it,
-  which rides whole rather than be cut.
-- **DOCX** (`mammoth.convertToMarkdown`) → clean markdown that **keeps heading structure**; segments
-  follow the existing markdown chunker (one section per segment).
-- Resulting rows carry the reserved **`format: "pdf" | "docx"` under `kind: "doc"`** (no schema
-  migration); they rank alongside `md` docs and **survive every `index()` pass** (they're `direct`).
+- **md / pdf / docx → chunkable** (`mode: "chunked"`). Converted to markdown, split into segments, each
+  stored as its own `source='direct'` doc row, so `recall(query, { kind: "doc", body: true })` surfaces the
+  matching passage:
+  - **md** → segmented directly (headings → the markdown chunker, one section per segment; flat → packed).
+  - **PDF** (`pdfjs-dist`) → flat text (lossy: reading order best-effort, tables degrade, **scanned/image-only
+    PDFs are not OCR'd** — clear "no extractable text"). With no headings/blank lines, paragraphs are
+    **reconstructed from the vertical gap between lines**, then packed — **whole paragraphs only** — under
+    ~800 chars. A **paragraph or word is never split or truncated**; the lone exception is a single paragraph
+    longer than the cap, which rides whole.
+  - **DOCX** (`mammoth.convertToMarkdown`) → markdown that **keeps heading structure**; one section per segment.
+  - Rows carry **`format: "md" | "pdf" | "docx"` under `kind: "doc"`**, rank alongside file `md` docs, and
+    **survive every `index()` pass** (they're `direct`). Segments are stored `"<id>#0"`, `"<id>#1"`, ….
+- **everything else** (csv / xlsx / xml / **code** / binary) → **stored BYTE-EXACT as a blob** (`mode: "blob"`,
+  `chunks: 0`). The bytes are kept verbatim (a SQLite `BLOB` — round-trips byte-identical, including non-UTF8);
+  only the **filename** is indexed for recall, the body is **never parsed or chunked**, and `get(id)` returns
+  the **original bytes** (`item.bytes`, with `item.text === null`). litectx is the single durable store — keep
+  no parallel file store. Want body-search for those types? Convert and send `md`/`pdf`/`docx` — opt-in, never forced.
 
 `opts`:
-- `filename?: string` — drives format detection (`"manual.pdf"` → `pdf`). Also derives the `id` when none is given.
-- `format?: string` — explicit `"pdf" | "docx"` override when the filename is absent/misleading.
-- `id?: string` — stable **base id** (else derived from the filename, e.g. `"doc:manual"`). Segments are
-  stored as `"<id>#0"`, `"<id>#1"`, … (each is the `path` you see in recall / pass to `get`). **Re-ingesting
-  the same `id` is an upsert** — prior segments are dropped first, so a shorter re-ingest leaves no orphans.
-- `meta?: Record<string, unknown>` — opaque passthrough (e.g. `{ chat: "c-42" }`), attached to **every** segment.
-- `maxSize?: number` (default **10 MB**), `maxPages?: number` (default **2000**), `parseTimeoutMs?: number`
-  (default **30 s**) — the **untrusted-input bounds** (§ below).
+- `filename?: string` — drives extension routing (`"manual.pdf"` → chunkable pdf; `"data.csv"` → blob). Also derives the `id`.
+- `format?: string` — explicit override when the filename is absent/misleading (`"pdf"`, `"csv"`, …).
+- `id?: string` — stable **base id** (else derived from the filename, e.g. `"doc:manual"`). **Re-ingesting the
+  same `id` is an upsert** — prior segments **and** any prior blob are dropped first (no orphans, even across a
+  chunked↔blob switch).
+- `scope?: string` — **per-upload recall scope** (e.g. a chat id). A `recall({ scope })` returns `scope ∪
+  null-global` and **nothing from another scope** (one customer's uploads fenced from another's; the global,
+  unscoped knowledge base stays visible from any scope). Unset = **global** (default; backward-compatible).
+- `expiresAt?: number` — **retention** (epoch ms). Once past, the row is **excluded from `recall`/`get`** and
+  its storage (bytes and all) is reclaimed by `purge()`. Unset = **keep forever** (default). The consumer
+  computes the TTL/policy; litectx honors it.
+- `meta?: Record<string, unknown>` — opaque passthrough (e.g. `{ chat: "c-42" }`), attached to every segment/blob.
+- `maxSize?: number` (default **10 MB**, also caps a blob), `maxPages?: number` (**2000**), `parseTimeoutMs?:
+  number` (**30 s**) — the **untrusted-input bounds** (§ below).
 
 **Untrusted input is bounded; failures are clear and write nothing.** Oversized / over-page / corrupt /
 encrypted / no-text inputs throw a **specific** error and leave the index intact (never a crash, never a
@@ -477,32 +517,54 @@ garbage row). `maxSize` and `maxPages` are deterministic caps; `parseTimeoutMs` 
 budget checked between pages (it bounds a many-page document — a single pathological page is bounded by
 `maxSize`/`maxPages`, since JS can't preempt synchronous CPU work without a worker thread). PDF JS execution
 and `eval` are disabled (`isEvalSupported: false`, scripting/XFA off — mitigating the pdf.js font-path RCE
-class), and DOCX XML is parsed without external-entity resolution (no XXE file-read / SSRF).
+class), and DOCX XML is parsed without external-entity resolution (no XXE file-read / SSRF). A **blob is never
+parsed**, so it carries none of these parser risks — only the `maxSize` cap.
 
 > **Deploying with fully-untrusted uploads (e.g. a public chat).** Two residual limits are inherent to
 > in-process parsing, so handle them at the call site: (1) `maxSize` bounds the **input** bytes, not the
 > **decompressed** size — a 10 MB zip/PDF stream can inflate far larger in memory (a decompression bomb), so
 > keep `maxSize` conservative and run the host under a memory limit; (2) a CPU-bound parse **cannot be
 > interrupted** by `parseTimeoutMs`, so a malicious single-page document can block the event loop — for
-> hostile input, call `ingestDocument` inside a **worker thread** (or subprocess) you can terminate. These
+> hostile input, call `ingest` inside a **worker thread** (or subprocess) you can terminate. These
 > are deployment choices litectx can't make for you; the in-library bounds are the floor, not the ceiling.
 
 **Optional peer deps, lazy-loaded.** `pdfjs-dist` and `mammoth` are **optional** (like the embeddings tier):
-`npm i litectx` stays lean and offline-capable, and neither is imported until the **first** `ingestDocument`
-call. A consumer who never ingests a document pays nothing; if a parser is missing, the call throws a helpful
-`npm i pdfjs-dist` / `npm i mammoth` message. **Not scoped:** like all `doc`/`code`, ingested documents are
-global knowledge — `owner`/`session` isolation applies to `fact`/`episode` only.
+`npm i litectx` stays lean and offline-capable, and neither is imported until the **first** chunkable
+(`pdf`/`docx`) ingest — a blob or md ingest needs neither. If a parser is missing, the call throws a helpful
+`npm i pdfjs-dist` / `npm i mammoth` message. **Scope vs. owner:** `scope` (this method, per-upload) is a
+distinct axis from the instance `owner`/`session` (which scope `fact`/`episode`). Code/file rows are always
+global on the `scope` axis.
+
+> **`writeGate` screens the chunkable path only; blob writes are not gated.** A wired gate runs per
+> segment on md/pdf/docx (via `remember`), but a **blob bypasses it** — by design, not oversight. The gate
+> judges searchable *text* for injection-risk; blob bytes are opaque and never reach an LLM (the one path
+> that turns a blob into context is converting + re-ingesting as md/pdf/docx, which *is* gated). Screen
+> uploads at the call site (size/type/AV), keep the egress-trust rule above, and don't assume `writeGate`
+> covers blobs.
 
 ```js
-// chat-upload flow: bytes in (no file on disk)
-const { id, format, chunks } = await ctx.ingestDocument(uploadBuffer, {
+// chat-upload flow: bytes in (no file on disk), fenced to a chat, kept 90 days
+const { id, format, mode, chunks } = await ctx.ingest(uploadBuffer, {
   filename: "acme-manual.pdf",
+  scope: "chat-42",
+  expiresAt: Date.now() + 90 * 86_400_000,
   meta: { chat: "c-42" },
 });
-// → { id: "doc:acme-manual", kind: "doc", format: "pdf", chunks: 7 }
-const hits = await ctx.recall("how do I reset the device", { kind: "doc", body: true });
-// hits[0].format === "pdf"; hits[0].body === the matching passage's text
+// → { id: "doc:acme-manual", kind: "doc", format: "pdf", mode: "chunked", chunks: 7 }
+const hits = await ctx.recall("how do I reset the device", { kind: "doc", body: true, scope: "chat-42" });
+
+// a spreadsheet upload: stored byte-exact, found by name, fetched back verbatim
+await ctx.ingest(xlsxBuffer, { filename: "q3-sales.xlsx", scope: "chat-42" });
+const [hit] = await ctx.recall("q3 sales", { kind: "doc", scope: "chat-42" });
+const file = ctx.get(hit.path); // → { ..., format: "xlsx", text: null, bytes: <Buffer, byte-exact> }
 ```
+
+### `ctx.purge(opts?)` → `number`
+Reclaim **expired** uploads (the retention sweep's mechanism — the consumer owns the *schedule*, litectx owns
+the *delete*). Every direct doc/blob row whose `expiresAt <= now` (`opts.now`, default `Date.now()`) is deleted
+and its storage — including byte-exact blob bytes — freed, leaving no orphans. Returns the count reclaimed.
+Note `recall`/`get` already **exclude** expired rows the instant they expire, so `purge()` is storage
+reclamation, not a correctness gate. Only rows with a non-null, elapsed `expiresAt` are touched.
 
 ### `ctx.forget(idOrQuery)` → `number`
 Delete directly-written memory. Returns the number of rows removed.
