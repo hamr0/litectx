@@ -1,7 +1,7 @@
 # Fail-closed multi-tenant doc scope — strictScope + GLOBAL + ctx.scoped() — built, reviewed, shipped 0.18.0
 
-**Date:** 2026-06-18 · **Branch:** main · **Heads:** `6566734` (feat 0.18.0) → `72e85bb` (diff-review rename) → `<chore>` (stash sync) · all pushed · **tree CLEAN**
-**Published:** `litectx@0.18.0` via OIDC `publish.yml` (trusted publishing, no token).
+**Date:** 2026-06-18 · **Branch:** main · **Heads:** `6566734` (feat 0.18.0) → `72e85bb` (diff-review rename) → `3ebc723` (chore: stash sync) · all pushed · **tree CLEAN**
+**Published:** `litectx@0.18.0` LIVE on npm (`latest`, dist-tags `{latest:'0.18.0'}`, shasum e7aed20…) via OIDC `publish.yml` run 27789773158 (workflow ran typecheck+test+registry-verify; independently confirmed `npm view`). DONE.
 **Ask:** `~/PycharmProjects/multis/docs/01-product/litectx-asks/fail-closed-scope-default.md` (multis M3 security follow-up — `null` must stop meaning "all" on a multi-tenant doc store).
 
 ## The problem (multis' diagnosis, confirmed in source)
