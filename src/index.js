@@ -738,9 +738,12 @@ export class LiteCtx {
    * - **md / pdf / docx** → converted to markdown, split into segments, each written as its own
    *   `source='direct'` `doc` row — so it ranks alongside `md` docs in `recall(q,{kind:'doc'})`,
    *   survives every `index()` pass, and carries its `format` ("md"|"pdf"|"docx") under `kind='doc'`.
-   * - **everything else** (csv / xlsx / xml / code / binary) → stored BYTE-EXACT as a blob; its
+   * - **txt / text / log / csv** → already plaintext (no parser, no peer dep): packed into
+   *   passage-sized segments (blank-line paragraphs, else lines), stored exactly like the above with
+   *   `format` ("txt"|"log"|"csv"; "text"→"txt"). CSV is chunked as raw text (no columnar parse).
+   * - **everything else** (xlsx / xml / code / binary) → stored BYTE-EXACT as a blob; its
    *   **filename** is indexed for recall but the body is never parsed/chunked, and {@link get} returns
-   *   the original bytes. Getting body-search for those types is the consumer's opt-in (send md/pdf/docx).
+   *   the original bytes. Getting body-search for those types is the consumer's opt-in (send a chunkable type).
    *
    * Untrusted input is BOUNDED: oversized / over-page / slow / corrupt / encrypted / no-text inputs
    * throw a clear, specific error and write NOTHING (the index is left intact). The two parsers

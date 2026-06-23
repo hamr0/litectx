@@ -6,6 +6,10 @@
 // `npm i litectx` stays lean and offline-capable — a consumer who never ingests a document pays
 // neither install nor import. Each surfaces a helpful error if the dep is missing.
 //
+// Plaintext (txt/text/log/csv) is already text — no parser, no peer dep: it reuses the SAME
+// headless packer the PDF/headless-md path uses (blank-line paragraphs, else lines, packed under
+// CHUNK_BUDGET), never the md heading-splitter (a '#' in a .log is literal, not a section).
+//
 // Segmentation is POC-validated (poc/doc-chunk-split-poc.mjs, doc-para-chunk-poc.mjs):
 //   - DOCX → mammoth markdown KEEPS headings → reuse the existing md chunker (one section/chunk).
 //   - PDF  → pdfjs getTextContent is FLAT text with NO blank lines and NO heading semantics, so
@@ -26,28 +30,36 @@ const DEFAULT_MAX_PAGES = 2000; // page bound (§4)
 const DEFAULT_PARSE_TIMEOUT_MS = 30000; // wall-clock parse bound (§4)
 
 // How each chunkable extension reaches segments: "convert" routes through a parser (pdf/docx → md),
-// "markdown" segments md text directly. Anything not here is a BLOB — stored byte-exact, filename
-// indexed, body never parsed (multis M3 R3). The consumer opts into body-search by sending md/pdf/docx;
-// every other file type (csv/xlsx/xml/code/binary) is a keep-the-bytes store, not a search index.
-const CHUNKABLE_MODE = { pdf: "convert", docx: "convert", md: "markdown", markdown: "markdown" };
+// "markdown" segments md text directly, "text" packs flat plaintext (txt/text/log/csv) — already
+// text, no parser, no heading semantics (a leading '#' in a .log is literal, not a section). Anything
+// not here is a BLOB — stored byte-exact, filename indexed, body never parsed (multis M3 R3). The
+// consumer opts into body-search by sending md/pdf/docx/txt/log/csv; every other type (xlsx/xml/code/
+// binary) is a keep-the-bytes store, not a search index.
+const CHUNKABLE_MODE = {
+  pdf: "convert", docx: "convert",
+  md: "markdown", markdown: "markdown",
+  txt: "text", text: "text", log: "text", csv: "text",
+};
+// Canonicalize the stored `format` tag for spelling-variant extensions (md ≡ markdown, txt ≡ text).
+const FORMAT_CANON = { markdown: "md", text: "txt" };
 
 /**
- * @typedef {{ mode: "convert" | "markdown" | "blob", format: string }} DocClass
+ * @typedef {{ mode: "convert" | "markdown" | "text" | "blob", format: string }} DocClass
  */
 
 /**
  * Classify an ingest by filename extension (or an explicit `format` override) into a routing `mode`
- * and the `format` tag stored on the row. `convert`/`markdown` are chunkable (body-searchable);
+ * and the `format` tag stored on the row. `convert`/`markdown`/`text` are chunkable (body-searchable);
  * `blob` is stored byte-exact with only its filename indexed. `format` is the lowercased extension
- * ("md" canonicalizes "markdown"; a blob with no extension is "bin").
+ * ("md" canonicalizes "markdown", "txt" canonicalizes "text"; a blob with no extension is "bin").
  * @param {string} [filename]
  * @param {string} [explicit]  caller override, e.g. "pdf" | "docx" | "csv"
  * @returns {DocClass}
  */
 export function classifyDocument(filename, explicit) {
   const raw = (explicit ?? (filename ?? "").split(".").pop() ?? "").toLowerCase();
-  const mode = /** @type {"convert"|"markdown"|undefined} */ (CHUNKABLE_MODE[raw]);
-  if (mode) return { mode, format: raw === "markdown" ? "md" : raw };
+  const mode = /** @type {"convert"|"markdown"|"text"|undefined} */ (CHUNKABLE_MODE[raw]);
+  if (mode) return { mode, format: FORMAT_CANON[raw] ?? raw };
   // A blob's `format` is just a display/grouping tag — but it's filename-derived (caller-influenced),
   // so bound it: a short alphanumeric extension passes; anything else (no extension, a path-y or
   // overlong filename) falls back to "bin". Keeps a user string from becoming an unbounded stored tag.
@@ -211,6 +223,18 @@ async function docxToMarkdown(bytes) {
 }
 
 /**
+ * Pack flat text (no markup) to budget: blank-line paragraphs where present, else individual lines
+ * (line-oriented logs/CSV). No heading semantics — a leading '#' is literal text, never a section.
+ * Shared by the headless-markdown fallback and the plaintext path (txt/text/log/csv).
+ * @param {string} text @param {number} budget @returns {string[]}
+ */
+function packText(text, budget) {
+  const paras = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const atoms = paras.length > 1 ? paras : text.split("\n").map((s) => s.trim()).filter(Boolean);
+  return packSegments(atoms, budget);
+}
+
+/**
  * Segment already-converted markdown. Headings present (structured DOCX) → reuse the existing md
  * chunker, one segment per section. Headless → pack blank-line paragraphs (or lines) to budget.
  * @param {string} md @param {number} budget @returns {Promise<string[]>}
@@ -220,9 +244,7 @@ async function segmentsFromMarkdown(md, budget) {
     const { chunks } = await chunkAndImports("document.md", md);
     return chunks.map((c) => c.text).filter((t) => t.trim());
   }
-  const paras = md.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
-  const atoms = paras.length > 1 ? paras : md.split("\n").map((s) => s.trim()).filter(Boolean);
-  return packSegments(atoms, budget);
+  return packText(md, budget);
 }
 
 /** @param {unknown} e @param {string} fmt @returns {Error} */
@@ -238,9 +260,10 @@ function mapParseError(e, fmt) {
 
 /**
  * @typedef {object} DocSegmentOptions
- * @property {"convert"|"markdown"} mode  routing from {@link classifyDocument} — "convert" runs a
- *   parser (pdf/docx), "markdown" segments md text directly. (Blobs never reach here.)
- * @property {string} format    the resolved format tag ("pdf" | "docx" | "md")
+ * @property {"convert"|"markdown"|"text"} mode  routing from {@link classifyDocument} — "convert" runs
+ *   a parser (pdf/docx), "markdown" segments md text directly, "text" packs flat plaintext
+ *   (txt/text/log/csv). (Blobs never reach here.)
+ * @property {string} format    the resolved format tag ("pdf" | "docx" | "md" | "txt" | "log" | "csv")
  * @property {number} [maxSize]   byte cap; over → reject before parse (default 10 MB)
  * @property {number} [maxPages]  page cap for PDF (default 2000)
  * @property {number} [parseTimeoutMs]  wall-clock parse cap (default 30 s)
@@ -270,6 +293,10 @@ export async function documentToSegments(buffer, opts) {
     if (opts.mode === "markdown") {
       // md arrives already as text — decode and segment directly (headings → md chunker; flat → pack).
       segments = await segmentsFromMarkdown(Buffer.from(buffer).toString("utf8"), CHUNK_BUDGET);
+    } else if (opts.mode === "text") {
+      // plaintext (txt/text/log/csv) is already text — no parser, no peer dep, no heading semantics:
+      // pack blank-line paragraphs (or lines) to budget. Bounded rows + passage granularity (multis M3).
+      segments = packText(Buffer.from(buffer).toString("utf8"), CHUNK_BUDGET);
     } else if (fmt === "pdf") {
       const paras = await pdfToParagraphs(buffer, maxPages, parseTimeoutMs);
       segments = packSegments(paras, CHUNK_BUDGET);

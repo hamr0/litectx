@@ -214,7 +214,7 @@ const SCHEMA = [
   // (session state) / R-W4 (notes) get their OWN tables; R-I3 summary / R-I1 scope are a cheap nullable
   // ALTER on this plain table if/when built — not reserved here (we don't speculate; AGENT_RULES).
   "CREATE TABLE IF NOT EXISTS stash(path TEXT PRIMARY KEY, text TEXT NOT NULL, created_at INTEGER NOT NULL)",
-  // byte-exact store for non-chunkable uploads (multis M3 R3): csv/xlsx/xml/code/binary that the consumer
+  // byte-exact store for non-chunkable uploads (multis M3 R3): xlsx/xml/code/binary that the consumer
   // wants kept and retrievable but NOT body-searched. The bytes live here as a BLOB (POC-proven byte-exact
   // round-trip; a TEXT column mangles non-UTF8 — the column type is load-bearing). Each blob ALSO gets a
   // direct `docs` row whose FTS `body` is ONLY the filename, so recall finds it by name without parsing the

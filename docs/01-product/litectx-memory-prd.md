@@ -225,8 +225,8 @@ ACT-R memory (short- and long-term), not just a code index.
 > fields, fact-vs-doc, FAQ-is-a-doc, and the cold/warm-vs-hot split — is **§3.2**.
 
 Design rules (DECIDED):
-- **Doc *formats* are a `format` field under `kind=doc`** (`md` in v1; `pdf`/`docx`/`txt`
-  later), **not** new top-level kinds — so adding PDF support never migrates the schema.
+- **Doc *formats* are a `format` field under `kind=doc`** (`md` in v1; `pdf`/`docx`/`txt`/`log`/`csv`
+  shipped since), **not** new top-level kinds — so adding a format never migrates the schema.
 - **Unified file ingest** (SHIPPED — `ctx.ingest(buffer, { filename, scope?, expiresAt? })`, the
   chat-upload flow; supersedes the unreleased `ingestDocument`). Routed by extension:
   - **md/pdf/docx → chunkable**: markdown is a trivial local chunker; PDF/DOCX need extraction libs, so
@@ -236,7 +236,12 @@ Design rules (DECIDED):
     inter-line vertical gaps, packed whole into <800-char segments), stored as `source='direct'` `doc`
     rows carrying the reserved `format` — no schema migration. Untrusted input bounded
     (`maxSize`/`maxPages`/per-page `parseTimeoutMs`); scanned PDFs not OCR'd.
-  - **any other type (csv/xlsx/xml/code/binary) → byte-exact blob** (multis M3 R3): stored verbatim in a
+  - **txt/text/log/csv → chunkable** (multis M3 plaintext-chunker, v0.19.0): already plaintext, so **no
+    parser, no peer dep, no new format-native chunker** — they reuse the same headless packer (blank-line
+    paragraphs, else lines, packed whole to <800 chars; a leading `#` is literal, never a heading). CSV is
+    chunked as raw text (no columnar parse). Closes a silent no-op: these previously fell to the blob path
+    (0 chunks, body unsearchable) for a type adopters advertise.
+  - **any other type (xlsx/xml/code/binary, + text formats off the allowlist like `.tsv`) → byte-exact blob** (multis M3 R3): stored verbatim in a
     SQLite `BLOB` (POC-proven byte-identical round-trip), **filename indexed** for recall, body never
     parsed/chunked; `get(id)` returns the original bytes. litectx is the single durable store. A blob is
     never parsed → none of the parser-RCE/XXE surface, only the `maxSize` cap.
@@ -1339,9 +1344,10 @@ package** (§7).
 - **Multi-provider LLM clients / embeddings-as-default** — provider-agnostic; ML is opt-in.
 - ~~**PDF/DOCX extraction in v1** — schema-reserved (§3.1), deferred.~~ **SHIPPED** post-v0.16 via
   `ctx.ingest()` on the optional `pdfjs-dist`/`mammoth` tier (§3.1) — now the unified file-ingest path
-  (md/pdf/docx → chunked; any other type → byte-exact blob; per-upload `scope` + `expiresAt`). OCR
-  (scanned PDFs) remains a non-goal; **body-search for non-md/pdf/docx types is opt-in** (convert + send
-  as md) — litectx stores arbitrary types byte-exact but parses only the three.
+  (md/pdf/docx + plaintext txt/text/log/csv → chunked; any other type → byte-exact blob; per-upload
+  `scope` + `expiresAt`). OCR (scanned PDFs) remains a non-goal; **body-search for off-allowlist types
+  (xlsx/xml/binary/…) is opt-in** (convert + send as a chunkable type) — litectx stores arbitrary types
+  byte-exact but parses only the chunkable allowlist.
 - **A server / daemon / hosted service** — local library only.
 - **Linting** — mature per-language linters exist; do not wrap them.
 - **Being "bare"** — litectx is a real library, not a ≤150-LOC primitive.

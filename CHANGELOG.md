@@ -4,6 +4,28 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] — 2026-06-23
+
+### Added
+- **Plaintext family (`.txt` / `.text` / `.log` / `.csv`) is now chunked + body-searchable on `ingest`**
+  (multis M3 plaintext-chunker ask). Previously these fell through to the byte-exact **blob** path —
+  ingested without error but **0 chunks, body unsearchable** (a silent no-op for a type multis advertises).
+  They now route through a new `"text"` mode:
+  - **Already plaintext → no parser, no optional peer dep, no new format-native chunker.** They reuse the
+    **same headless packer** the PDF/headless-md path already uses (POC-validated): **blank-line paragraphs
+    where present, else individual lines** (line-oriented logs/CSV), packed under the ~800-char budget. A
+    paragraph or line is **never split or truncated** — a lone over-budget line rides whole (one segment).
+  - **No heading semantics**: a leading `#` in a `.log`/`.txt` is literal text, never a markdown section
+    (so a hash-prefixed log line is preserved, not mangled by the md heading-splitter).
+  - **CSV** is chunked as **raw text** (rows become searchable); a structured/columnar parse is out of scope.
+  - Rows are `kind:"doc"`, `source='direct'` (survive every `index()` pass), carry `format`
+    (`"txt"|"log"|"csv"`; `"text"`→`"txt"`), and honor `scope`/`expiresAt` like every other ingest.
+    Detection is **by extension** (or the `format` override) — extension-only, no MIME sniffing.
+  - `ingest()`'s return already distinguishes the two outcomes (`{ mode: "chunked" | "blob", chunks }`),
+    so a host can tell "indexed + searchable" from "stored, not searchable" without inferring from a `0`.
+  - The chunkable allowlist stays **closed**: every other type (`xlsx`/`xml`/`code`/binary, and text
+    formats not on the list such as `.tsv`) is still a byte-exact blob.
+
 ## [0.18.0] — 2026-06-18
 
 ### Added
