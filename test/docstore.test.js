@@ -1,6 +1,7 @@
 // Document-store integration tests — the multis M3 ask R2 (scope), R3 (byte-exact any-file store),
 // R5 (per-row expiry), plus the md-buffer branch of the unified ingest(). Behavior, not implementation:
-// real fixtures (sales.csv/sales.xlsx/logo.png/notes.md under fixtures/doc-ingest), a temp repo +
+// real fixtures (sales.xlsx/logo.png/notes.md under fixtures/doc-ingest; .csv now chunks — see
+// plaintext-ingest.test.js), a temp repo +
 // in-memory DB, embeddings OFF. The load-bearing claims here are the acceptance criteria in the ask:
 // a blob round-trips byte-identical, a scoped recall returns `scope ∪ null-global` and nothing else,
 // and an expired row is invisible to recall/get and reclaimed (bytes and all) by purge().
@@ -60,21 +61,24 @@ test("R3 — png blob (pure binary) round-trips byte-exact", async () => {
   assert.equal(item.bytes.subarray(0, 4).toString("latin1"), "\x89PNG", "the PNG magic header is intact");
 });
 
-test("R3 — csv blob: text, but stored as a blob (not chunked) and round-trips exactly", async () => {
+test("R3 — a text file OUTSIDE the chunkable allowlist (.tsv) is a blob, not chunked", async () => {
   const ctx = newCtx();
-  const original = bytes("sales.csv");
-  const res = await ctx.ingest(original, { filename: "sales.csv", id: "blob:sales" });
-  assert.equal(res.id, "blob:sales");
+  // the chunkable set is an EXPLICIT allowlist (md/pdf/docx/txt/text/log/csv); a .tsv is text but
+  // NOT on it → byte-exact blob, body never indexed. (Proves the allowlist is closed, not "any text".)
+  const original = md("region\tq3\nAMER\t100\nEMEA\t90\n");
+  const res = await ctx.ingest(original, { filename: "data.tsv", id: "blob:tsv" });
+  assert.equal(res.id, "blob:tsv");
   assert.equal(res.mode, "blob");
-  const item = await ctx.get("blob:sales");
+  assert.equal(res.format, "tsv");
+  const item = await ctx.get("blob:tsv");
   assert.ok(item.bytes.equals(Buffer.from(original)));
-  // its rows are NOT individually recallable — the csv content is not indexed
-  assert.equal((await ctx.recall("AMER", { kind: "doc" })).length, 0);
+  // its rows are NOT individually recallable — a non-allowlisted text file's content is not indexed
+  assert.equal((await ctx.recall("AMER", { kind: "doc", body: true })).length, 0);
 });
 
 test("R3 — re-ingesting a blob id upserts the bytes (no orphan, no duplicate row)", async () => {
   const ctx = newCtx();
-  await ctx.ingest(bytes("sales.csv"), { filename: "sales.csv", id: "blob:x" });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "sales.xlsx", id: "blob:x" });
   await ctx.ingest(bytes("logo.png"), { filename: "logo.png", id: "blob:x" }); // replace
   const item = await ctx.get("blob:x");
   assert.ok(item.bytes.equals(Buffer.from(bytes("logo.png"))), "re-ingest replaced the bytes");
@@ -115,8 +119,8 @@ test("R2 — a scoped recall returns its own scope + global, never another scope
 
 test("R2 — scope fences blobs too", async () => {
   const ctx = newCtx();
-  await ctx.ingest(bytes("sales.csv"), { filename: "alpha-sales.csv", id: "blob:a", scope: "chatA" });
-  await ctx.ingest(bytes("sales.csv"), { filename: "beta-sales.csv", id: "blob:b", scope: "chatB" });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "alpha-sales.xlsx", id: "blob:a", scope: "chatA" });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "beta-sales.xlsx", id: "blob:b", scope: "chatB" });
   const a = await ctx.recall("sales", { kind: "doc", scope: "chatA" });
   assert.deepEqual(a.map((h) => h.path), ["blob:a"], "scoped blob recall is fenced to its scope");
 });
@@ -141,7 +145,7 @@ test("R5 — purge() reclaims expired rows + their blob bytes; live rows survive
   const ctx = newCtx();
   const now = Date.now();
   await ctx.ingest(bytes("logo.png"), { filename: "old.png", id: "blob:old", expiresAt: now - 1 });
-  await ctx.ingest(bytes("sales.csv"), { filename: "keep.csv", id: "blob:keep" }); // forever
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "keep.xlsx", id: "blob:keep" }); // forever
 
   const n = ctx.purge();
   assert.equal(n, 1, "purge reclaimed exactly the one expired row");
@@ -154,15 +158,15 @@ test("R5 — purge() reclaims expired rows + their blob bytes; live rows survive
 test("R5 — purge with an explicit cutoff only reclaims rows past that time", async () => {
   const ctx = newCtx();
   const base = Date.now();
-  await ctx.ingest(bytes("sales.csv"), { filename: "a.csv", id: "blob:t1", expiresAt: base + 1000 });
-  await ctx.ingest(bytes("sales.csv"), { filename: "b.csv", id: "blob:t2", expiresAt: base + 100000 });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "a.xlsx", id: "blob:t1", expiresAt: base + 1000 });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "b.xlsx", id: "blob:t2", expiresAt: base + 100000 });
   assert.equal(ctx.purge({ now: base + 5000 }), 1, "only the row past the cutoff is reclaimed");
   assert.ok((await ctx.get("blob:t2")) !== null, "the not-yet-expired row remains");
 });
 
 test("R2 — get(id, {scope}) fences the direct handle (recall fencing alone isn't enough)", async () => {
   const ctx = newCtx();
-  await ctx.ingest(bytes("sales.csv"), { filename: "a.csv", id: "blob:a", scope: "chatA" });
+  await ctx.ingest(bytes("sales.xlsx"), { filename: "a.xlsx", id: "blob:a", scope: "chatA" });
   await ctx.ingest(bytes("logo.png"), { filename: "kb.png", id: "blob:global" }); // no scope = global
 
   // matching scope → returned; another scope → null (the load-bearing isolation for a guessed id)

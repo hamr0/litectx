@@ -533,16 +533,21 @@ on-disk file needed. Routed by **filename extension**:
     ~800 chars. A **paragraph or word is never split or truncated**; the lone exception is a single paragraph
     longer than the cap, which rides whole.
   - **DOCX** (`mammoth.convertToMarkdown`) → markdown that **keeps heading structure**; one section per segment.
-  - Rows carry **`format: "md" | "pdf" | "docx"` under `kind: "doc"`**, rank alongside file `md` docs, and
+  - **txt / text / log / csv** → **already plaintext** (no parser, no peer dep). Packed into passage-sized
+    segments — **blank-line paragraphs where present, else individual lines** (line-oriented logs/CSV) — under
+    ~800 chars, same whole-paragraph/line packing (never split or truncated). **No heading semantics**: a
+    leading `#` in a `.log`/`.txt` is literal text, never a section. CSV is chunked as **raw text** (a columnar
+    parse is out of scope). `format` is `"txt"|"log"|"csv"` (`"text"`→`"txt"`).
+  - Rows carry **`format` under `kind: "doc"`**, rank alongside file `md` docs, and
     **survive every `index()` pass** (they're `direct`). Segments are stored `"<id>#0"`, `"<id>#1"`, ….
-- **everything else** (csv / xlsx / xml / **code** / binary) → **stored BYTE-EXACT as a blob** (`mode: "blob"`,
+- **everything else** (xlsx / xml / **code** / binary) → **stored BYTE-EXACT as a blob** (`mode: "blob"`,
   `chunks: 0`). The bytes are kept verbatim (a SQLite `BLOB` — round-trips byte-identical, including non-UTF8);
   only the **filename** is indexed for recall, the body is **never parsed or chunked**, and `get(id)` returns
   the **original bytes** (`item.bytes`, with `item.text === null`). litectx is the single durable store — keep
   no parallel file store. Want body-search for those types? Convert and send `md`/`pdf`/`docx` — opt-in, never forced.
 
 `opts`:
-- `filename?: string` — drives extension routing (`"manual.pdf"` → chunkable pdf; `"data.csv"` → blob). Also derives the `id`.
+- `filename?: string` — drives extension routing (`"manual.pdf"` → chunkable pdf; `"notes.txt"` → chunkable text; `"q3.xlsx"` → blob). Also derives the `id`.
 - `format?: string` — explicit override when the filename is absent/misleading (`"pdf"`, `"csv"`, …).
 - `id?: string` — stable **base id** (else derived from the filename, e.g. `"doc:manual"`). **Re-ingesting the
   same `id` is an upsert** — prior segments **and** any prior blob are dropped first (no orphans, even across a
