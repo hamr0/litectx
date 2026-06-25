@@ -1,12 +1,13 @@
 # barecontext — Product Requirements Document (PRD, ⚠ SUPERSEDED)
 
 > **⚠ SUPERSEDED (2026-06-05) — do not build from this doc.** This SEED's axis (the *context
-> economy*) is now **litectx's**, and litectx documents it as **two live PRDs**:
-> - **memory engine** → [`litectx-memory-prd.md`](../01-product/litectx-memory-prd.md) — recall, impact, the
->   code+context graph, ACT-R, kinds, indexing, storage.
-> - **CE primitives (Write / Select / Compress / Isolate)** → [`litectx-ce-prd.md`](../01-product/litectx-ce-prd.md),
->   which carries this doc's **§4 primitives** (now first-class requirements), turns its **§6
->   "bare test" into the "lite line,"** and points its **§7 Aurora-port notes** at
+> economy*) is now **litectx's**, documented in the single
+> [`litectx-prd.md`](../01-product/litectx-prd.md) (memory + CE PRDs merged 2026-06-23):
+> - **memory engine** → **Part 1** — recall, impact, the code+context graph, ACT-R, kinds, indexing,
+>   storage.
+> - **CE primitives (Write / Select / Compress / Isolate)** → **Part 2**, which carries this doc's
+>   **§4 primitives** (now first-class requirements), turns its **§6 "bare test" into the "lite
+>   line,"** and points its **§7 Aurora-port notes** at
 >   [`../02-engineering/build-studies.md`](../02-engineering/build-studies.md) (Part A).
 >
 > Two framings below are now **wrong** and kept only for history: (1) barecontext is **not** a

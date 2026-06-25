@@ -17,7 +17,7 @@ It's captured from a **real run** (not a hand-drawn build), so it reports what a
 
 The tree is the diagnostic: drop it next to your build, run, and see which CE primitives you cover, which
 you skip, and whether a verb is in the wrong place. The verb→primitive map is source-grounded in the
-CE-PRD skill-map (`docs/01-product/litectx-ce-prd.md`).
+CE skill-map (`docs/01-product/litectx-prd.md`, Part 2 / Appendix CE-T).
 
 ## The drop-in — `observe()`
 

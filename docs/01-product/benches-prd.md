@@ -1,5 +1,12 @@
 # Software Factory — split into a litectx **validation bench** + an optional **factory spike**
 
+> **Companion to [`litectx-prd.md`](litectx-prd.md).** That single PRD (Part 1 memory engine · Part 2
+> CE primitives) is the authority for *what litectx is and why*; **this doc is the validation
+> companion** — *does litectx earn its existence on real work?* It owns the ON-vs-OFF A/B bench suite
+> and the empirical findings (F1–F7), and parks the optional factory spike. The per-view bench gates
+> themselves are specified in `litectx-prd.md` Part 1 §11.3; this doc is the cross-cutting "reason to
+> exist" experiment that sits on top of them.
+
 > **What this is.** This doc used to frame the "Software Factory" as one thing: an autonomous
 > developer agent whose #1 job was to validate litectx. We split it. The two purposes were
 > propping each other up, and once separated, one of them collapses into a bench:
@@ -29,8 +36,11 @@
 
 # Findings to date (2026-06-13) — the live A/B, and what it changes
 
-We stopped *designing* the validation bench and ran the actual experiment. Five things came out of it;
-they refine (and in places supersede) the Part A design below.
+We stopped *designing* the validation bench and ran the actual experiment. **Seven findings (F1–F7)**
+came out of it; they refine (and in places supersede) the Part A design below. *(Reading order: F1–F4
+then F6, F7, then **F5 last** — F5 is the cross-session-memory run, dated latest (2026-06-14) and kept
+at the end as the closing finding even though its number precedes F6/F7. The F-numbers are cited
+elsewhere, so they are stable, not renumbered.)*
 
 ## F1 — The replay bench (VB-2..VB-5) is largely redundant
 
@@ -370,7 +380,7 @@ ON/OFF columns). The durable suite today:
 
 | Bench | `npm run` | Gates | Corpus | Floor / verdict |
 |---|---|---|---|---|
-| `bench-lib.mjs` | `bench` | recall E2E — where the ground-truth file lands via `recall()` (PRD §11.1) | aurora + gitdone (local checkouts) | **ALL-MRR floor** per dataset (hold-or-beat) |
+| `bench-lib.mjs` | `bench` | recall E2E — where the ground-truth file lands via `recall()` (`litectx-prd.md` Part 1 §11.1) | aurora + gitdone (local checkouts) | **ALL-MRR floor** per dataset (hold-or-beat) |
 | `impact-bench.mjs` | `bench:impact` | impact E2E — **zero silent-isolated** SAFETY invariant + isolation accuracy; caller-recall reported, not gated (over-count is safe) | impact-aurora / impact-mcprune / impact-ts (local) | **SAFETY = 0** + isolation match set the exit code |
 | `memory-bench.mjs` | `bench:memory` | written-memory recall quality by category | memory-facts (pure-memory — **runs anywhere**) | exact **floored**; morph/para **pinned** (red-before-fix); `--embeddings` adds emb-floors when it runs |
 | `access-bench.mjs` | _(manual)_ | does edit-activation **lift or pollute** recall rank | aurora + gitdone (local) | SAFETY: no swept weight may drop below the recall baseline — **ships at zero** (surfaced, not scored) |
@@ -388,7 +398,7 @@ Plus two research/one-time harnesses kept for the record:
 
 | Harness | `npm run` | Role |
 |---|---|---|
-| `run.mjs` | `bench:ablation` | the original PRD §11 **4-ranker ablation** (baseline · +bla · +spread · litectx) — the "does graph-aware recall beat BM25?" gate; results in `poc/RESULTS.md` |
+| `run.mjs` | `bench:ablation` | the original `litectx-prd.md` Part 1 §11 **4-ranker ablation** (baseline · +bla · +spread · litectx) — the "does graph-aware recall beat BM25?" gate; results in `poc/RESULTS.md` |
 | `binding-bench.mjs` | _(settled)_ | one-time slice-2 decision — native vs WASM tree-sitter (parse speed + chunk correctness); kept as the evidence behind `web-tree-sitter` |
 
 **VB-7 — `realwork-bench` is added to this table as a durable gate** with script `bench:realwork`,

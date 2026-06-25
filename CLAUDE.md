@@ -21,8 +21,9 @@ anything here disagrees with them, **they win**.
    ESM JS + JSDoc → generated `.d.ts` (no drift), library shape, `<lib>.context.md`,
    the doc set, CI shape (trusted-publishing OIDC, manual publish).
 
-Design rationale lives in **`docs/01-product/litectx-memory-prd.md`** (PRD). Session
-history in **`.claude/stash/`**.
+Design rationale lives in **`docs/01-product/litectx-prd.md`** (the single PRD — Part 1 memory
+engine, Part 2 CE primitives; merged from the former memory/CE PRDs 2026-06-23). Validation evidence
+in **`docs/01-product/benches-prd.md`**. Session history in **`.claude/stash/`**.
 
 ## Dev Rules (from AGENT_RULES.md — mandatory)
 

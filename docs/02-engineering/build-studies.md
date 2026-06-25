@@ -413,7 +413,7 @@ Aurora hit a real indexing-speed wall; the fixes are documented and worth borrow
 
 The §1–12 entries are aurora's **memory signals**. This section covers the **CE primitives** mined
 from aurora's SOAR pipeline (`packages/soar/`, `packages/reasoning/`) and cross-checked against the
-Arize "Alex" talk [Arize]. Maps to `litectx-ce-prd.md` R-* IDs. **Verified against source** — the
+Arize "Alex" talk [Arize]. Maps to `litectx-prd.md` Part 2 R-* IDs. **Verified against source** — the
 big lesson here is that two things the SOAR *docs* describe were **never actually built**, so they
 are designs, not validated borrows.
 
@@ -504,7 +504,7 @@ are designs, not validated borrows.
 **Purpose.** Focused, source-grounded API write-ups of the three net-new CE patterns litectx will
 **adapt** (not port) when the Compress/Isolate slices get built. Each study = the real external API
 surface + mechanism + **the litectx adaptation delta** (carry / correct / cede), mapped to
-`litectx-ce-prd.md` R-* IDs. Companion to (Part A) (which
+`litectx-prd.md` Part 2 R-* IDs. Companion to (Part A) (which
 covers the *memory signals* + SOAR/CE borrows); this covers the *external library* patterns.
 
 **Doctrine (same as the ledger).** Borrow the **pattern + the shape**, not the plumbing. Adapt to the
@@ -714,8 +714,8 @@ primitives (Write / Select / Compress / Isolate) are exercised in **one flow**, 
 at every boundary** — so a regression in any primitive trips here.
 
 **Status.** Design-only — **won't run until** the memory engine (recall) graduates and the CE slices
-land (per `litectx-memory-prd.md` §11). Writing the scenario now is the deliverable: it forces the
-`assemble()` input/output shape to be concrete. Maps to `litectx-ce-prd.md` R-* IDs throughout.
+land (per `litectx-prd.md` Part 1 §11). Writing the scenario now is the deliverable: it forces the
+`assemble()` input/output shape to be concrete. Maps to `litectx-prd.md` Part 2 R-* IDs throughout.
 
 ---
 
@@ -827,11 +827,11 @@ same discipline the memory POC learned the hard way (borrow-ledger preamble).
 > **What this is.** The **obvious home for recommended flows** — how the platforms that lead
 > CE actually move work through context, with **every behavior mapped onto the four primitives
 > (Write / Select / Compress / Isolate)**. Companion to the mental-model tree
-> (the CE tree — [`litectx-ce-prd.md` Appendix CE-T](../01-product/litectx-ce-prd.md)); both derive from the leaders, not guesses (goal #5).
+> (the CE tree — [`litectx-prd.md` Appendix CE-T](../01-product/litectx-prd.md)); both derive from the leaders, not guesses (goal #5).
 >
 > **Source flows kept intact** in **Part E** (the transcript). The flows
 > there — the methodology and the turn pipeline — are mirrored and grounded here so they live
-> somewhere obvious. Inline tags (`[Manus]`, `[ADK]`, …) resolve in [`litectx-ce-prd.md` Appendix CE-T §8](../01-product/litectx-ce-prd.md).
+> somewhere obvious. Inline tags (`[Manus]`, `[ADK]`, …) resolve in [`litectx-prd.md` Appendix CE-T §8](../01-product/litectx-prd.md).
 >
 > **Marks** (same legend as the tree): 🧩 litectx CORE · 🔧 litectx BUILD · ⊘ CEDE (harness).
 
