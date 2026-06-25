@@ -24,6 +24,37 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.21.0] — 2026-06-25
+
+### Added
+- **Per-tenant isolation on the MEMORY axis from one shared instance** (multis M4). Until now `fact`/
+  `episode` isolation came **only** from the `owner`/`session` bound at construction, so a single
+  `LiteCtx` could not fence per-tenant memory — the per-call `scope` drove the doc axis alone. Now a
+  per-call `scope` (a tenant string, or `GLOBAL`) maps to the `fact`/`episode` `mem_scope.owner`, so one
+  instance fences memory per tenant the same way it already fences uploads:
+  - `recall(q, { kind: 'fact'|'episode', scope })` returns that tenant's memory **∪ the global tier**,
+    never another tenant's — on **both** the BM25 and the embeddings/KNN paths (cosine can't float
+    another tenant's memory past the gate).
+  - `remember(id, text, { kind: 'fact'|'episode', scope })` writes that tenant's owner (`GLOBAL` → the
+    shared tier).
+  - `get(id, { scope })` is fenced too — a scoped/`GLOBAL` fetch of a `fact`/`episode` owned by a
+    different tenant returns `null` (closing the by-id leak; fencing recall without `get` is only half
+    the boundary). Bare non-strict `get(id)` stays unfenced (legacy); a bare strict `get(id)` throws.
+  - `reviewCandidates(threshold, { scope })` and `promotionCandidates(threshold, { scope })` fence the
+    promotion ladder to the same tenant.
+  - **`ctx.scoped(tenant)`** now binds **every fenceable kind** — its `recall`/`remember`/`recentMemory`
+    plus new bound `reviewCandidates`/`promotionCandidates` all carry the tenant automatically, so a
+    single instance is a complete multi-tenant store with no per-call scope to forget.
+
+### Changed
+- **`strictScope` now fails closed on the memory axis too** (was doc/blob-only in 0.18.0). Under
+  `strictScope: true`, a missing `scope` on a `fact`/`episode` `recall`/`remember` or on
+  `reviewCandidates`/`promotionCandidates` **throws** (pass a tenant `scope` or `GLOBAL`); only `code`
+  (repo-global) is exempt. This revises the 0.18.0 "memory axis untouched" carve-out — the M4 ask
+  explicitly extends the fail-closed discipline across all kinds. **`strictScope` defaults off**, so a
+  non-strict single-tenant store (instance `owner`/`session`, or none) is **byte-identical** — the new
+  fence falls back to the instance owner whenever no per-call scope is passed.
+
 ## [0.20.0] — 2026-06-25
 
 ### Added

@@ -348,6 +348,12 @@ Git supplies `owner`; the harness supplies `session`; the db sits at the repo-id
 > through both the BM25 and embeddings/KNN recall paths. `stash` scope deferred (no GC consumer yet —
 > AGENT_RULES: no speculative code; recall-burial, the proven need, is fact/episode only). Tests
 > `test/scope.test.js` (6). **`worktree`/`branch` keys + db-at-repo-identity-path stay the harness's job.**
+>
+> **Generalized in M4 (litectx v0.21, multis ask):** the owner predicate above became a per-call tri-state
+> `(:memSeeAll = 1 OR owner IS NULL OR (:memOwner IS NOT NULL AND owner = :memOwner))` so the owner can be
+> threaded **per call** (one shared instance, many tenants), not only bound on the instance. The instance
+> `owner`/`session` path this note describes is the byte-identical fallback (no scope passed → instance
+> owner), so RT-5 is unaffected; M4 is purely additive. See `litectx-prd.md` Part 1 §4.4 + `test/memory-scope.test.js`.
 
 **4.4.8 — Research grounding (the leaders, why the weight landed here).**
 - **LangGraph** — two orthogonal durable dims: `thread_id` (session, checkpointer) **+** `Store` namespace rooted on `user_id` (cross-session). Recommends both.

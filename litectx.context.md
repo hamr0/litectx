@@ -140,9 +140,9 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
 | `embedModel` | `string` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id for the tier. |
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
-| `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. `code`/`doc` are never scoped. |
+| `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s (and tags `episode`s) to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. This binds the owner **once on the instance** (one actor per `LiteCtx`); to fence many tenants from **one shared instance**, leave `owner` unset and pass a per-call `scope` (or bind `ctx.scoped(tenant)`) on `recall`/`remember`/`reviewCandidates`/`promotionCandidates` — `scope` → the per-call `mem_scope.owner` (multis M4). `code`/`doc` are never owner-scoped. |
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
-| `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the DOC axis.** Off (default) = legacy: a missing/`null` doc `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall({kind:'doc'})`, `get`, `ingest`, or `remember({kind:'doc'})` **throws** instead of returning/writing every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Governs the **doc/blob axis only** — `fact`/`episode` (the `owner`/`session` memory axis) and `code` are untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
+| `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the per-upload axes.** Off (default) = legacy: a missing/`null` `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall` (`doc` **or** `fact`/`episode`), `get`, `ingest`, `remember`, `reviewCandidates`, or `promotionCandidates` **throws** instead of returning/writing every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Covers the **doc/blob axis** (per-upload `scope`) **and the memory axis** (`fact`/`episode`, where `scope` → the per-call `mem_scope.owner`; multis M4) — only `code` (repo-global) is untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
 | `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** — records one JSONL decision line per `remember()`. Fires whether or not a `writeGate` is wired: with a gate it logs the gate's decision; **without one it logs a synthetic `allow` (`reason: "no-gate"`)**, so a sink alone gives a complete write paper-trail. The sink (`opts.sink`) defaults to an in-memory `this.lines` array — the host wires a file/db writer. Ships **no** secret patterns: a host-supplied `redact(action)` scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
 | `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
@@ -153,10 +153,14 @@ config files — the adopter passes everything in.
 > **Scope (§4.4) is opt-in and host-threaded.** Both keys default to unset, so the base behavior is
 > byte-identical to an unscoped store: a missing scope reads as global/durable/visible. litectx **stores
 > and filters** by these keys; it never resolves identity itself (no `git config` / OS calls in the
-> constructor) — the host owns identity and threads `owner`/`session` in. The recall filter is
-> `(:me IS NULL OR owner IS NULL OR owner = :me) AND (:sid IS NULL OR session IS NULL OR session = :sid)`
-> on **both** the BM25 and the embeddings/KNN paths. Scope lives in a non-FTS sibling table (`mem_scope`)
-> so adding it needed no migration of existing data.
+> constructor) — the host owns identity, either binding `owner`/`session` on the instance **or** threading
+> a per-call `scope` (multis M4) for a single shared instance. The owner fence is a tri-state
+> `(:memSeeAll = 1 OR owner IS NULL OR (:memOwner IS NOT NULL AND owner = :memOwner))` (seeAll = every
+> owner; else own ∪ global; `GLOBAL` = shared tier only) plus the session predicate `(:sid IS NULL OR
+> session IS NULL OR session = :sid)` — on **both** the BM25 and the embeddings/KNN paths, **and** the
+> `reviewCandidates`/`promotionCandidates` ladder. `memOwner`/`memSeeAll` come from the per-call `scope`,
+> falling back to the instance owner when none is passed (legacy = byte-identical). Scope lives in a
+> non-FTS sibling table (`mem_scope`) so adding it needed no migration of existing data.
 
 > **Doc-axis scope is a *separate* per-upload axis** from `owner`/`session`. Uploaded docs/blobs
 > (`ingest`, `remember({kind:'doc'})`) carry a per-row `scope` string (a chat/customer id) in a
@@ -227,16 +231,18 @@ return shape follows the `kind` argument:
   a file hit returns its **localized chunk** (the indexed text that ranked — drift-free), or the
   whole file when nothing localized; `null` when the file is gone or the id is unknown. A **blob hit**
   (a byte-exact upload, R3) has no text body — `body` is `null`; fetch its bytes with `get(id).bytes`.
-- `opts.scope?: string | typeof GLOBAL` — **narrow direct doc/blob rows** to this scope (multis M3 R2).
-  A tenant string returns `scope ∪ null-global` and **nothing from another scope** — a chat sees its own
-  uploads + the global knowledge base, never another chat's. `GLOBAL` returns **only** the shared tier.
-  Unset = unscoped (sees everything; backward-compatible) — **unless `strictScope` is on**, where an
-  omitted scope on a doc-touching recall **throws** (a forgotten scope must be a loud error, not a silent
-  all-tenant read). Code/file rows and `fact`/`episode` are unaffected (the latter scope via the instance
-  `owner`/`session`); a `fact`/`episode`/`code`-only recall never requires a scope, strict or not.
-  **Expired rows (`expiresAt`, set at `ingest`) are always excluded**, scope or not — a recall never
-  returns a stale upload. **Fencing recall is only half of isolation** — pass the same `scope` to `get`
-  too (ids are guessable); see `get`'s tenant-isolation note. The leak-proof pattern is `ctx.scoped(scope)`.
+- `opts.scope?: string | typeof GLOBAL` — **fence per-tenant rows** to this scope. Spans BOTH per-upload
+  axes: direct **doc/blob** rows (multis M3 R2) **and** **`fact`/`episode`** memory (multis M4 — `scope` →
+  the per-call `mem_scope.owner`, so one shared instance fences memory per tenant). A tenant string returns
+  `scope ∪ null-global` and **nothing from another tenant** — a chat sees its own uploads + facts + the
+  global tier, never another chat's. `GLOBAL` returns **only** the shared tier. Unset = the instance owner's
+  view (sees everything on an ownerless instance; backward-compatible) — **unless `strictScope` is on**,
+  where an omitted scope on a doc- **or** memory-touching recall **throws** (a forgotten scope must be a loud
+  error, not a silent all-tenant read). Only `code`/file rows are repo-global, never fenced; a `code`-only
+  recall never requires a scope, strict or not. **Expired rows (`expiresAt`, set at `ingest`) are always
+  excluded**, scope or not — a recall never returns a stale upload. **Fencing recall is only half of
+  isolation** — pass the same `scope` to `get` too (ids are guessable); see `get`'s tenant-isolation note.
+  The leak-proof pattern is `ctx.scoped(scope)`, which now fences every kind from a single instance.
 - No usable query terms → `[]` (single kind) or all-empty groups.
 - `opts.log?: boolean` (default `true`) — set `false` to skip the recall audit log. The log
   is a **demand signal**: queries from dashboards, CI checks, batch tooling, or a read-only
@@ -327,14 +333,15 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
   scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
   `log: false` for non-demand consumers, same as `recall`.
-- `opts.scope?: string | typeof GLOBAL` (multis M3 R2) — **fences the direct handle**, the same way
-  `recall({ scope })` fences discovery. A `get` for a doc/blob tagged with a *different* scope
-  returns `null`; a global (null-scope) row stays visible to every scope; `GLOBAL` fetches **only**
-  shared-tier rows (a tenant row reads as `null`); fact/episode/file rows are unaffected (they have no
-  `doc_scope` row — they isolate via `owner`/`session`). Omit it and `get` is **unfenced by id**
-  (unchanged — the `owner`/`session` fetch model is untouched) — **unless `strictScope` is on**, where
-  a **bare `get(id)` throws** (a guessable id can't be fenced without a scope, so a missing one is a
-  leak; pass a tenant `scope` or `GLOBAL` to fetch).
+- `opts.scope?: string | typeof GLOBAL` (multis M3 R2 / M4) — **fences the direct handle**, the same way
+  `recall({ scope })` fences discovery, on **both** per-tenant axes: a `get` for a `doc`/blob tagged with a
+  *different* `doc_scope.scope`, **or** a `fact`/`episode` owned by a *different* `mem_scope.owner` (multis
+  M4), returns `null`. A global (null-scope/null-owner) row stays visible to every tenant; `GLOBAL` fetches
+  **only** the shared tier (a tenant row reads as `null`). This closes the by-id leak on the memory axis too
+  — fencing `recall` without `get` is only half the boundary (a guessed/known id must not cross tenants).
+  Only `code`/file rows have no sidecar and are never fenced. Omit it and `get` is **unfenced by id** —
+  **unless `strictScope` is on**, where a **bare `get(id)` throws** (a guessable id can't be fenced without
+  a scope, so a missing one is a leak; pass a tenant `scope` or `GLOBAL` to fetch).
 
 > **Tenant isolation needs BOTH (R2).** `recall({ scope })` fences *search*, but ids can be
 > guessed (a derived id slugs the filename), so a customer-reachable `get` must pass the requesting
@@ -352,21 +359,24 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
 > way out — serve with `Content-Disposition: attachment`, never inline-render an uploaded HTML/SVG.
 
 ### `ctx.scoped(scope)` → `ScopedView`
-A **scope-bound view** (multis M3 fail-closed ask) — the doc-axis equivalent of binding `owner`/`session`
-on the instance. `ctx.scoped("chat-42")` returns a handle whose `recall` / `get` / `ingest` / `remember`
-carry that scope **automatically**, so "forgot to pass a scope" becomes a non-existent code path (there
-is no per-call `scope` to omit). This is the blessed multi-tenant pattern: pair it with `strictScope: true`
-and the leak class is structurally impossible — the flag makes the *base* methods fail closed, the view
-makes the *safe* path the only one a call site touches.
+A **scope-bound view** (multis M3 fail-closed ask; extended to memory in M4) — a per-tenant handle over a
+single shared instance. `ctx.scoped("chat-42")` returns a handle whose `recall` / `get` / `ingest` /
+`remember` / `recentMemory` / `reviewCandidates` / `promotionCandidates` carry that scope **automatically**,
+so "forgot to pass a scope" becomes a non-existent code path (there is no per-call `scope` to omit). One
+bound tenant string now fences **every fenceable kind** — doc/blob uploads (via `doc_scope`) **and**
+`fact`/`episode` memory (via the per-call `mem_scope.owner`, M4) — so a single `LiteCtx` is a complete
+multi-tenant store. This is the blessed multi-tenant pattern: pair it with `strictScope: true` and the leak
+class is structurally impossible — the flag makes the *base* methods fail closed, the view makes the *safe*
+path the only one a call site touches.
 
 - `scope: string | typeof GLOBAL` — the bound scope (a tenant id, or `GLOBAL` for a shared-tier/KB view).
 - The bound scope is **final**: any `scope` passed in a call's `opts` is ignored.
 - A bad bind (no scope / `null` / a non-string non-`GLOBAL`) **throws at creation** — a scope-bound view
   with no scope is the very footgun this closes, so it can't be constructed. (Throws even when
   `strictScope` is off — the view's own invariant.)
-- Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember` with the same signatures **minus**
-  `opts.scope`. `impact`/`index`/`recent`/`promotions` are not on the view (they're the code or
-  instance-`owner`/`session` axes, not the per-upload doc scope).
+- Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `recentMemory`, `reviewCandidates`,
+  `promotionCandidates` with the same signatures **minus** `opts.scope`. `impact`/`index`/`recent` are not
+  on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
 ```js
 import { LiteCtx, GLOBAL } from "litectx";
@@ -374,6 +384,8 @@ const ctx = new LiteCtx({ root, dbPath, strictScope: true }); // base methods fa
 const chat = ctx.scoped(`chat-${chatId}`);                    // bind once
 await chat.ingest(buf, { filename });                          // writes are scoped — nothing to forget
 const hits = await chat.recall("invoice total", { kind: "doc" }); // reads scope ∪ global, never another chat
+await chat.remember(`fact:${id}`, "prefers metric units", { kind: "fact" }); // memory fenced too (M4)
+const facts = await chat.recall("units preference", { kind: "fact" });        // this chat's facts ∪ global
 const kb = ctx.scoped(GLOBAL);                                 // a deliberate shared-tier view
 await kb.ingest(policyPdf, { filename: "refund-policy.pdf" }); // publish to the KB, explicitly
 ```
@@ -681,7 +693,7 @@ The **cleanup-half of `stash`** (R-C4 / R-G7) — the runtime's stash deleter. R
   is the orchestration loop's call (e.g. bareagent); `evict` is the mechanism it calls.
 - Library API only, same rationale as `stash` (orchestration plumbing, never a model-facing verb).
 
-### `ctx.reviewCandidates(threshold = 5)` → `{ path, hits }[]`
+### `ctx.reviewCandidates(threshold = 5, opts?)` → `{ path, hits }[]`
 The **human-in-the-loop promotion query** (review earned by use): agent-asserted facts
 whose recall-hit count has crossed `threshold`, most-recalled first. The intended loop is
 **yours, not litectx's**: show each candidate to a human, who either **validates** it —
@@ -690,8 +702,12 @@ whose recall-hit count has crossed `threshold`, most-recalled first. The intende
 "reviewed" flag exists or is needed). The hit count gates *review*, never *ranking* —
 frequently-recalled facts do not rank higher (that would be a feedback loop; ranking
 weight is the 🚧 access-log tier, validated separately).
+`opts.scope` (`string | GLOBAL`, multis M4) **fences the queue to one tenant** on a shared
+instance — exactly like `recall({kind:'fact', scope})` (tenant → that owner's facts; `GLOBAL`
+→ shared tier; omitted → the instance owner, or **throws** under `strictScope`). Prefer the
+bound `ctx.scoped(tenant).reviewCandidates(threshold)` so the scope can't be forgotten.
 
-### `ctx.promotionCandidates(threshold = 10)` → `{ path, hits }[]`
+### `ctx.promotionCandidates(threshold = 10, opts?)` → `{ path, hits }[]`
 The **episode promotion query** — the agent-side first rung of the ladder (`reviewCandidates`
 is the human-side second rung). Returns **agent-written `episode`s** recalled at least
 `threshold` times within the **30-day rolling active window**, most-recalled first. Episodes are
@@ -703,7 +719,9 @@ extraction LLM): it gives the trigger; your agent writes the fact.
 
 The count gates **distillation, never ranking** — a hot episode does not rank higher (the
 feedback loop §4 forbids). Threshold defaults higher than facts' review (**10 vs 5**) because
-episodes are noisier and more numerous. Two ephemerality rules keep the scratchpad bounded:
+episodes are noisier and more numerous. `opts.scope` fences the queue to one tenant exactly like
+`reviewCandidates` (multis M4; prefer `ctx.scoped(tenant).promotionCandidates(threshold)`). Two
+ephemerality rules keep the scratchpad bounded:
 - **Soft-decay:** an episode older than 30 days drops out of this candidate set (the window gate).
 - **Auto-prune:** each new episode `remember()` hard-deletes episodes past the 30-day window
   (cascading their text/embedding/recall-log) — self-bounding, no cron. Anything that mattered was

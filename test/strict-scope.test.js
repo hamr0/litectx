@@ -86,16 +86,20 @@ test("strict grouped recall (kind omitted → touches the doc axis) THROWS witho
   rmSync(root, { recursive: true, force: true });
 });
 
-test("strictScope leaves the MEMORY axis and code alone — fact/episode/code recall never require a scope", async () => {
+test("strictScope NOW fences the MEMORY axis too (multis M4) — a bare fact/episode recall THROWS; code is still repo-global", async () => {
   const { root, dbPath } = sharedDb();
   const w = new LiteCtx({ root, dbPath });
-  await w.remember("fact:1", "the auth service uses JWT bearer tokens", { kind: "fact" });
+  await w.remember("fact:1", "the auth service uses JWT bearer tokens", { kind: "fact", scope: "user:A" });
   w.close();
 
   const strict = new LiteCtx({ root, dbPath, strictScope: true });
-  // a fact recall with NO scope does NOT throw (memory axis = owner/session, not the doc scope)
-  assert.deepEqual(paths(await strict.recall("auth JWT tokens", { kind: "fact" })), ["fact:1"], "fact recall is untouched by strictScope");
-  // code recall with NO scope does NOT throw either (repo-global)
+  // M4: a memory recall with NO scope fails closed (was the 0.18.0 "untouched" carve-out; revised here so
+  // a shared instance can't silently see every tenant's facts) — pass a tenant scope or GLOBAL.
+  await assert.rejects(strict.recall("auth JWT tokens", { kind: "fact" }), /strictScope/, "bare fact recall throws under strictScope");
+  await assert.rejects(strict.recall("auth JWT tokens", { kind: "episode" }), /strictScope/, "bare episode recall throws under strictScope");
+  // a SCOPED memory recall resolves (tenant ∪ global)
+  assert.deepEqual(paths(await strict.recall("auth JWT tokens", { kind: "fact", scope: "user:A" })), ["fact:1"], "scoped fact recall works under strictScope");
+  // code recall with NO scope is STILL fine (repo-global, never tenant-fenced)
   await assert.doesNotReject(strict.recall("anything", { kind: "code" }), "code recall is untouched by strictScope");
   strict.close();
   rmSync(root, { recursive: true, force: true });
@@ -180,12 +184,16 @@ test("strict ingest with a tenant scope / GLOBAL writes to exactly that tier", a
   rmSync(root, { recursive: true, force: true });
 });
 
-test("strict remember on the doc axis THROWS without a scope; fact/episode are untouched", async () => {
+test("strict remember THROWS without a scope on BOTH the doc axis and the memory axis (multis M4)", async () => {
   const { root, dbPath } = sharedDb();
   const strict = new LiteCtx({ root, dbPath, strictScope: true });
   await assert.rejects(strict.remember("d:1", "a doc body", { kind: "doc" }), /strictScope/, "a doc-row write needs an explicit scope");
-  await assert.doesNotReject(strict.remember("f:1", "a fact body", { kind: "fact" }), "a fact write is the memory axis — never throws on a missing doc scope");
-  await assert.doesNotReject(strict.remember("e:1", "an episode body", { kind: "episode" }), "an episode write is untouched too");
+  // M4: a fact/episode write now fails closed too (was the 0.18.0 carve-out) — so a tenant write can't
+  // silently land in the shared tier. A tenant scope or GLOBAL satisfies it.
+  await assert.rejects(strict.remember("f:1", "a fact body", { kind: "fact" }), /strictScope/, "a bare fact write throws under strictScope");
+  await assert.rejects(strict.remember("e:1", "an episode body", { kind: "episode" }), /strictScope/, "a bare episode write throws under strictScope");
+  await assert.doesNotReject(strict.remember("f:1", "a fact body", { kind: "fact", scope: "user:A" }), "a scoped fact write is allowed");
+  await assert.doesNotReject(strict.remember("g:1", "a shared fact", { kind: "fact", scope: GLOBAL }), "a GLOBAL fact write is allowed");
   strict.close();
   rmSync(root, { recursive: true, force: true });
 });

@@ -444,7 +444,10 @@ export class Store {
    * never indexed; `null`/omitted clears any prior meta (the row reflects the latest write, like
    * `mem_text`). `scope`/`expiresAt` (multis M3 R2/R5) tag a DIRECT `doc` row in the `doc_scope`
    * sidecar — both NULL = global/forever; ignored for `fact`/`episode` (those scope via `mem_scope`).
-   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null, createdAt?: number|null }} m
+   * `owner` (multis M4) is the per-call fact/episode owner: when present it OVERRIDES the instance owner
+   * (so one instance fences memory per tenant), when omitted (`undefined`) it falls back to the instance
+   * owner (legacy); `null` writes the shared tier deliberately. Ignored for direct `doc`/blob.
+   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null, createdAt?: number|null, owner?: string|null }} m
    */
   writeMemory(m) {
     const tx = this.db.transaction(() => {
@@ -455,16 +458,21 @@ export class Store {
         this.db
           .prepare("INSERT INTO mem(path, kind, format, provenance, occurred_at, body) VALUES (@path, @kind, @format, @provenance, @occurred_at, @body)")
           .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
-        // scope (§4.4): scope is runtime IDENTITY (who wrote it, in which run), not caller content — so
-        // it comes from THIS Store instance, not `m`. `fact` is owner-scoped (durable, cross-session);
-        // `episode` adds the session (volatile, own-run). Refresh by delete-then-insert (mirrors meta);
-        // a row only when actually scoped — NULL/NULL is identical to absent under the recall LEFT JOIN.
+        // scope (§4.4): scope is runtime IDENTITY (who wrote it, in which run), not caller content. The
+        // owner is now PER-CALL (multis M4): `m.owner` (resolved by the facade from a scoped/explicit
+        // write) OVERRIDES the instance owner, so one shared instance can fence facts/episodes per tenant;
+        // when the facade passes none (legacy single-tenant), it falls back to this instance's owner —
+        // byte-identical. `fact` is owner-scoped (durable, cross-session); `episode` adds the instance
+        // session (volatile, own-run; single-dim tenancy keeps session instance-bound). Refresh by
+        // delete-then-insert (mirrors meta); a row only when actually scoped — NULL/NULL is identical to
+        // absent under the recall LEFT JOIN.
+        const wOwner = m.owner !== undefined ? m.owner : this.owner;
         const sSession = m.kind === "episode" ? this.session : null;
         this.db.prepare("DELETE FROM mem_scope WHERE path = ?").run(m.id);
-        if (this.owner != null || sSession != null) {
+        if (wOwner != null || sSession != null) {
           this.db
             .prepare("INSERT INTO mem_scope(path, owner, session) VALUES (?, ?, ?)")
-            .run(m.id, this.owner, sSession);
+            .run(m.id, wOwner, sSession);
         }
       } else {
         this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
@@ -762,20 +770,29 @@ export class Store {
    * invalidate (→ `forget`). A plain query over provenance + the recall log. Acting on a candidate
    * removes it from the set (promotion flips provenance off `'agent'`; forget deletes the row), so no
    * separate "reviewed" flag is needed. The count gates REVIEW, not ranking — not a feedback loop.
+   *
+   * Tenant-fenced (multis M4): the same per-call owner fence as recall (`filter.memOwner`/`memSeeAll`,
+   * defaulting to the instance owner) so one shared instance's review queue never mixes tenants — a
+   * customer's facts can't surface in another customer's (or the owner's) review set.
    * @param {number} [threshold=5]
+   * @param {{ memOwner?: string|null, memSeeAll?: boolean }} [filter]  per-call owner fence (multis M4)
    * @returns {{ path: string, hits: number }[]}
    */
-  reviewCandidates(threshold = 5) {
+  reviewCandidates(threshold = 5, filter = {}) {
     // facts live in the stemmed `mem` table (§5.1); all mem rows are direct-written by construction.
     // recall rows only: fetches must not push a fact toward review (the fetch-toll, slice 9).
+    const { memSeeAll, memOwner } = this._memFilter(filter);
     return /** @type {{ path: string, hits: number }[]} */ (
       this.db
         .prepare(
           "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
+            "LEFT JOIN mem_scope s ON s.path = m.path " +
             "WHERE m.kind = 'fact' AND m.provenance = 'agent' AND r.action = 'recall' " +
-            "GROUP BY m.path HAVING hits >= ? ORDER BY hits DESC, m.path"
+            "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
+            "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid) " +
+            "GROUP BY m.path HAVING hits >= :threshold ORDER BY hits DESC, m.path"
         )
-        .all(threshold)
+        .all({ threshold, memSeeAll, memOwner, sid: this.session })
     );
   }
 
@@ -788,19 +805,27 @@ export class Store {
    * DISTILLATION, never ranking (promotion changes an episode's downstream kind/trust, never its
    * recall score — §14 #4). Threshold runs higher than facts' review (10 vs 5): episodes are noisier
    * and more numerous.
-   * @param {{ threshold: number, since: number }} opts  `threshold` = min recall hits; `since` =
-   *   `occurred_at` floor (epoch ms) — the rolling-window cutoff.
+   *
+   * Tenant-fenced (multis M4): same per-call owner fence as {@link reviewCandidates} — one shared
+   * instance's promotion queue never mixes tenants' episodes.
+   * @param {{ threshold: number, since: number, memOwner?: string|null, memSeeAll?: boolean }} opts
+   *   `threshold` = min recall hits; `since` = `occurred_at` floor (epoch ms) — the rolling-window
+   *   cutoff; `memOwner`/`memSeeAll` = per-call owner fence (defaults to the instance owner).
    * @returns {{ path: string, hits: number }[]}
    */
-  promotionCandidates({ threshold, since }) {
+  promotionCandidates({ threshold, since, memOwner, memSeeAll }) {
+    const f = this._memFilter({ memOwner, memSeeAll });
     return /** @type {{ path: string, hits: number }[]} */ (
       this.db
         .prepare(
           "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
+            "LEFT JOIN mem_scope s ON s.path = m.path " +
             "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since AND r.action = 'recall' " +
+            "AND (@memSeeAll = 1 OR s.owner IS NULL OR (@memOwner IS NOT NULL AND s.owner = @memOwner)) " +
+            "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid) " +
             "GROUP BY m.path HAVING hits >= @threshold ORDER BY hits DESC, m.path"
         )
-        .all({ since, threshold })
+        .all({ since, threshold, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session })
     );
   }
 
@@ -900,18 +925,20 @@ export class Store {
    * never the filename, are the deliverable. Everything else returns `bytes: null`. When `now` (epoch
    * ms) is passed, an **expired** direct row (R5) returns `null` — fetch honors expiry exactly like recall.
    *
-   * `scope` (multis M3 R2) fences the **direct handle** the same way `recall({scope})` fences discovery:
-   * when set, a row tagged with a *different* scope returns `null` (a NULL-scope global row stays visible
-   * to every scope; a fact/episode/file has no `doc_scope` row, so it is unaffected). This is what makes
-   * "one customer never sees another's" hold for a *known/guessed* id, not only for search — bare
-   * `getItem(id)` (no scope) is unchanged, so the existing `owner`/`session` fetch-by-id model is untouched.
-   * `globalOnly` (multis M3 fail-closed) fetches the shared tier ONLY: a row with a non-null `doc_scope.scope`
-   * returns null even though `scope` is null. It is how the facade serves a {@link GLOBAL} `get` — distinct
-   * from a bare `getItem(id)` (scope null, globalOnly false), which stays unfenced (the legacy by-id model).
+   * `scope` fences the **direct handle** the same way `recall({scope})` fences discovery, on BOTH
+   * per-tenant axes (multis M3 R2 doc + M4 memory): a `doc`/blob fences on `doc_scope.scope`, a
+   * `fact`/`episode` on `mem_scope.owner`. When set, a row tagged with a *different* tenant returns `null`
+   * (a NULL/global row stays visible to every tenant; a file row has neither sidecar, so it is unaffected).
+   * This is what makes "one customer never sees another's" hold for a *known/guessed* id, not only for
+   * search — closing the by-id leak on the memory axis too. A bare `getItem(id)` (no scope) is unchanged
+   * (the legacy by-id model). `globalOnly` (multis M3 fail-closed) fetches the shared tier ONLY: a row with
+   * a non-null tenant (`doc_scope.scope` or `mem_scope.owner`) returns null even though `scope` is null.
+   * It is how the facade serves a {@link GLOBAL} `get` — distinct from a bare `getItem(id)` (scope null,
+   * globalOnly false), which stays unfenced.
    * @param {string} id
-   * @param {number} [now]  epoch ms; when set, a row whose `expires_at <= now` returns null (R5)
-   * @param {string|null} [scope]  when set, a row whose `doc_scope.scope` is non-null and ≠ `scope` returns null (R2)
-   * @param {boolean} [globalOnly]  when true, a row whose `doc_scope.scope` is non-null returns null (GLOBAL-only fetch)
+   * @param {number} [now]  epoch ms; when set, a row whose `expires_at <= now` returns null (R5 — doc axis only)
+   * @param {string|null} [scope]  when set, a row tagged with a non-null tenant ≠ `scope` returns null (R2 doc / M4 memory)
+   * @param {boolean} [globalOnly]  when true, a row tagged with any non-null tenant returns null (GLOBAL-only fetch)
    * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
    */
   getItem(id, now, scope, globalOnly) {
@@ -929,20 +956,37 @@ export class Store {
       if (!s) return null;
       return { path: id, kind: "stash", format: "text", source: "direct", provenance: null, occurred_at: null, text: s.text, bytes: null, meta: null };
     }
-    // R5 expiry + R2 scope-fenced fetch: one doc_scope lookup gates both (a fact/file has no row → neither
-    // applies). expires_at <= now → gone (purge reclaims later); a non-null scope ≠ the reader's → not yours
-    // (a NULL/global scope stays visible to all). Only runs when a caller actually asks (now/scope set).
+    // Scope-fenced fetch — kind-routed to the matching sidecar (multis M3 doc axis + M4 memory axis):
+    // a fact/episode fences on `mem_scope.owner`, a doc/blob on `doc_scope.scope`. Same tri-state either
+    // way — GLOBAL hides any tenant-tagged row; a tenant fetch hides a row tagged with a DIFFERENT
+    // non-null tenant; a NULL/global row stays visible to all; a bare fetch (scope null, globalOnly
+    // false) is unfenced (the legacy by-id model). Closes the by-id leak so "one customer never sees
+    // another's" holds for a known/guessed id, not only for search. Only runs when a caller asks.
     if (now != null || scope != null || globalOnly) {
-      const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
-        this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
-      );
-      if (ds) {
-        if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
-        // GLOBAL fetch: only the shared tier (any tenant-scoped row is hidden). Tenant fetch: hide a
-        // row tagged with a DIFFERENT non-null scope. A bare get (scope null, globalOnly false) is unfenced.
-        if (globalOnly) {
-          if (ds.scope != null) return null;
-        } else if (scope != null && ds.scope != null && ds.scope !== scope) return null;
+      if (MEM_KINDS.has(row.kind)) {
+        // memory axis (multis M4): no expiry on this axis (episodes prune by occurred_at), so `now` is
+        // inert here — only an explicit scope/globalOnly fences. Mirror the doc branch on `owner`.
+        if (scope != null || globalOnly) {
+          const ms = /** @type {{ owner: string|null } | undefined} */ (
+            this.db.prepare("SELECT owner FROM mem_scope WHERE path = ?").get(id)
+          );
+          const owner = ms ? ms.owner : null;
+          if (globalOnly) {
+            if (owner != null) return null;
+          } else if (scope != null && owner != null && owner !== scope) return null;
+        }
+      } else {
+        const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
+          this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
+        );
+        if (ds) {
+          if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
+          // GLOBAL fetch: only the shared tier (any tenant-scoped row is hidden). Tenant fetch: hide a
+          // row tagged with a DIFFERENT non-null scope. A bare get (scope null, globalOnly false) is unfenced.
+          if (globalOnly) {
+            if (ds.scope != null) return null;
+          } else if (scope != null && ds.scope != null && ds.scope !== scope) return null;
+        }
       }
     }
     let text = null;
@@ -1120,9 +1164,26 @@ export class Store {
    * @param {string} kind   the memory kind to scope to ("code" | "doc" | ...)
    * @param {number} [limit=10]
    * @param {number} [spreadWeight=0]  0 = pure BM25; ~0.4 = v1 default (set by the caller)
-   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null }} [filter]  resolved R2 scope + R5 expiry
+   * For `fact`/`episode` the doc fields above are inert; the per-call owner fence rides
+   * `filter.memOwner`/`filter.memSeeAll` instead (multis M4 — see {@link _memFilter}).
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null, memOwner?: string|null, memSeeAll?: boolean }} [filter]  resolved R2 scope + R5 expiry (doc axis) + per-call owner fence (mem axis)
    * @returns {Hit[]}
    */
+  /**
+   * Resolve the per-call memory-axis owner fence (multis M4) from a search/ladder `filter`, falling back
+   * to this instance's `owner` when the caller passes none — so an instance-owned read (the legacy
+   * single-tenant path) is byte-identical. Returns the two bound params the mem predicate uses:
+   * `memSeeAll` (1 = every owner; 0 = fenced) and `memOwner` (the reader's owner, or NULL = the shared
+   * tier only when not seeing all). The facade encodes the strict-scope policy; this only executes it.
+   * @param {{ memOwner?: string|null, memSeeAll?: boolean }} filter
+   * @returns {{ memSeeAll: 0|1, memOwner: string|null }}
+   */
+  _memFilter(filter) {
+    const memSeeAll = (filter.memSeeAll ?? this.owner == null) ? 1 : 0;
+    const memOwner = filter.memOwner !== undefined ? filter.memOwner : this.owner;
+    return { memSeeAll, memOwner };
+  }
+
   search(match, kind, limit = 10, spreadWeight = 0, filter = {}) {
     const scope = filter.scope ?? null;
     // seeAll defaults to the legacy meaning of a null scope ("see everything") so any direct caller
@@ -1134,8 +1195,13 @@ export class Store {
     // spreading: facts/episodes have no edges. Shape matches `docs` hits (`git` → null).
     if (MEM_KINDS.has(kind)) {
       // scope filter (§4.4): LEFT JOIN the sidecar so an unscoped row (no `mem_scope` row → NULL/NULL)
-      // stays visible. An unset reader (`owner`/`session` = NULL on the Store) sees everything; a set
-      // reader sees its own + global (NULL) only. Named params throughout (SQLite forbids mixing `?`).
+      // stays visible. The owner fence is now PER-CALL (multis M4): `filter.memOwner`/`filter.memSeeAll`
+      // come from a scoped recall (one instance, many tenants), and fall back to the instance owner when
+      // absent — so a bare instance-owned read is byte-identical to before. The tri-state mirrors the
+      // doc_scope fence exactly: seeAll=1 → every owner; else a row passes if it is global (owner NULL) or
+      // matches the reader's owner; a NULL memOwner with seeAll=0 = the shared tier only (GLOBAL). The
+      // session dim stays instance-bound (single-dim tenancy). Named params throughout (SQLite forbids `?`).
+      const { memSeeAll, memOwner } = this._memFilter(filter);
       const rows = /** @type {Hit[]} */ (
         this.db
           .prepare(
@@ -1143,11 +1209,11 @@ export class Store {
             "SELECT mem.path AS path, mem.kind AS kind, mem.format AS format, -bm25(mem) AS score " +
               "FROM mem LEFT JOIN mem_scope s ON s.path = mem.path " +
               "WHERE mem MATCH :match AND mem.kind = :kind " +
-              "AND (:me IS NULL OR s.owner IS NULL OR s.owner = :me) " +
+              "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
               "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid) " +
               "ORDER BY score DESC LIMIT :limit"
           )
-          .all({ match, kind, me: this.owner, sid: this.session, limit })
+          .all({ match, kind, memSeeAll, memOwner, sid: this.session, limit })
       );
       return this.attachGit(rows);
     }
@@ -1386,19 +1452,23 @@ export class Store {
    * @param {Float32Array} qvec  the embedded query
    * @param {number} k  max nominees
    * @param {Set<string>} exclude  paths already in the lexical pool (never nominated twice)
+   * @param {{ memOwner?: string|null, memSeeAll?: boolean }} [filter]  per-call owner fence (multis M4),
+   *   defaulting to the instance owner — the KNN nominees must obey the SAME tenant fence as the lexical
+   *   pool, or cosine could float another tenant's memory past the BM25 gate.
    * @returns {Hit[]}
    */
-  knnCandidates(kind, qvec, k, exclude) {
+  knnCandidates(kind, qvec, k, exclude, filter = {}) {
     if (!MEM_KINDS.has(kind)) return [];
+    const { memSeeAll, memOwner } = this._memFilter(filter);
     const rows = /** @type {{ path: string, kind: string, format: string, vec: Buffer }[]} */ (
       this.db
         .prepare(
           "SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN file_embeddings e ON e.path = m.path " +
             "LEFT JOIN mem_scope s ON s.path = m.path WHERE m.kind = :kind " +
-            "AND (:me IS NULL OR s.owner IS NULL OR s.owner = :me) " +
+            "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
             "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid)"
         )
-        .all({ kind, me: this.owner, sid: this.session })
+        .all({ kind, memSeeAll, memOwner, sid: this.session })
     );
     return rows
       .filter((r) => !exclude.has(r.path))

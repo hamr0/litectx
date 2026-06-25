@@ -284,8 +284,11 @@ Design rules (DECIDED):
     unambiguous shared-tier opt-in (a read/write sentinel, never a stored value → no migration, union
     intact) so "deliberately global" ≠ "forgot"; **`ctx.scoped(scope)`** binds the scope once (the
     doc-axis analogue of instance `owner`/`session`) so "forgot to pass scope" is a non-existent code
-    path. Flag off by default → single-tenant byte-identical. Doc/blob axis only — the `fact`/`episode`
-    memory axis is explicitly untouched (it is already bind-once-safe; flipping its default was a non-goal).
+    path. Flag off by default → single-tenant byte-identical. Doc/blob axis only at v0.18 — the
+    `fact`/`episode` memory axis was left untouched (it was already bind-once-safe on the instance, and
+    flipping its default was a non-goal *then*). **Superseded by M4 (v0.21, below):** once multis needed
+    per-tenant memory from a *single shared* instance, the memory axis gained the same per-call fence and
+    `strictScope` was extended to it.
   - **Recency fallback `recentMemory()` (v0.20, multis M3 fast-follow)** — `recall` returns `[]` for an
     all-stopword query (*"what did I say"*): there is no term to rank on. A consumer that still wants to
     ground the agent needs "the latest uploads for this scope," which is recency, not relevance. This ships
@@ -311,9 +314,30 @@ Design rules (DECIDED):
       for a rare path on a bounded local-first store (a ~5k-row scan is sub-millisecond). **Un-defer
       condition:** a consumer reports measurable `recentMemory` latency on a large store — then build the
       structural index, not before (adding the ineffective index now would be cargo-cult).
+  - **Per-tenant memory from one shared instance (v0.21, multis M4)** — multis is multi-tenant on **one
+    `LiteCtx` per process** (the doc axis already supported this via per-call `scope`/`scoped()`), but the
+    `fact`/`episode` axis fenced **only** by the `owner`/`session` bound at construction — so a single
+    instance could not fence per-tenant memory, blocking the migration of multis's memory onto real
+    `episode`/`fact` kinds (needed for the promotion ladder). The fix makes the per-call `scope` drive the
+    memory axis too: `scope` → the per-call `mem_scope.owner` (a tenant string → that owner ∪ global;
+    `GLOBAL` → the shared tier; omitted → the instance owner). It fences `recall({kind:'fact'|'episode'})`
+    on **both** the BM25 and KNN paths (cosine can't float another tenant's memory past the gate) **and**
+    the ladder (`reviewCandidates`/`promotionCandidates`); `ctx.scoped(tenant)` now binds every fenceable
+    kind, so one instance is a complete multi-tenant store. **`strictScope` extends to the memory axis**
+    (a missing scope on a `fact`/`episode` read/write or a ladder query throws), revising v0.18's
+    doc-axis-only carve-out. **Single-dim by design:** the tenant maps to `owner`; `session` stays
+    instance-bound (multis chose one fence per tenant, not customer-owner + chat-session two-level).
+    Mechanism is purely additive — the per-call owner falls back to the instance owner when no scope is
+    passed, so a non-strict single-tenant store is byte-identical; no schema change (`mem_scope` already
+    existed). **`get(id)` is fenced too** (the security boundary, not only recall): a scoped/`GLOBAL`
+    `get` of a `fact`/`episode` owned by a *different* tenant returns `null` — `getItem` is kind-routed to
+    `mem_scope.owner` exactly as it fences a `doc` on `doc_scope.scope` (the same lesson the doc axis
+    learned in v0.18: "fencing recall without get is only half the boundary"). A bare non-strict `get(id)`
+    stays unfenced (legacy by-id model); under `strictScope` a bare `get(id)` throws.
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
   parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed; v0.20 added the
-  `recentMemory` empty-match recency fallback.)*
+  `recentMemory` empty-match recency fallback; v0.21 extended the per-call scope + `strictScope` to the
+  `fact`/`episode` memory axis for one-instance multi-tenancy.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
@@ -1283,7 +1307,7 @@ view-appropriate metric.** Same machine, different labels:
 | **action-signal (access-log tier)** | aurora (Py) + gitdone (JS) + litectx self-set; **git-replay** = the temporal oracle | `{ q → target chunk }` (committed recall labels) + per-file real **edit history** | **relevance-lift** — does edit-activation, folded into recall, raise the known-correct chunk vs the BM25+spreading baseline, **holding the recall floor on every corpus** (pollution = MRR falls; the §7.2-style asymmetry — repo-dependent lift must not ship) | 🔬 POC done (`poc/edit-bind-poc.mjs` next-edit AUC 0.79–0.97, full BLA > half-formula; `poc/access-bench.mjs` relevance-lift) — **flat global weight is repo-dependent → ships at zero**; a query-conditioned/bounded form must pass this gate before it earns weight |
 | **assemble (COMPRESS tier)** | synthetic fixtures (pure — no corpus) | a needed `code`/`doc` unit FIT would evict | **needed-symbol retention** must survive as a signature (`compressed:true`), + structural invariants (pinned/atomic/no-loss/no-overflow/order) | ✅ shipped (`npm run bench:assemble`, **runs in CI** — pure/deterministic) |
 | **summaryWindow** | synthetic fixtures + **stub** summarizer (deterministic) | the decisions in turns a tight budget drops | **retention** ≥ plain FIT-drop and = full, + fold→"summarized"/restorable/never-overflow/fallback contract | ✅ shipped (`npm run bench:summary`, **runs in CI**) |
-| compress · select · isolate | — | — | — | `compress` covered by unit tests + exercised in `assemble-bench`; **SELECT POC-killed** (Part 2 §8.2); `isolate` = the owner/session scope filter, covered by `test/scope` |
+| compress · select · isolate | — | — | — | `compress` covered by unit tests + exercised in `assemble-bench`; **SELECT POC-killed** (Part 2 §8.2); `isolate` = the owner/session + per-call scope filter, covered by `test/scope`, `test/strict-scope`, and `test/memory-scope` (M4 per-tenant memory, mutation-verified) |
 
 > **Status (shipped):** `poc/impact-bench.mjs` + audited label sets (`impact-aurora` Py,
 > `impact-mcprune` JS) — **100% confirmed-caller recall, 0 false-isolations** on both. Its first run

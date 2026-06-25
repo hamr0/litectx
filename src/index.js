@@ -357,6 +357,45 @@ export class LiteCtx {
   }
 
   /**
+   * Resolve a caller's `scope` arg for a memory-axis READ (`recall`/`reviewCandidates`/
+   * `promotionCandidates` over `fact`/`episode`) into the store's owner fence (multis M4). The memory
+   * axis historically fenced ONLY by the instance `owner` set at construction; this lets one shared
+   * instance fence per tenant by threading the scope through per call (via {@link scoped} or an explicit
+   * `scope`). The mapping mirrors the doc-axis `_resolveReadScope` but targets `owner`:
+   * - a tenant string → that owner ∪ global (`{ memOwner: scope, memSeeAll: false }`).
+   * - {@link GLOBAL} → the shared tier only (`{ memOwner: null, memSeeAll: false }`).
+   * - omitted/`null` → under `strictScope`, THROW (fail-closed, the M4 ask); otherwise fall back to the
+   *   INSTANCE owner — so a single-tenant instance (owner set at construction, strict off) is unchanged.
+   * @param {string | symbol | null | undefined} scope
+   * @param {string} op  label for the thrown error
+   * @returns {{ memOwner: string|null, memSeeAll: boolean }}
+   */
+  _resolveMemReadScope(scope, op) {
+    if (scope === GLOBAL) return { memOwner: null, memSeeAll: false };
+    if (typeof scope === "string") return { memOwner: scope, memSeeAll: false };
+    if (scope != null) throw new Error(`litectx: scope must be a string, GLOBAL, or omitted (got ${typeof scope})`);
+    if (this.strictScope) throw new Error(`litectx: ${op} requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL (got none)`);
+    return { memOwner: this.owner, memSeeAll: this.owner == null };
+  }
+
+  /**
+   * Resolve a caller's `scope` arg for a memory-axis WRITE (`remember` over `fact`/`episode`) into the
+   * stored `mem_scope.owner` (multis M4). {@link GLOBAL} → `null` (the shared tier); a tenant string →
+   * that owner; omitted/`null` → under `strictScope` THROW (fail-closed), else the INSTANCE owner
+   * (legacy single-tenant). So an accidental un-scoped tenant write is impossible under strict.
+   * @param {string | symbol | null | undefined} scope
+   * @param {string} op
+   * @returns {string | null}
+   */
+  _resolveMemWriteOwner(scope, op) {
+    if (scope === GLOBAL) return null;
+    if (typeof scope === "string") return scope;
+    if (scope != null) throw new Error(`litectx: scope must be a string, GLOBAL, or omitted (got ${typeof scope})`);
+    if (this.strictScope) throw new Error(`litectx: ${op} requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL to write the shared tier (got none)`);
+    return this.owner;
+  }
+
+  /**
    * A scope-bound view (multis M3 fail-closed ask, layer c) — the doc-axis equivalent of binding
    * `owner`/`session` on the instance. `ctx.scoped('user:42')` returns a handle whose `recall`/`get`/
    * `ingest`/`remember` carry that scope automatically, so "forgot to pass a scope" becomes a
@@ -407,11 +446,12 @@ export class LiteCtx {
    * nothing localized. Opt in when mounting litectx as a memory store or feeding an assembler. (A blob
    * hit — a byte-exact upload, R3 — has no text body: `body` is null; fetch its bytes with {@link get}.)
    *
-   * `scope` (multis M3 R2) narrows direct doc/blob rows to `scope ∪ null-global` — a recall scoped to a
-   * chat sees that chat's uploads + the global knowledge base, never another chat's. Unset = unscoped =
-   * sees everything (backward-compatible). Code/file rows and fact/episode are unaffected (always global
-   * on this axis; fact/episode scope via the instance `owner`/`session`). Expired rows (R5 `expiresAt`)
-   * are always excluded, scope or not.
+   * `scope` (multis M3 R2 / M4) fences BOTH per-upload axes: direct doc/blob rows to `scope ∪ null-global`
+   * (a chat sees its uploads + the global KB, never another chat's) AND `fact`/`episode` rows to that
+   * tenant's owner ∪ global (multis M4 — one shared instance fences memory per tenant; {@link GLOBAL} =
+   * the shared tier only). Unset = unscoped = the instance owner's view (sees everything when the instance
+   * is ownerless; under `strictScope`, a memory- or doc-touching recall with no scope THROWS — fail-closed).
+   * Code/file rows are repo-global, unaffected. Expired rows (R5 `expiresAt`) are always excluded.
    *
    * @overload
    * @param {string} query
@@ -442,6 +482,16 @@ export class LiteCtx {
     const rs = this._resolveReadScope(opts.scope, this.strictScope && touchesDoc, "recall({ kind: 'doc' })");
     // `now` is stamped once so a recall is internally consistent; expired rows are excluded live here.
     const filter = { scope: rs.scope, seeAll: rs.seeAll, now: Date.now() };
+    // memory axis (multis M4): when the query touches fact/episode, resolve the per-call owner fence and
+    // ride it on the same `filter`. Computed ONLY when a mem kind is in play — a code/doc-only query
+    // never pays it (and never throws under strict on the mem axis). The fence falls back to the instance
+    // owner when no scope is passed, so an instance-owned recall is byte-identical.
+    const touchesMem = typeof opts.kind === "string" ? MEM_KINDS.has(opts.kind) : (Array.isArray(opts.kind) ? opts.kind : KINDS).some((k) => MEM_KINDS.has(k));
+    if (touchesMem) {
+      const ms = this._resolveMemReadScope(opts.scope, "recall({ kind: 'fact' | 'episode' })");
+      filter.memOwner = ms.memOwner;
+      filter.memSeeAll = ms.memSeeAll;
+    }
     if (typeof opts.kind === "string") {
       // single kind → one flat ranked list
       const hits = this.store.attachChunks(this._rankKind(match, opts.kind, opts.n ?? 10, qvec, filter), terms);
@@ -539,13 +589,13 @@ export class LiteCtx {
    * @param {string} kind
    * @param {number} n
    * @param {Float32Array|null} qvec
-   * @param {{ scope?: string|null, now?: number|null }} [filter]  R2 scope + R5 expiry (docs/blobs only)
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null, memOwner?: string|null, memSeeAll?: boolean }} [filter]  R2 scope + R5 expiry (docs/blobs) + per-call owner fence (fact/episode, multis M4)
    * @returns {import("./store.js").Hit[]}
    */
   _rankKind(match, kind, n, qvec, filter = {}) {
     if (!qvec) return match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path (unchanged contract)
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
-    const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)));
+    const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
     const cand = pool.concat(knn);
     if (cand.length < 2) return cand.slice(0, n);
     const vecs = this.store.getEmbeddings(cand.map((h) => h.path));
@@ -672,9 +722,12 @@ export class LiteCtx {
    *   `format` defaults to `md` for docs, `text` otherwise. `meta` = an opaque caller dict (RT-3 #3)
    *   stored verbatim and returned untouched by `get`/`recall` — small structured tags ({sessionId,
    *   tag, …}), NEVER searched or ranked; park large payloads in `stash`, not here. Re-`remember`ing
-   *   without `meta` clears any prior meta. `scope`/`expiresAt` (multis M3 R2/R5) tag a `doc` row's
-   *   recall scope + retention (both default null = global/forever); ignored for fact/episode (they
-   *   scope via the instance `owner`/`session`). Usually set via {@link ingest}, not here directly.
+   *   without `meta` clears any prior meta. `scope` routes by kind: on a `doc` it tags the row's recall
+   *   scope (multis M3 R2; with `expiresAt`/R5 retention, both default null = global/forever); on a
+   *   `fact`/`episode` it sets the per-call `mem_scope.owner` (multis M4 — a tenant string fences that
+   *   memory to one tenant on a shared instance, {@link GLOBAL} writes the shared tier, omitted uses the
+   *   instance `owner`; under `strictScope`, omitted THROWS). Prefer a bound {@link scoped} view so the
+   *   scope can't be forgotten. Doc `scope` usually set via {@link ingest}, not here directly.
    * @returns {Promise<void>}
    */
   async remember(id, text, opts = {}) {
@@ -684,10 +737,13 @@ export class LiteCtx {
     }
     const by = opts.by ?? "agent";
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
-    // strictScope is the DOC axis only: a doc-row write needs an explicit scope or GLOBAL (else throw),
-    // resolving the GLOBAL sentinel → null (the shared tier). fact/episode scope via instance owner/session,
-    // never doc_scope — their `scope` opt is inert (and must not leak the symbol into the store), so force null.
+    // scope routes by axis. DOC: `scope` → `doc_scope` (explicit or GLOBAL, else throw under strict).
+    // MEMORY (multis M4): fact/episode `scope` → the per-call `mem_scope.owner` — a tenant string, GLOBAL
+    // (→ null shared tier), or omitted (→ instance owner; under strict, THROW). So one shared instance
+    // fences memory per tenant, and the two axes never cross (a doc scope never reaches mem_scope and
+    // vice-versa). `owner === undefined` tells writeMemory "use the instance owner" (legacy single-tenant).
     const writeScope = kind === "doc" ? this._resolveWriteScope(opts.scope, this.strictScope, "remember({ kind: 'doc' })") : null;
+    const writeOwner = kind === "doc" ? undefined : this._resolveMemWriteOwner(opts.scope, `remember({ kind: '${kind}' })`);
     // write-gate + audit (§10.1) — runs when EITHER a gate or an audit sink is wired. The gate (when
     // present) checks BEFORE any side effect (no embedding spent, no episode prune, no write), so a denied
     // write is a true no-op. litectx states the SOURCE (`provenance:by`) + passes through an optional
@@ -713,7 +769,7 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, expiresAt: opts.expiresAt, createdAt: Date.now() });
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, owner: writeOwner, expiresAt: opts.expiresAt, createdAt: Date.now() });
   }
 
   /**
@@ -888,11 +944,18 @@ export class LiteCtx {
    * or invalidates it (`forget(id)`). litectx supplies only the candidate set + those two actions;
    * the threshold and the review flow are the consumer's. Review is earned by use, so a human never
    * sees every agent fact — only the ones that proved useful.
+   *
+   * `scope` (multis M4) fences the candidate set to one tenant on a shared instance, exactly like
+   * `recall({ kind: 'fact', scope })`: a tenant string → that owner's facts only; {@link GLOBAL} → the
+   * shared tier only; omitted → the instance owner (under `strictScope`, omitted THROWS — fail-closed).
+   * Prefer the bound {@link ScopedView#reviewCandidates} so the scope can't be forgotten.
    * @param {number} [threshold=5]
+   * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
    */
-  reviewCandidates(threshold = 5) {
-    return this.store.reviewCandidates(threshold);
+  reviewCandidates(threshold = 5, opts = {}) {
+    const ms = this._resolveMemReadScope(opts.scope, "reviewCandidates");
+    return this.store.reviewCandidates(threshold, { memOwner: ms.memOwner, memSeeAll: ms.memSeeAll });
   }
 
   /**
@@ -911,11 +974,17 @@ export class LiteCtx {
    * distilling does not remove an episode — it stays a candidate until it ages out of the window (or
    * the consumer `forget`s it post-distillation). Re-distilling is harmless: the agent's fact id is a
    * stable handle, so a second pass upserts the same fact rather than duplicating it.
+   *
+   * `scope` (multis M4) fences the candidate set to one tenant on a shared instance, exactly like
+   * {@link reviewCandidates} (tenant string → that owner; {@link GLOBAL} → shared tier; omitted → the
+   * instance owner, or THROW under `strictScope`). Prefer the bound {@link ScopedView#promotionCandidates}.
    * @param {number} [threshold=10]
+   * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
    */
-  promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD) {
-    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS });
+  promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD, opts = {}) {
+    const ms = this._resolveMemReadScope(opts.scope, "promotionCandidates");
+    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS, memOwner: ms.memOwner, memSeeAll: ms.memSeeAll });
   }
 
   /**
@@ -1017,6 +1086,16 @@ export class ScopedView {
   /** Scope-bound {@link LiteCtx#recentMemory}. @param {{ n?: number, body?: boolean }} [opts] */
   recentMemory(opts = {}) {
     return this._ctx.recentMemory({ ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#reviewCandidates} (multis M4). @param {number} [threshold=5] */
+  reviewCandidates(threshold) {
+    return this._ctx.reviewCandidates(threshold, { scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#promotionCandidates} (multis M4). @param {number} [threshold=10] */
+  promotionCandidates(threshold) {
+    return this._ctx.promotionCandidates(threshold, { scope: this._scope });
   }
 
   /** Scope-bound {@link LiteCtx#ingest}. @param {Uint8Array} buffer @param {{ filename?: string, format?: string, id?: string, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts] */
