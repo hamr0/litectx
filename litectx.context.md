@@ -3,7 +3,7 @@
 The complete adopter contract: every config option, the full public API, the
 scope boundaries, and the sharp edges. The README is the pitch; this is the file
 you point an integrating agent at. For the design rationale behind the refusals,
-the repo-only PRD (`docs/01-product/litectx-memory-prd.md`) is the authority —
+the repo-only PRD (`docs/01-product/litectx-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
@@ -82,6 +82,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
+| **`recentMemory()`** — recall's empty-FTS-match recency sibling: newest direct `doc` rows, scope-fenced + expiry-aware, doc-axis only | ✅ shipped (multis M3 fast-follow — separate verb so recency never pollutes recall ranking) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
 | **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; `writeAudit` records a JSONL line per write **standalone (gate-independent)**; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; gate demand-gated, no producer for `memory.inject`; audit usable now without a gate) |
@@ -731,6 +732,32 @@ signal's home is here (next-use / "where was I"), *not* in search scores — fol
 activation into recall was POC-falsified as repo-dependent (it floats the same hot chunks for
 every query), so the edit→recall re-rank ships at zero. `recentActivity` also writes nothing
 to the recall audit log — it is not a demand signal.
+
+### `ctx.recentMemory(opts?)` → `(Omit<Hit, "score"> & { createdAt })[]`
+**Recent written-`doc` memory, newest first** — the recency sibling of `recall({ kind: "doc" })`,
+for the empty-FTS-match fallback. When a query carries no usable term (an all-stopword *"what did
+I say"*), `recall` returns `[]` (there is no relevance to rank on); call `recentMemory` to ground
+the agent on the latest uploads for its scope instead. The **consumer owns the policy** (whether/
+when to fall back); litectx owns the mechanism — so it is a separate verb, not a `recall` flag
+(which would mix recency into a relevance ranking and pollute the demand signal):
+
+```js
+let hits = await ctx.recall(q, { kind: "doc", scope, body: true });
+if (!hits.length) hits = ctx.recentMemory({ scope, body: true });   // recency fallback
+```
+
+`opts`: `scope` (a tenant scope string or `GLOBAL`), `n` (cap, default 10), `body` (inline the
+verbatim text, default off — `null` for a blob; fetch its bytes with `get`). Returns direct `doc`
+rows — those written via `ingest`/`remember` (blobs included, by filename) — ordered by write
+time, each a `recall`-shaped hit plus `createdAt` (epoch ms; `null` only for a doc written before
+this field shipped, which sorts last).
+
+**Scope-fenced + expiry-aware exactly like `recall`:** `scope` narrows to `scope ∪ null-global`
+(`GLOBAL` = the shared tier only), and expired rows are always excluded — the fallback can never
+leak another tenant's memory or surface a dead row. Under `strictScope`, a missing `scope` **throws**
+(the doc axis, same as `recall({ kind: "doc" })` / `get` / `ingest`). The `fact`/`episode` (owner/
+session) axis and `code`/files are **not** included — this is the doc axis only. Like
+`recentActivity`, it writes nothing to the recall audit log (recency is not query-demand). Sync.
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).

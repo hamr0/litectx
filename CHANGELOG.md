@@ -4,6 +4,51 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Docs (repo-only — not shipped in the npm package)
+- **Merged the two product PRDs into a single `docs/01-product/litectx-prd.md`** (Part 1 — the memory
+  engine; Part 2 — the CE primitives). The former `litectx-memory-prd.md` + `litectx-ce-prd.md` were
+  combined verbatim under one authority — every decision, validation, and exclusion record preserved,
+  nothing cut. The seam is the part boundary; within a part a bare `§N` means that part, cross-part
+  references read `Part 1 §N` / `Part 2 §N`.
+- **Consistency pass on the merge:** collapsed the obsolete "two PRDs, do not fold" framing into one
+  "one PRD, two parts" note; reconciled the requirement rollup + R-G5/R-S8 catalog rows with §8.1 (both
+  now marked ⊘ DROPPED at every mention); fixed an inherited mislink (TL;DR `codegraph/contextgraph`
+  `(§9)`→`(§2)`); de-ran-on the §15 status heading; removed a stray code fence folded in from `ce-tree.md`.
+- **Cleaned `docs/01-product/benches-prd.md`** as the validation companion: added the
+  `litectx-prd.md` cross-link, corrected "Five things"→"Seven findings (F1–F7)", and noted the F5
+  reading-order.
+- Retargeted all live references to the old PRD filenames (CLAUDE.md, `litectx.context.md`,
+  `docs/00-context/README.md`, `baresuite-litectx-prd.md`, `build-studies.md`, `examples/contextgraph`,
+  archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
+  intact (renaming history would falsify it).
+
+## [0.20.0] — 2026-06-25
+
+### Added
+- **`ctx.recentMemory(opts?)` — a scope-fenced recency view over written `doc` memory** (multis M3
+  fast-follow). It is the recency sibling of `recall({ kind: "doc" })`, for the **empty-FTS-match
+  fallback**: an all-stopword query (*"what did I say"*) makes `recall` return `[]` (no relevance to
+  rank on), so a consumer that wants to still ground the agent calls `recentMemory({ scope })` to get
+  the latest uploads for that scope instead.
+  - **A separate verb, not a `recall` flag.** The consumer owns the *policy* (whether/when to fall
+    back); litectx owns the *mechanism*. Folding recency into `recall` would mix a recency ordering
+    into a relevance ranking and let it pollute the demand signal — so it parallels the existing
+    `recentActivity()` (recency views are isolated from recall ranking).
+  - **Scope-fenced + expiry-aware exactly like `recall`'s doc path** (same `doc_scope` predicate):
+    `scope` narrows to `scope ∪ null-global`, `GLOBAL` = the shared tier only, and expired rows are
+    always excluded — the fallback can never leak another tenant's upload or surface a dead row. Under
+    `strictScope`, a missing `scope` throws (the doc axis, like `recall({kind:'doc'})`/`get`/`ingest`).
+  - Returns direct `doc` rows (those written via `ingest`/`remember`; blobs included by filename),
+    newest first, capped at `n` (default 10), each a `recall`-shaped hit plus `createdAt` (epoch ms),
+    with `body: true` inlining the verbatim text (`null` for a blob). `fact`/`episode` (owner/session
+    axis) and `code`/files are out of scope by construction. Also on `ScopedView`. Writes no recall log.
+  - Storage: `doc_scope` gains a `created_at` column (column-additive `ALTER` on existing DBs; a direct
+    doc written before this field sorts last as undated). The write path now records a `doc_scope` row
+    for **every** direct doc — a `scope=NULL, expires_at=NULL` row is byte-identical to the old "no row"
+    under the recall/get LEFT JOIN, so the scope fence is unchanged.
+
 ## [0.19.0] — 2026-06-23
 
 ### Added

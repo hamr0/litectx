@@ -286,8 +286,34 @@ Design rules (DECIDED):
     doc-axis analogue of instance `owner`/`session`) so "forgot to pass scope" is a non-existent code
     path. Flag off by default → single-tenant byte-identical. Doc/blob axis only — the `fact`/`episode`
     memory axis is explicitly untouched (it is already bind-once-safe; flipping its default was a non-goal).
+  - **Recency fallback `recentMemory()` (v0.20, multis M3 fast-follow)** — `recall` returns `[]` for an
+    all-stopword query (*"what did I say"*): there is no term to rank on. A consumer that still wants to
+    ground the agent needs "the latest uploads for this scope," which is recency, not relevance. This ships
+    as a **separate verb**, deliberately *not* a `recall({ recentOnEmpty })` flag: the consumer owns the
+    *policy* (whether/when to fall back), litectx the *mechanism*, and folding recency into `recall` would
+    mix it into a relevance ranking and pollute the demand signal — so it parallels `recentActivity()` (a
+    recency view isolated from recall scoring). `recentMemory({ scope, n, body })` returns direct `doc` rows
+    (blobs included) newest-first, **scope-fenced + expiry-aware with the exact `recall` doc predicate** (so
+    it can never leak another tenant's upload or surface an expired row; `strictScope` throws on a missing
+    scope, the doc axis). Mechanism: `doc_scope` gains a `created_at` column (column-additive), recorded for
+    every direct doc; a `scope=NULL, expires_at=NULL` row stays byte-identical to the old "no row" under the
+    LEFT JOIN, so the fence is unchanged. Doc axis only — `fact`/`episode` scope on the orthogonal
+    owner/session axis and are out of scope (straddling both in one verb was a non-goal).
+    - **Known cost, deferred by design (not a bug):** unlike every other doc query, `recentMemory` has no
+      FTS `MATCH`, so it cannot use the FTS index — `EXPLAIN QUERY PLAN` shows `SCAN docs VIRTUAL TABLE` +
+      a temp-b-tree sort. On a large indexed repo the `docs` table is dominated by `source='file'` code
+      rows, so each call scans them to surface a handful of direct docs. This is **availability-only, not
+      attacker-amplifiable** (a rare empty-query fallback; results bounded by store size; `LIMIT` always
+      set). The obvious fix is **proven ineffective**: an index on `doc_scope.created_at` does *not* change
+      the plan, because `docs.path` is an UNINDEXED FTS5 column — resolving `format` for specific paths
+      forces the FTS5 scan regardless of which table drives the join. The only effective fix is structural
+      (store `format` in `doc_scope`, or a separate physical direct-doc table), which is disproportionate
+      for a rare path on a bounded local-first store (a ~5k-row scan is sub-millisecond). **Un-defer
+      condition:** a consumer reports measurable `recentMemory` latency on a large store — then build the
+      structural index, not before (adding the ineffective index now would be cargo-cult).
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
-  parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed.)*
+  parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed; v0.20 added the
+  `recentMemory` empty-match recency fallback.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.

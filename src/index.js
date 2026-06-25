@@ -476,8 +476,9 @@ export class LiteCtx {
    * {@link get}'s freshness). `null` when the file is gone or the id is unknown. Mutates in place; bounded
    * disk reads (≤ hits, file-kind only). Note: does NOT log a fetch — body-fill is part of recall, not a
    * `get`, so it never pollutes the demand signal.
-   * @param {import("./store.js").Hit[]} hits
-   * @returns {import("./store.js").Hit[]}
+   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   *   `recentMemory`'s unranked scoreless row) — reads `path`/`chunk`, writes `body`; `score` unused
+   * @returns {Omit<import("./store.js").Hit, "score">[]}
    */
   _attachBodies(hits) {
     for (const h of hits) {
@@ -508,8 +509,9 @@ export class LiteCtx {
    * sealed passthrough. One batched lookup; a hit whose path carries no metadata (every file, and
    * memory written without meta) is left untouched, so this is a no-op on pure-code recall. Parsed
    * here because the facade owns the JSON boundary; the store only ever holds/returns the raw string.
-   * @param {import("./store.js").Hit[]} hits
-   * @returns {import("./store.js").Hit[]}
+   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   *   `recentMemory`'s unranked scoreless row) — reads `path`, writes `meta`; `score` unused
+   * @returns {Omit<import("./store.js").Hit, "score">[]}
    */
   _attachMeta(hits) {
     if (!hits.length) return hits;
@@ -711,7 +713,7 @@ export class LiteCtx {
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
     if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
-    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, expiresAt: opts.expiresAt });
+    this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, expiresAt: opts.expiresAt, createdAt: Date.now() });
   }
 
   /**
@@ -785,7 +787,7 @@ export class LiteCtx {
       const filename = opts.filename ?? `${id}.${cls.format}`;
       const meta = opts.meta != null ? JSON.stringify(opts.meta) : null;
       this.store.forgetMemory({ idPrefix: id }); // upsert: drop any prior row/segments + bytes for this id
-      this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: writeScope, expiresAt: opts.expiresAt });
+      this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: writeScope, expiresAt: opts.expiresAt, createdAt: Date.now() });
       return { id, kind: "doc", format: cls.format, mode: "blob", chunks: 0 };
     }
     const { format, segments } = await documentToSegments(buffer, {
@@ -939,6 +941,40 @@ export class LiteCtx {
     return this.store.recentActivity({ since, limit: opts.limit ?? 20 });
   }
 
+  /**
+   * Recent written-`doc` memory, newest first (multis M3) — the recency sibling of `recall({kind:'doc'})`
+   * for the empty-FTS-match fallback. When a query carries no usable term (an all-stopword "what did I
+   * say"), `recall` returns `[]` (no relevance to rank on); call `recentMemory` to ground the agent on the
+   * latest uploads for its scope instead. **The consumer owns the policy** (when to fall back); litectx
+   * owns the mechanism — so it is a separate verb, not a `recall` flag (which would mix recency into a
+   * relevance ranking and let it pollute the demand signal).
+   *
+   * Returns direct `doc` rows (those written via {@link ingest}/{@link remember}; blobs included by
+   * filename) ordered by write time, capped at `n` (default 10). **Scope-fenced + expiry-aware exactly
+   * like `recall`:** `scope` narrows to `scope ∪ null-global` and expired rows (R5) are always excluded —
+   * the fallback can never leak another tenant's memory or surface a dead row. Under `strictScope`, a
+   * missing `scope` THROWS (the doc axis, same as `recall({kind:'doc'})`/`get`/`ingest`); pass {@link
+   * GLOBAL} for the shared tier. `fact`/`episode` (the owner/session axis) and `code`/files are not
+   * included — this is the doc axis only.
+   *
+   * Each row is a `recall`-shaped hit (`{ path, kind, format }`) plus `createdAt` (epoch ms; `null` for a
+   * doc written before this column shipped — sorted last), the opaque `meta` when present, and `body` when
+   * `body:true` (VERBATIM stored text; `null` for a blob — fetch its bytes with {@link get}). It does NOT
+   * log a recall: recency is not query-demand, so counting it would inflate `use` for whatever is newest.
+   *
+   * @param {{ scope?: string | symbol, n?: number, body?: boolean }} [opts]
+   * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null })[]}
+   */
+  recentMemory(opts = {}) {
+    const rs = this._resolveReadScope(opts.scope, this.strictScope, "recentMemory");
+    const hits = this.store.recentMemory({ scope: rs.scope, seeAll: rs.seeAll, now: Date.now(), limit: opts.n ?? 10 });
+    // _attachMeta/_attachBodies mutate in place reading only path/chunk/meta/body — never `score`, which
+    // these unranked recency rows don't carry (their param is `Omit<Hit,"score">[]`, so no score lie).
+    this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op when none)
+    if (opts.body) this._attachBodies(hits); // verbatim stored text (null for a blob)
+    return hits;
+  }
+
   /** @returns {number} total stored items — indexed documents + written memory */
   size() {
     return this.store.count();
@@ -976,6 +1012,11 @@ export class ScopedView {
   /** Scope-bound {@link LiteCtx#get}. @param {string} id @param {{ log?: boolean }} [opts] */
   get(id, opts = {}) {
     return this._ctx.get(id, { ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#recentMemory}. @param {{ n?: number, body?: boolean }} [opts] */
+  recentMemory(opts = {}) {
+    return this._ctx.recentMemory({ ...opts, scope: this._scope });
   }
 
   /** Scope-bound {@link LiteCtx#ingest}. @param {Uint8Array} buffer @param {{ filename?: string, format?: string, id?: string, expiresAt?: number|null, meta?: Record<string, unknown>, maxSize?: number, maxPages?: number, parseTimeoutMs?: number }} [opts] */

@@ -13,11 +13,11 @@
 >
 > **Grounded against live source 2026-06-12** (HEAD `9ac64c8`, `litectx@0.8.0`): the litectx facade,
 > `../bareagent/types/index.d.ts`, `../bareguard/src/gate.js`. **Sources of truth (litectx side):**
-> [`litectx-ce-prd.md`](../01-product/litectx-ce-prd.md) §10 (the lift), §8/§8.1 (the surface + build
-> order); [`litectx-memory-prd.md`](../01-product/litectx-memory-prd.md) §3 (the API).
+> [`litectx-prd.md`](../01-product/litectx-prd.md) Part 2 §10 (the lift), §8/§8.1 (the surface + build
+> order); Part 1 §3 (the API).
 >
 > > **Stable anchors — do not renumber.** §4.1 and §4.4 are cited cross-repo (bareagent
-> > `docs/01-product/prd.md`) and by `litectx-ce-prd.md`. The integration-guide material is appended as
+> > `docs/01-product/prd.md`) and by `litectx-prd.md`. The integration-guide material is appended as
 > > §5–§9 precisely so §0–§4 keep their numbers.
 
 ---
@@ -265,7 +265,7 @@ necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cr
 > A design round (no code) that (a) killed proactive SELECT on POC + first-principles, (b) ran every CE
 > primitive through one lens — *does it serve the agent on request, or push work it didn't ask for?* —
 > and (c) settled the **Isolate scope model** the §2④ stub was waiting on. Grounded against the two CE
-> docs ([`litectx-ce-prd.md` Appendix CE-T §3.4](../01-product/litectx-ce-prd.md), [`build-studies.md` Part E](build-studies.md)) and
+> docs ([`litectx-prd.md` Appendix CE-T §3.4](../01-product/litectx-prd.md), [`build-studies.md` Part E](build-studies.md)) and
 > a 3-stream web research pass on the field's leaders (§4.4.8).
 
 ### 4.0 Summary — what this round settled
@@ -558,6 +558,7 @@ Ceded to you/the harness by design (CE-PRD §7, §10). Build them on your side; 
 | `reviewCandidates(threshold)` | agent facts recalled ≥N → human promote/kill |
 | `promotionCandidates(threshold)` | episodes earning promotion |
 | `recentActivity({...})` | recently-edited chunks (captured, not ranked) |
+| `recentMemory({scope, n, body})` | newest direct `doc` rows, scope-fenced + expiry-aware — recall's empty-match recency fallback |
 
 *In design (the substrate for codegraph/contextgraph views): `getNode(id)` + `related(id, {edge, dir,
 hops})` — describe a node, walk its edges. Generic `edge` type so future CE edges

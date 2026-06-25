@@ -177,17 +177,22 @@ const SCHEMA = [
   // the Store) sees everything (single-tenant default). One row per scoped written id; refreshed on
   // re-write, dropped by `forgetMemory`. `code`/`doc` are the per-worktree FS index, never scoped here.
   "CREATE TABLE IF NOT EXISTS mem_scope(path TEXT PRIMARY KEY, owner TEXT, session TEXT)",
-  // per-upload scope + expiry for DIRECT doc/blob rows (multis M3 R2 + R5). Distinct from `mem_scope`:
+  // per-upload lifecycle for DIRECT doc/blob rows (multis M3 R2 + R5; `created_at` for recentMemory).
+  // Distinct from `mem_scope`:
   //   - `mem_scope` is instance IDENTITY (owner/session, derived from the Store) on fact/episode rows.
-  //   - `doc_scope` is per-upload CONTENT TAGS (scope/expires_at, passed at ingest) on direct docs/blobs.
-  // Both NULL = global / never-expire. A SIBLING table (the `docs` FTS5 table takes no ALTER ADD COLUMN),
-  // mirroring `mem_scope`/`mem_meta`: a `CREATE TABLE IF NOT EXISTS` is the most additive migration (old
-  // DBs gain an empty table; a missing row LEFT-JOINs to NULL/NULL = global/forever = byte-identical to
-  // pre-R2 recall). `scope` fences one customer's uploads from another's (recall filter = `scope ∪ NULL`,
-  // so the global kb stays visible from any chat); `expires_at` (epoch ms) excludes expired rows from
-  // recall/get and is reclaimed by `purge()`. File-indexed (`source='file'`) rows never get a row here —
-  // they are always global/forever, which is exactly the LEFT-JOIN-NULL default.
-  "CREATE TABLE IF NOT EXISTS doc_scope(path TEXT PRIMARY KEY, scope TEXT, expires_at INTEGER)",
+  //   - `doc_scope` is per-upload CONTENT TAGS (scope/expires_at/created_at, set at write) on direct
+  //     docs/blobs. A SIBLING table (the `docs` FTS5 table takes no ALTER ADD COLUMN), mirroring
+  //     `mem_scope`/`mem_meta`. `scope`/`expires_at` both NULL = global / never-expire: `scope` fences
+  //     one customer's uploads from another's (recall filter = `scope ∪ NULL`, so the global kb stays
+  //     visible from any chat); `expires_at` (epoch ms) excludes expired rows from recall/get and is
+  //     reclaimed by `purge()`. `created_at` (epoch ms, set on every direct-doc write) orders
+  //     `recentMemory` (recall's empty-match recency sibling) newest-first.
+  // Since `created_at` must exist for EVERY direct doc, the write path now records a row unconditionally
+  // (not only when scoped/expiring) — but a `scope=NULL, expires_at=NULL` row is byte-identical under the
+  // recall/get LEFT JOIN to the old "no row" (still global/forever), so the fence is unchanged. A missing
+  // row (file-indexed rows, or direct docs written before this column existed) LEFT-JOINs to NULL on all
+  // three: global, forever, and undated — so legacy undated docs still appear in recentMemory, sorted last.
+  "CREATE TABLE IF NOT EXISTS doc_scope(path TEXT PRIMARY KEY, scope TEXT, expires_at INTEGER, created_at INTEGER)",
   "CREATE INDEX IF NOT EXISTS doc_scope_expires ON doc_scope(expires_at)",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
@@ -273,6 +278,10 @@ export class Store {
       const logCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(recall_log)"));
       if (!logCols.some((c) => c.name === "symbol")) this.db.exec("ALTER TABLE recall_log ADD COLUMN symbol TEXT");
       if (!logCols.some((c) => c.name === "action")) this.db.exec("ALTER TABLE recall_log ADD COLUMN action TEXT NOT NULL DEFAULT 'recall'");
+      // recentMemory (multis M3 fast-follow): doc_scope gains `created_at` — column-additive, so an
+      // ALTER preserves existing scope/expiry rows (their created_at backfills NULL = undated, sorts last).
+      const dsCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(doc_scope)"));
+      if (!dsCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE doc_scope ADD COLUMN created_at INTEGER");
     }
   }
 
@@ -435,7 +444,7 @@ export class Store {
    * never indexed; `null`/omitted clears any prior meta (the row reflects the latest write, like
    * `mem_text`). `scope`/`expiresAt` (multis M3 R2/R5) tag a DIRECT `doc` row in the `doc_scope`
    * sidecar — both NULL = global/forever; ignored for `fact`/`episode` (those scope via `mem_scope`).
-   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null }} m
+   * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null, createdAt?: number|null }} m
    */
   writeMemory(m) {
     const tx = this.db.transaction(() => {
@@ -465,9 +474,10 @@ export class Store {
               "VALUES (@path, @kind, @format, 'direct', @provenance, @occurred_at, @body)"
           )
           .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
-        // R2/R5 per-upload sidecar: refresh by delete-then-insert (mirrors mem_scope); a row only when
-        // actually scoped/expiring — NULL/NULL is identical to absent under the recall LEFT JOIN.
-        this.setDocScope(m.id, m.scope ?? null, m.expiresAt ?? null);
+        // per-upload sidecar (R2/R5 scope/expiry + recentMemory created_at): refresh by delete-then-insert.
+        // Always written for a direct doc (created_at must exist); a NULL/NULL scope/expiry row stays
+        // identical to absent under the recall LEFT JOIN.
+        this.setDocScope(m.id, m.scope ?? null, m.expiresAt ?? null, m.createdAt ?? null);
       }
       // raw text alongside the searchable surface (slice 9): the FTS body is processed
       // (indexBody) and there is no file behind a written row, so this is the only copy
@@ -496,16 +506,18 @@ export class Store {
   }
 
   /**
-   * Set (or clear) the per-upload scope/expiry of a direct doc/blob row (multis M3 R2/R5). Refresh by
-   * delete-then-insert; a row is written ONLY when actually scoped or expiring, so NULL/NULL leaves no
-   * row — identical to absent under the recall LEFT JOIN (byte-identical to pre-R2 behavior when unset).
-   * @param {string} id @param {string|null} scope @param {number|null} expiresAt
+   * Set the per-upload lifecycle (scope/expiry/created_at) of a direct doc/blob row (multis M3 R2/R5 +
+   * recentMemory). Refresh by delete-then-insert. A row is now written UNCONDITIONALLY — even an unscoped,
+   * never-expiring upload gets one — because `created_at` must exist for every direct doc to order
+   * recentMemory. A `scope=NULL, expires_at=NULL` row is byte-identical to the old "no row" under the
+   * recall/get LEFT JOIN (still global/forever), so the fence is unchanged; only `created_at` is new.
+   * `createdAt` is the caller's write clock (threaded from the facade, like `writeStash`), refreshed on
+   * every re-write so a re-ingest reads as more recent.
+   * @param {string} id @param {string|null} scope @param {number|null} expiresAt @param {number|null} createdAt
    */
-  setDocScope(id, scope, expiresAt) {
+  setDocScope(id, scope, expiresAt, createdAt = null) {
     this.db.prepare("DELETE FROM doc_scope WHERE path = ?").run(id);
-    if (scope != null || expiresAt != null) {
-      this.db.prepare("INSERT INTO doc_scope(path, scope, expires_at) VALUES (?, ?, ?)").run(id, scope, expiresAt);
-    }
+    this.db.prepare("INSERT INTO doc_scope(path, scope, expires_at, created_at) VALUES (?, ?, ?, ?)").run(id, scope, expiresAt, createdAt);
   }
 
   /**
@@ -515,7 +527,7 @@ export class Store {
    * parsing or chunking the bytes. `get(id)` returns the original bytes. Upsert by `id` (drops any prior
    * direct row + blob for that id first). Scope/expiry ride the same `doc_scope` sidecar as docs; `meta`
    * is the sealed `mem_meta` passthrough (small tags only). Never embedded (bytes aren't meaning-searchable).
-   * @param {{ id: string, bytes: Uint8Array, filename: string, format: string, meta?: string|null, scope?: string|null, expiresAt?: number|null }} b
+   * @param {{ id: string, bytes: Uint8Array, filename: string, format: string, meta?: string|null, scope?: string|null, expiresAt?: number|null, createdAt?: number|null }} b
    */
   writeBlob(b) {
     const bytes = Buffer.isBuffer(b.bytes) ? b.bytes : Buffer.from(b.bytes);
@@ -531,7 +543,7 @@ export class Store {
       this.db
         .prepare("INSERT INTO blobs(path, bytes, filename) VALUES (@path, @bytes, @filename) ON CONFLICT(path) DO UPDATE SET bytes = excluded.bytes, filename = excluded.filename")
         .run({ path: b.id, bytes, filename: b.filename });
-      this.setDocScope(b.id, b.scope ?? null, b.expiresAt ?? null);
+      this.setDocScope(b.id, b.scope ?? null, b.expiresAt ?? null, b.createdAt ?? null);
       if (b.meta != null) {
         this.db.prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta").run({ path: b.id, meta: b.meta });
       } else {
@@ -840,6 +852,38 @@ export class Store {
             "WHERE ts >= ? GROUP BY path, symbol ORDER BY lastEditedAt DESC, edits DESC, path LIMIT ?"
         )
         .all(since, limit)
+    );
+  }
+
+  /**
+   * Recent direct `doc` rows, newest first (multis M3 — recall's empty-FTS-match recency sibling). The
+   * "no query, just the latest uploads for this scope" view: it returns direct docs (incl. blobs by
+   * filename) ordered by write recency (`doc_scope.created_at` DESC), NOT by BM25. Scope-fenced + expiry-
+   * aware with the EXACT predicate `search()` uses for docs (same `doc_scope` LEFT JOIN), so it can never
+   * surface another tenant's upload or an expired row. `code`/file rows (`source='file'`) and
+   * `fact`/`episode` (the mem table / owner-session axis) are out of scope by construction.
+   *
+   * A direct doc written before the `created_at` column existed has no value to sort on (NULL) and sorts
+   * last under DESC — still returned, just undated. `path` (the id) feeds {@link getItem}.
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null, limit: number }} filter
+   *   resolved R2 scope + R5 expiry (same shape as `search`'s filter). `seeAll` defaults to "`scope == null`".
+   * @returns {{ path: string, kind: string, format: string, createdAt: number|null }[]}
+   */
+  recentMemory({ scope = null, seeAll, now = null, limit }) {
+    const sa = (seeAll ?? scope == null) ? 1 : 0;
+    return /** @type {{ path: string, kind: string, format: string, createdAt: number|null }[]} */ (
+      this.db
+        .prepare(
+          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, ds.created_at AS createdAt " +
+            "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
+            "WHERE docs.source = 'direct' AND docs.kind = 'doc' " +
+            // same tri-state fence as search() (seeAll=0 + scope NULL = global-only, i.e. GLOBAL) …
+            "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
+            // … and the same live-expiry exclusion (R5).
+            "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
+            "ORDER BY ds.created_at DESC, docs.path LIMIT :limit"
+        )
+        .all({ scope, seeAll: sa, now, limit })
     );
   }
 
