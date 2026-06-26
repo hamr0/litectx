@@ -636,12 +636,15 @@ export class Store {
    * Forget directly-written memory — by `id`, or by query (`kind` and/or `provenance`) for bulk human
    * invalidation (§3.2). **Only ever removes `source='direct'` rows**, so an indexed file is never
    * touched. Cleans the row's raw text, embedding + recall-log alongside it. Returns rows removed.
-   * @param {{ id?: string, idPrefix?: string, kind?: string, provenance?: string }} sel
+   * @param {{ id?: string, idPrefix?: string, kind?: string, provenance?: string, ownerFenced?: boolean, owner?: string | null }} sel
    *   `idPrefix` matches a base id and all `<base>#<n>` rows under it — the clean-re-ingest handle
    *   for a multi-segment document ({@link LiteCtx#ingest}); still direct-rows-only.
+   *   `ownerFenced` (multis M4) routes a tenant-scoped delete on the MEMORY axis only — see
+   *   {@link forgetMemoryByOwner}.
    * @returns {number}
    */
   forgetMemory(sel) {
+    if (sel.ownerFenced) return this.forgetMemoryByOwner(sel.owner ?? null, sel.kind);
     /** @type {string[]} */
     const clauses = [];
     /** @type {Record<string, string>} */
@@ -685,6 +688,52 @@ export class Store {
       const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delDocScope.run(p), delBlob.run(p), delEmb.run(p), delLog.run(p));
+      return removed;
+    });
+    return tx();
+  }
+
+  /**
+   * Tenant-fenced memory forget (multis M4) — the delete-side mirror of the {@link recallMemory} owner
+   * fence. Deletes `fact`+`episode` rows for exactly ONE owner, plus their sidecars (`mem_text`/
+   * `mem_meta`/`mem_scope`/embeddings/`recall_log`). **MEM-AXIS ONLY**: never touches `docs` (a tenant's
+   * ingested docs fence on the separate `doc_scope` axis), the stash, or another owner's rows.
+   *
+   * **A tenant forget is the STRICTER `s.owner = @owner`, NOT the read fence's `owner IS NULL OR owner =
+   * @owner`.** A tenant reads its rows ∪ the shared tier, but must DELETE only its own — a tenant forget
+   * that also matched `owner IS NULL` would wipe the shared/global memory for everyone. A GLOBAL forget
+   * (`owner === null`) deletes ONLY the shared tier via `s.owner IS NULL` — a LEFT JOIN, because an
+   * ownerless/global mem row has no `mem_scope` entry at all (see {@link writeMemory}: a `mem_scope` row
+   * exists only when actually scoped). "Delete every owner" is intentionally unexpressible here — that is
+   * {@link reset}'s job.
+   *
+   * @param {string | null} owner  a tenant `mem_scope.owner`, or `null` for the GLOBAL/shared tier
+   * @param {string} [kind]  optional narrow to one kind (e.g. just `episode`); omitted → both
+   * @returns {number}
+   */
+  forgetMemoryByOwner(owner, kind) {
+    /** @type {Record<string, string>} */
+    const params = {};
+    // tenant → exact owner (JOIN); GLOBAL/ownerless → owner IS NULL (LEFT JOIN, since a global row may
+    // have no mem_scope entry). Either way the predicate selects ONLY the named tier.
+    const scopePred =
+      owner == null
+        ? "LEFT JOIN mem_scope s ON s.path = m.path WHERE s.owner IS NULL"
+        : ((params.owner = owner), "JOIN mem_scope s ON s.path = m.path WHERE s.owner = @owner");
+    let kindPred = "";
+    if (kind != null) (kindPred = " AND m.kind = @kind"), (params.kind = kind);
+    const selectSql = `SELECT m.path FROM mem m ${scopePred}${kindPred}`;
+    const tx = this.db.transaction(() => {
+      const paths = /** @type {{ path: string }[]} */ (this.db.prepare(selectSql).all(params)).map((r) => r.path);
+      if (!paths.length) return 0;
+      const del = this.db.prepare("DELETE FROM mem WHERE path = ?");
+      const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
+      const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
+      const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
+      let removed = 0;
+      for (const p of paths) ((removed += del.run(p).changes), delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();

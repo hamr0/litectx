@@ -24,6 +24,33 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.22.0] — 2026-06-27
+
+### Added
+- **Tenant-scoped memory `forget` from one shared instance** (multis M4). The delete-side mirror of the
+  0.21.0 read fence — until now `forget` could drop one row by id or bulk-invalidate by `{ kind, by }`
+  **owner-blind** (across every tenant), so a shared instance had no way to clear one tenant's memory
+  without reaching another's. Now:
+  - `forget({ scope, kind? })` deletes **only** that owner's `fact` + `episode` rows (optionally one
+    `kind`) — a tenant string → `mem_scope.owner = scope`, `GLOBAL` → the shared tier (`owner IS NULL`)
+    **only**. A tenant forget uses the stricter `owner = scope` (never the read fence's `owner ∪ global`),
+    so it can never wipe the shared/global memory for everyone.
+  - `ctx.scoped(tenant).forget()` / `.forget({ kind })` — the bound-view form (no scope to omit); the
+    `ScopedView` now exposes `forget`.
+  - **Mem-axis only:** never touches a tenant's `doc`/blob uploads (separate `doc_scope` axis), another
+    tenant's rows, or the stash (`evict`'s domain).
+  - Under `strictScope`, a **scope-less** memory forget (`forget({})` or owner-blind `forget({ kind })`)
+    **throws** — a tenant-blind wipe is unexpressible by omission. Legacy `forget('id')` and
+    `forget({ kind, by })` are unchanged on a non-strict instance.
+- **Precise by-key selectors on `forget()`'s object form** — `forget({ id })` (one row, == the string
+  form) and `forget({ idPrefix })` (a base id **and** all its `<base>#<n>` segments — the clean-re-ingest
+  handle for a multi-segment `ingest` doc, `#`-anchored so `kb:guide` spares `kb:guidebook`). Explicit
+  by-key targets, so they run even under `strictScope` (only omission-based blind wipes fail closed).
+  A tenant `forget({ scope })` combines **only** with `{ kind }` — passing `{ id }` / `{ idPrefix }` /
+  `{ by }` alongside **throws** rather than silently dropping the narrower and widening into a full tenant
+  wipe (also closes the scoped-view footgun where an injected scope would turn `scoped(A).forget({ by })`
+  into a full tenant-A wipe).
+
 ## [0.21.0] — 2026-06-25
 
 ### Added

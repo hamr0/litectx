@@ -142,7 +142,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `embedder` | `{ embed(text): Promise<Float32Array> }` | built-in | Advanced/testing — inject a custom embedding provider, bypassing the built-in model loading. |
 | `owner` | `string` | unset (`null` = global) | **Scope key — the actor.** Scopes durable `fact`s (and tags `episode`s) to an actor in a shared store. Unset = unscoped: `recall` is owner-blind (sees & writes everything). Set it (a multi-tenant / shared-db host resolves it host-side — git email, OS user) and `recall` returns **own + global** facts only, never another actor's. This binds the owner **once on the instance** (one actor per `LiteCtx`); to fence many tenants from **one shared instance**, leave `owner` unset and pass a per-call `scope` (or bind `ctx.scoped(tenant)`) on `recall`/`remember`/`reviewCandidates`/`promotionCandidates` — `scope` → the per-call `mem_scope.owner` (multis M4). `code`/`doc` are never owner-scoped. |
 | `session` | `string` | unset (`null` = durable) | **Scope key — the run.** Scopes volatile `episode`s to one run. Unset = unscoped: `recall` sees all sessions' episodes. Set it (a host running concurrent agents threads a run id) and a run's own episodes aren't **buried by more-relevant other sessions** (the measured failure — recency is not a ranking term). `fact`s ignore it (always cross-session). |
-| `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the per-upload axes.** Off (default) = legacy: a missing/`null` `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall` (`doc` **or** `fact`/`episode`), `get`, `ingest`, `remember`, `reviewCandidates`, or `promotionCandidates` **throws** instead of returning/writing every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Covers the **doc/blob axis** (per-upload `scope`) **and the memory axis** (`fact`/`episode`, where `scope` → the per-call `mem_scope.owner`; multis M4) — only `code` (repo-global) is untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
+| `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the per-upload axes.** Off (default) = legacy: a missing/`null` `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall` (`doc` **or** `fact`/`episode`), `get`, `ingest`, `remember`, `forget`, `reviewCandidates`, or `promotionCandidates` **throws** instead of returning/writing/deleting every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Covers the **doc/blob axis** (per-upload `scope`) **and the memory axis** (`fact`/`episode`, where `scope` → the per-call `mem_scope.owner`; multis M4) — only `code` (repo-global) is untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
 | `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** — records one JSONL decision line per `remember()`. Fires whether or not a `writeGate` is wired: with a gate it logs the gate's decision; **without one it logs a synthetic `allow` (`reason: "no-gate"`)**, so a sink alone gives a complete write paper-trail. The sink (`opts.sink`) defaults to an in-memory `this.lines` array — the host wires a file/db writer. Ships **no** secret patterns: a host-supplied `redact(action)` scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
 | `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
@@ -374,9 +374,10 @@ path the only one a call site touches.
 - A bad bind (no scope / `null` / a non-string non-`GLOBAL`) **throws at creation** — a scope-bound view
   with no scope is the very footgun this closes, so it can't be constructed. (Throws even when
   `strictScope` is off — the view's own invariant.)
-- Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `recentMemory`, `reviewCandidates`,
-  `promotionCandidates` with the same signatures **minus** `opts.scope`. `impact`/`index`/`recent` are not
-  on the view (they're the repo-global code/edit axes, never tenant-fenced).
+- Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `forget`, `recentMemory`,
+  `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
+  `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory.
+  `impact`/`index`/`recent` are not on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
 ```js
 import { LiteCtx, GLOBAL } from "litectx";
@@ -634,9 +635,27 @@ reclamation, not a correctness gate. Only rows with a non-null, elapsed `expires
 Delete directly-written memory. Returns the number of rows removed.
 
 - `forget("fact:auth-uses-jwt")` — drop one item by key.
-- `forget({ kind: "fact", by: "agent" })` — **bulk invalidation** by query: every
-  agent-asserted fact. At least one of `kind` / `by` is required — `forget({})` throws, enforced
-  at both the public wrapper and the store layer, so an empty selector can never wipe all memory.
+- `forget({ id })` / `forget({ idPrefix })` — **precise** by-key deletes on the object form. `id` ==
+  the string form (one row); `idPrefix` drops a base id **and all its `<base>#<n>` segments** (the
+  clean-re-ingest handle for a multi-segment `ingest` doc) — `#`-anchored, so `forget({ idPrefix:
+  "kb:guide" })` spares a sibling `kb:guidebook`. Explicit by-key targets: **not** subject to the
+  `strictScope` throw (that guards omission-based blind wipes, not by-id deletes). Ids are guessable —
+  a shared-store host should namespace them. (Does **not** combine with `scope` — see below.)
+- `forget({ kind: "fact", by: "agent" })` — **owner-blind bulk invalidation** by query: every
+  agent-asserted fact, **across every tenant**. At least one of `kind` / `by` is required — `forget({})`
+  throws, enforced at both the public wrapper and the store layer, so an empty selector can never wipe
+  all memory. (Owner-blind by design — only safe on a single-tenant instance.)
+- `forget({ scope, kind? })` — **tenant-fenced** (multis M4): deletes **only that owner's** `fact` +
+  `episode` rows (optionally one `kind`) — the delete-side mirror of the `recall` owner fence. A tenant
+  string → `mem_scope.owner = scope`; **`GLOBAL`** → the shared tier (`owner IS NULL`) **only**, never a
+  tenant's rows (a tenant forget is the stricter `owner = scope`, *not* the read fence's `owner ∪ global`
+  — else it would wipe the shared memory for everyone). **Mem-axis only:** a tenant's `doc`/blob uploads
+  (separate `doc_scope` axis), other tenants' rows, and the stash are untouched. Prefer the bound
+  `ctx.scoped(tenant).forget()` (no scope to omit). Under `strictScope`, a **scope-less** memory forget
+  (`forget({})` or owner-blind `forget({ kind })`) **throws** — a tenant-blind wipe is unexpressible by
+  omission. **Combines only with `{ kind }`** — passing `{ id }` / `{ idPrefix }` / `{ by }` alongside
+  **throws** rather than silently dropping the narrower and widening into a tenant-WIDE wipe (also closes
+  the scoped-view footgun: `scoped(A).forget({ by })` would otherwise inject `scope: A` and wipe all of A).
 
 **`forget` can never touch indexed files** — it operates only on written
 (`remember`-created) rows. To remove an indexed file from the store, delete the file and

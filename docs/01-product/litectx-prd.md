@@ -337,7 +337,27 @@ Design rules (DECIDED):
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
   parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed; v0.20 added the
   `recentMemory` empty-match recency fallback; v0.21 extended the per-call scope + `strictScope` to the
-  `fact`/`episode` memory axis for one-instance multi-tenancy.)*
+  `fact`/`episode` memory axis for one-instance multi-tenancy; v0.22 added the symmetric tenant-scoped
+  `forget`.)*
+  - **Tenant-scoped memory forget (v0.22, multis M4)** — the delete-side mirror of v0.21's read fence.
+    Until v0.22 `forget` could drop one row by `id` or bulk-invalidate by `{ kind, by }` **owner-blind**
+    (across every tenant), so a shared instance had no way to clear one tenant's memory without reaching
+    another's — a security gap, not a nicety (a mis-scoped `/forget` would delete a *different* customer's
+    memory). The fix adds `forget({ scope, kind? })`: a tenant string → delete only `mem_scope.owner =
+    scope` rows; `GLOBAL` → the shared tier (`owner IS NULL`) **only**. The fence is deliberately the
+    **stricter `owner = scope`, NOT the read fence's `owner ∪ global`** — a tenant forget that also
+    matched `owner IS NULL` would wipe the shared memory for everyone; a `GLOBAL` forget uses a LEFT JOIN
+    because an ownerless row has no `mem_scope` entry at all. **Mem-axis only** (never a tenant's `doc`/
+    blob uploads, another tenant's rows, or the stash). `ctx.scoped(tenant).forget()` is the bound-view
+    form (no scope to omit); under `strictScope` a scope-less memory forget (`forget({})` or owner-blind
+    `forget({ kind })`) throws — a tenant-blind wipe is unexpressible by omission. Purely additive: legacy
+    `forget('id')` / `forget({ kind, by })` are byte-identical on a non-strict instance; no schema change.
+    v0.22 also surfaced the store's precise by-key selectors on the object form — `forget({ id })` and
+    `forget({ idPrefix })` (base id + its `#<n>` segments, the clean-re-ingest handle) — which name an
+    exact target and so run even under `strictScope`. A tenant `forget({ scope })` combines **only** with
+    `{ kind }`: passing any other narrower (`id`/`idPrefix`/`by`) throws rather than silently dropping it,
+    which also closes a scoped-view footgun (an injected `scope` would otherwise widen
+    `scoped(A).forget({ by })` into a full tenant-A wipe).
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
@@ -375,7 +395,9 @@ is also scopable (`index({ paths: ["docs/"] })`).
 ```js
 await lc.remember(id, text, { kind, format?, by?, occurredAt? });  // upsert by `id` (→ path)
 await lc.forget(id);                                               // delete by `id`
+await lc.forget({ idPrefix });                                     // base id + all its `#<n>` segments (v0.22)
 await lc.forget({ kind: "fact", by: "agent" });                   // forget-by-query (human invalidation)
+await lc.scoped(tenant).forget();                                  // tenant-scoped wipe (v0.22, multis M4)
 ```
 
 - `kind ∈ {fact, episode, doc}` — directly-written **docs are first-class**, not only facts (an FAQ

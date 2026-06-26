@@ -773,19 +773,59 @@ export class LiteCtx {
   }
 
   /**
-   * Forget directly-written memory (§3.2). Pass an `id` to drop one item, or a query
-   * (`{ kind?, by? }`) for bulk human invalidation (e.g. drop every agent-asserted fact). **Only ever
-   * removes `source='direct'` rows** — an indexed file is never touched. **Memory-only:** a stash is not
-   * memory — clean parked payloads with {@link evict} (a `forget`-by-id no longer reaches the stash table).
-   * Returns the count removed.
+   * Forget directly-written memory (§3.2). Pass an `id` to drop one item, or a query for bulk
+   * invalidation. **Only ever removes `source='direct'` rows** — an indexed file is never touched.
+   * **Memory-only:** a stash is not memory — clean parked payloads with {@link evict} (a `forget`-by-id
+   * no longer reaches the stash table). Returns the count removed.
    *
-   * @param {string | { kind?: string, by?: string }} sel
+   * Query shapes:
+   * - `{ id }` / `{ idPrefix }` — **precise** owner-blind delete by caller key. `id` drops one row;
+   *   `idPrefix` drops a base id and all its `<base>#<n>` segments (the clean-re-ingest handle for a
+   *   multi-segment {@link ingest} doc). Explicit by-key targets, like the string `forget('id')` form —
+   *   **not** subject to the `strictScope` throw (that guards omission-based blind wipes, not by-id
+   *   deletes). Ids are guessable, so a shared-store host should namespace them.
+   * - `{ kind?, by? }` — owner-BLIND **bulk** delete across every tenant (legacy; unchanged). Reaches all
+   *   `mem_scope.owner`s — only safe on a single-tenant instance. Under `strictScope` this THROWS.
+   * - `{ scope, kind? }` — **tenant-fenced** (multis M4): deletes only that owner's `fact`+`episode`
+   *   rows, the delete-side mirror of the {@link recall} owner fence. A tenant string → `mem_scope.owner
+   *   = scope`; {@link GLOBAL} → the shared tier (`owner IS NULL`) ONLY — never a tenant's rows. Prefer
+   *   the bound {@link ScopedView#forget}. Mem-axis only: a tenant's `doc`/blob uploads (separate
+   *   `doc_scope` axis), other tenants' rows, and the stash are untouched. Under `strictScope` a
+   *   scope-less memory forget THROWS — a tenant-blind wipe is unexpressible by omission. Combines ONLY
+   *   with `{ kind }`; passing `{ id }` / `{ idPrefix }` / `{ by }` alongside THROWS rather than silently
+   *   dropping the narrower and widening a precise/narrowed delete into a tenant-wide wipe.
+   *
+   * @param {string | { kind?: string, by?: string, scope?: string | symbol, id?: string, idPrefix?: string }} sel
    * @returns {number}
    */
   forget(sel) {
     if (typeof sel === "string") return this.store.forgetMemory({ id: sel });
-    if (sel.kind == null && sel.by == null) throw new Error("forget(query) needs at least { kind } or { by }");
-    return this.store.forgetMemory({ kind: sel.kind, provenance: sel.by });
+    if ("scope" in sel) {
+      // tenant-fenced forget (multis M4) — a tenant-WIDE memory wipe. Resolve the scope to a single
+      // mem_scope.owner the SAME way a memory WRITE does (write/read/forget agree byte-for-byte): GLOBAL
+      // → null (shared tier), a string → that owner, a missing scope under strictScope → THROW. Branching
+      // on `'scope' in sel` (not the resolved value) keeps the legacy owner-blind path below byte-identical.
+      if (sel.id != null || sel.idPrefix != null || sel.by != null) {
+        // a tenant forget combines ONLY with `kind` (the owner fence is the boundary). It ignores every
+        // other narrowing key (`id`/`idPrefix` = a different tenant key, §0; `by` = provenance), so
+        // accepting one would silently DROP it and widen a precise/narrowed delete into a full tenant
+        // wipe. Reject the combination rather than over-delete (the scoped-view footgun:
+        // `scoped(A).forget({ by })` injects `scope: A`, which would otherwise wipe all of A).
+        throw new Error("litectx: forget({ scope }) deletes a tenant's whole memory (optionally narrowed by { kind }) and does not combine with { id } / { idPrefix } / { by } — use the base ctx.forget for a precise owner-blind delete");
+      }
+      const owner = this._resolveMemWriteOwner(sel.scope, "forget({ scope })");
+      return this.store.forgetMemory({ ownerFenced: true, owner, kind: sel.kind });
+    }
+    // PRECISE selectors (id / idPrefix) name exactly what to delete — owner-blind like the string
+    // `forget('id')` form, and exempt from the strict throw (which guards omission-based blind wipes).
+    // The BROAD query forms ({ kind } / { by }) are owner-blind by omission → fail closed under strict
+    // (a tenant-blind wipe is unexpressible by omission; mirrors the read/write axes).
+    const precise = sel.id != null || sel.idPrefix != null;
+    if (!precise) {
+      if (this.strictScope) throw new Error("litectx: forget requires an explicit scope under strictScope — pass a tenant scope string or GLOBAL (got none)");
+      if (sel.kind == null && sel.by == null) throw new Error("forget(query) needs at least { id }, { idPrefix }, { kind }, { by }, or { scope }");
+    }
+    return this.store.forgetMemory({ id: sel.id, idPrefix: sel.idPrefix, kind: sel.kind, provenance: sel.by });
   }
 
   /**
@@ -1106,6 +1146,11 @@ export class ScopedView {
   /** Scope-bound {@link LiteCtx#remember}. @param {string} id @param {string} text @param {{ kind?: string, format?: string, by?: string, occurredAt?: number, meta?: Record<string, unknown>, injectionRisk?: "low"|"medium"|"high", expiresAt?: number|null }} [opts] */
   remember(id, text, opts = {}) {
     return this._ctx.remember(id, text, { ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#forget} (multis M4) — deletes ONLY the bound tenant's `fact`+`episode` memory (optionally one `kind`); the bound scope can't be omitted. `{ id }` / `{ idPrefix }` / `{ by }` are rejected here (they don't combine with the tenant fence — use the base `ctx.forget` for a precise/narrowed owner-blind delete). @param {{ kind?: string }} [sel] @returns {number} */
+  forget(sel = {}) {
+    return this._ctx.forget({ ...sel, scope: this._scope });
   }
 }
 
