@@ -257,6 +257,17 @@ Design rules (DECIDED):
     inter-line vertical gaps, packed whole into <800-char segments), stored as `source='direct'` `doc`
     rows carrying the reserved `format` — no schema migration. Untrusted input bounded
     (`maxSize`/`maxPages`/per-page `parseTimeoutMs`); scanned PDFs not OCR'd.
+    - **Refusal (litigated 2026-06-27): no ML-grade PDF converter.** Heavy extractors — `MinerU`,
+      `markitdown` — are rejected on two independent grounds. (1) **Wrong language:** both are Python; a
+      pure-ESM-JS importable lib can't express them as deps (the peer-dep escape hatch only works because
+      `pdfjs-dist`/`mammoth` are npm packages), and shelling to a Python runtime breaks lean/offline/
+      single-install/no-lock-in. (2) **Wrong consumer:** the extraction output feeds a BM25/embeddings
+      recall index, which keys off *terms*, not layout — MinerU's value (tables, formulas, OCR, column
+      reflow) is wasted on a search index. Most JS-native PDF libs are `pdfjs` underneath anyway, so there's
+      no JS drop-in that's meaningfully more robust without ML (→ cloud API → online + lock-in, also out).
+      The robust-converter need is served by the **existing seam**: a consumer runs their own extractor and
+      `ingest()`s the resulting markdown. Heavy extraction lives at the consumer's edge; litectx owns
+      chunking + recall, not document fidelity.
   - **txt/text/log/csv → chunkable** (multis M3 plaintext-chunker, v0.19.0): already plaintext, so **no
     parser, no peer dep, no new format-native chunker** — they reuse the same headless packer (blank-line
     paragraphs, else lines, packed whole to <800 chars; a leading `#` is literal, never a heading). CSV is

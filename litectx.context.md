@@ -545,7 +545,13 @@ on-disk file needed. Routed by **filename extension**:
     PDFs are not OCR'd** — clear "no extractable text"). With no headings/blank lines, paragraphs are
     **reconstructed from the vertical gap between lines**, then packed — **whole paragraphs only** — under
     ~800 chars. A **paragraph or word is never split or truncated**; the lone exception is a single paragraph
-    longer than the cap, which rides whole.
+    longer than the cap, which rides whole. This text-layer extraction is **deliberately not ML-grade** — the
+    output feeds a recall index (BM25/embeddings key off terms, not layout), so heavyweight layout/table/OCR
+    fidelity buys nothing here and would cost the lean, offline base install. **For complex-layout PDFs**
+    (multi-column, dense tables, scanned pages), run your own converter — e.g. an ML extractor like
+    [MinerU](https://github.com/opendatalab/MinerU) or [markitdown](https://github.com/microsoft/markitdown) —
+    in your pipeline and `ingest()` the resulting markdown with a `.md` filename. Heavy extraction lives at the
+    consumer's edge; litectx owns chunking + recall, not document fidelity.
   - **DOCX** (`mammoth.convertToMarkdown`) → markdown that **keeps heading structure**; one section per segment.
   - **txt / text / log / csv** → **already plaintext** (no parser, no peer dep). Packed into passage-sized
     segments — **blank-line paragraphs where present, else individual lines** (line-oriented logs/CSV) — under

@@ -6,7 +6,17 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Docs (shipped — needs a version bump to reach npm)
+- **`litectx.context.md`: PDF complex-layout guidance.** Documented that the `pdfjs` text-layer
+  extraction is deliberately not ML-grade (the output feeds a term-keyed recall index, so layout/table/
+  OCR fidelity buys nothing), and pointed adopters with complex-layout PDFs at the existing seam — run
+  your own converter (e.g. MinerU/markitdown) and `ingest()` the resulting markdown.
+
 ### Docs (repo-only — not shipped in the npm package)
+- **PRD §3.1: recorded the litigated refusal of ML-grade PDF converters** (`MinerU`/`markitdown`) —
+  rejected on two grounds (Python, so inexpressible as a JS-lib dep; and wasted on a recall index that
+  keys off terms not layout); the robust-converter need is served by the existing convert-then-`ingest`
+  seam.
 - **Merged the two product PRDs into a single `docs/01-product/litectx-prd.md`** (Part 1 — the memory
   engine; Part 2 — the CE primitives). The former `litectx-memory-prd.md` + `litectx-ce-prd.md` were
   combined verbatim under one authority — every decision, validation, and exclusion record preserved,
