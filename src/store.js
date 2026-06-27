@@ -176,7 +176,7 @@ const SCHEMA = [
   // (:sid IS NULL OR session IS NULL OR session=:sid)` — an unset reader (`owner`/`session` = NULL on
   // the Store) sees everything (single-tenant default). One row per scoped written id; refreshed on
   // re-write, dropped by `forgetMemory`. `code`/`doc` are the per-worktree FS index, never scoped here.
-  "CREATE TABLE IF NOT EXISTS mem_scope(path TEXT PRIMARY KEY, owner TEXT, session TEXT)",
+  "CREATE TABLE IF NOT EXISTS mem_scope(path TEXT PRIMARY KEY, owner TEXT, session TEXT, created_at INTEGER)",
   // per-upload lifecycle for DIRECT doc/blob rows (multis M3 R2 + R5; `created_at` for recentMemory).
   // Distinct from `mem_scope`:
   //   - `mem_scope` is instance IDENTITY (owner/session, derived from the Store) on fact/episode rows.
@@ -282,6 +282,11 @@ export class Store {
       // ALTER preserves existing scope/expiry rows (their created_at backfills NULL = undated, sorts last).
       const dsCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(doc_scope)"));
       if (!dsCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE doc_scope ADD COLUMN created_at INTEGER");
+      // recentMemory on the memory axis (multis M4 R3): mem_scope gains `created_at` — the fact/episode
+      // counterpart of doc_scope.created_at. Column-additive ALTER; pre-existing scope rows backfill NULL
+      // (undated, sort last under DESC), exactly like the doc axis. Facts order by it; episodes by occurred_at.
+      const msCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(mem_scope)"));
+      if (!msCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE mem_scope ADD COLUMN created_at INTEGER");
     }
   }
 
@@ -464,16 +469,18 @@ export class Store {
         // when the facade passes none (legacy single-tenant), it falls back to this instance's owner —
         // byte-identical. `fact` is owner-scoped (durable, cross-session); `episode` adds the instance
         // session (volatile, own-run; single-dim tenancy keeps session instance-bound). Refresh by
-        // delete-then-insert (mirrors meta); a row only when actually scoped — NULL/NULL is identical to
-        // absent under the recall LEFT JOIN.
+        // delete-then-insert (mirrors meta). The row is now written UNCONDITIONALLY (multis M4 R3) — even
+        // an ownerless, sessionless fact gets one — because `created_at` must exist for EVERY mem row to
+        // order `recentMemoryMem`. A `owner=NULL, session=NULL` row stays byte-identical to the old "no
+        // row" under every fence: each predicate keys on `s.owner`/`s.session` VALUES (all null-tolerant
+        // LEFT JOINs, plus the GLOBAL forget's `s.owner IS NULL`), never on row existence. `created_at` is
+        // the write time (a re-`remember` of the same id refreshes it → the updated fact ranks newest).
         const wOwner = m.owner !== undefined ? m.owner : this.owner;
         const sSession = m.kind === "episode" ? this.session : null;
         this.db.prepare("DELETE FROM mem_scope WHERE path = ?").run(m.id);
-        if (wOwner != null || sSession != null) {
-          this.db
-            .prepare("INSERT INTO mem_scope(path, owner, session) VALUES (?, ?, ?)")
-            .run(m.id, wOwner, sSession);
-        }
+        this.db
+          .prepare("INSERT INTO mem_scope(path, owner, session, created_at) VALUES (?, ?, ?, ?)")
+          .run(m.id, wOwner, sSession, m.createdAt ?? null);
       } else {
         this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
         this.db
@@ -702,10 +709,11 @@ export class Store {
    * **A tenant forget is the STRICTER `s.owner = @owner`, NOT the read fence's `owner IS NULL OR owner =
    * @owner`.** A tenant reads its rows ∪ the shared tier, but must DELETE only its own — a tenant forget
    * that also matched `owner IS NULL` would wipe the shared/global memory for everyone. A GLOBAL forget
-   * (`owner === null`) deletes ONLY the shared tier via `s.owner IS NULL` — a LEFT JOIN, because an
-   * ownerless/global mem row has no `mem_scope` entry at all (see {@link writeMemory}: a `mem_scope` row
-   * exists only when actually scoped). "Delete every owner" is intentionally unexpressible here — that is
-   * {@link reset}'s job.
+   * (`owner === null`) deletes ONLY the shared tier via `s.owner IS NULL` — a LEFT JOIN, matching both a
+   * present `owner=NULL` row (every mem row now carries one for `created_at`, multis M4 R3) and any legacy
+   * row with no `mem_scope` entry. The predicate keys on the owner VALUE, not row existence, so it is
+   * unchanged by the unconditional write. "Delete every owner" is intentionally unexpressible here — that
+   * is {@link reset}'s job.
    *
    * @param {string | null} owner  a tenant `mem_scope.owner`, or `null` for the GLOBAL/shared tier
    * @param {string} [kind]  optional narrow to one kind (e.g. just `episode`); omitted → both
@@ -714,8 +722,8 @@ export class Store {
   forgetMemoryByOwner(owner, kind) {
     /** @type {Record<string, string>} */
     const params = {};
-    // tenant → exact owner (JOIN); GLOBAL/ownerless → owner IS NULL (LEFT JOIN, since a global row may
-    // have no mem_scope entry). Either way the predicate selects ONLY the named tier.
+    // tenant → exact owner (JOIN); GLOBAL/ownerless → owner IS NULL (LEFT JOIN, matching a present
+    // owner=NULL row or a legacy entry-less row). Either way the predicate selects ONLY the named tier.
     const scopePred =
       owner == null
         ? "LEFT JOIN mem_scope s ON s.path = m.path WHERE s.owner IS NULL"
@@ -793,6 +801,51 @@ export class Store {
       /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM docs").get()).n +
       /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM mem").get()).n
     );
+  }
+
+  /**
+   * Count `fact`/`episode` rows for a tenant (multis M4 O1) — owner-fenced with the EXACT predicate
+   * {@link recentMemoryMem}/`search` use (`mem_scope.owner`, session-aware), so it counts only what the
+   * tenant can see (its own ∪ shared). A cheap `count(*)`; no per-row expiry on this axis.
+   * @param {{ kinds: string[], memOwner?: string|null, memSeeAll?: boolean }} filter  `kinds` ⊆ {fact, episode}
+   * @returns {number}
+   */
+  countMem({ kinds, memOwner, memSeeAll }) {
+    const f = this._memFilter({ memOwner, memSeeAll });
+    const kindPh = kinds.map((_, i) => `:k${i}`).join(",");
+    const kindParams = Object.fromEntries(kinds.map((k, i) => [`k${i}`, k]));
+    return /** @type {{ n: number }} */ (
+      this.db
+        .prepare(
+          "SELECT count(*) AS n FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
+            `WHERE m.kind IN (${kindPh}) ` +
+            "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
+            "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid)"
+        )
+        .get({ ...kindParams, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session })
+    ).n;
+  }
+
+  /**
+   * Count direct `doc` rows for a scope (multis M4 O1) — scope-fenced + expiry-aware with the EXACT
+   * predicate {@link recentMemory}/`search` use for docs (`doc_scope.scope`, R5 expiry), so an expired
+   * upload or another tenant's doc is never counted. `code`/file rows are out of scope (this is the
+   * direct-`doc` axis only). A cheap `count(*)`.
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null }} filter  same shape as `search`'s
+   * @returns {number}
+   */
+  countDoc({ scope = null, seeAll, now = null }) {
+    const sa = (seeAll ?? scope == null) ? 1 : 0;
+    return /** @type {{ n: number }} */ (
+      this.db
+        .prepare(
+          "SELECT count(*) AS n FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
+            "WHERE docs.source = 'direct' AND docs.kind = 'doc' " +
+            "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
+            "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now)"
+        )
+        .get({ scope, seeAll: sa, now })
+    ).n;
   }
 
   /** @returns {number} number of symbol/section chunks across all files */
@@ -958,6 +1011,45 @@ export class Store {
             "ORDER BY ds.created_at DESC, docs.path LIMIT :limit"
         )
         .all({ scope, seeAll: sa, now, limit })
+    );
+  }
+
+  /**
+   * Recent `fact`/`episode` rows for a tenant, newest first (multis M4 R3) — the MEMORY-axis sibling of
+   * {@link recentMemory} (the doc-axis recency view). The "no query, just my latest memory for this
+   * tenant" read: `/memory` listing durable facts, or the conversation window pulling recent episodes —
+   * neither of which `recall` (needs query terms) can answer. Owner-fenced with the EXACT predicate the
+   * memory-axis `search()`/`knnCandidates` use (`mem_scope.owner` via {@link _memFilter}: tenant ∪ shared,
+   * session-aware), so it can never surface another tenant's memory. Ordered by **`occurred_at` for
+   * episodes, `created_at` for facts** (`COALESCE(m.occurred_at, s.created_at)`): an episode's semantic
+   * time (possibly backdated) wins where present, else the write time — the spec's ordering.
+   *
+   * No expiry predicate: the memory axis carries no per-row TTL (unlike the doc axis's `expires_at`);
+   * episode staleness is handled upstream by the 30-day {@link pruneStaleEpisodes} (pruned rows are
+   * deleted, so absent here by construction). A row written before `created_at` existed sorts last (NULL).
+   * Logs NO recall — recency is not query-demand (mirrors the doc-axis verb). `path` (the id) feeds
+   * {@link getItem}; the facade attaches verbatim body + opaque meta (where the caller parks `role`, etc).
+   * @param {{ kinds: string[], memOwner?: string|null, memSeeAll?: boolean, limit: number }} filter
+   *   `kinds` ⊆ {fact, episode} (validated by the facade); owner fence same shape as `search`'s.
+   * @returns {{ path: string, kind: string, format: string, occurredAt: number|null, createdAt: number|null }[]}
+   */
+  recentMemoryMem({ kinds, memOwner, memSeeAll, limit }) {
+    const f = this._memFilter({ memOwner, memSeeAll });
+    const kindPh = kinds.map((_, i) => `:k${i}`).join(",");
+    const kindParams = Object.fromEntries(kinds.map((k, i) => [`k${i}`, k]));
+    return /** @type {{ path: string, kind: string, format: string, occurredAt: number|null, createdAt: number|null }[]} */ (
+      this.db
+        .prepare(
+          "SELECT m.path AS path, m.kind AS kind, m.format AS format, m.occurred_at AS occurredAt, s.created_at AS createdAt " +
+            "FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
+            `WHERE m.kind IN (${kindPh}) ` +
+            // identical owner/session fence to search()/knnCandidates — KNN can't bypass it, nor can this.
+            "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
+            "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid) " +
+            // episodes by occurred_at (semantic, may be backdated), facts by created_at (write time).
+            "ORDER BY COALESCE(m.occurred_at, s.created_at) DESC, m.path LIMIT :limit"
+        )
+        .all({ ...kindParams, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session, limit })
     );
   }
 

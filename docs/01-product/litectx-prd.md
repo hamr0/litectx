@@ -345,11 +345,6 @@ Design rules (DECIDED):
     `mem_scope.owner` exactly as it fences a `doc` on `doc_scope.scope` (the same lesson the doc axis
     learned in v0.18: "fencing recall without get is only half the boundary"). A bare non-strict `get(id)`
     stays unfenced (legacy by-id model); under `strictScope` a bare `get(id)` throws.
-  *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration — replace its parallel
-  parser/chunker/store with litectx; v0.18 hardened the R2 scope default to fail-closed; v0.20 added the
-  `recentMemory` empty-match recency fallback; v0.21 extended the per-call scope + `strictScope` to the
-  `fact`/`episode` memory axis for one-instance multi-tenancy; v0.22 added the symmetric tenant-scoped
-  `forget`.)*
   - **Tenant-scoped memory forget (v0.22, multis M4)** — the delete-side mirror of v0.21's read fence.
     Until v0.22 `forget` could drop one row by `id` or bulk-invalidate by `{ kind, by }` **owner-blind**
     (across every tenant), so a shared instance had no way to clear one tenant's memory without reaching
@@ -369,6 +364,29 @@ Design rules (DECIDED):
     `{ kind }`: passing any other narrower (`id`/`idPrefix`/`by`) throws rather than silently dropping it,
     which also closes a scoped-view footgun (an injected `scope` would otherwise widen
     `scoped(A).forget({ by })` into a full tenant-A wipe).
+  - **Memory-axis recency + count, KNN-fence lock (v0.23, multis M4 R3/O1/R4)** — the reads that let a
+    consumer keep **no** homegrown memory store. **R3:** `recentMemory` gains a `kind` axis selector —
+    `kind:'fact'|'episode'` returns that tenant's memory **newest-first by `occurred_at` (episodes) /
+    `created_at` (facts)**, fenced on `mem_scope.owner` exactly like `recall`/`get` (doc-axis behavior
+    byte-identical when `kind` is omitted). It carries each row's verbatim `body` + opaque `meta` and
+    **never parses the stored text** — the consumer carries `role`/turn markers in `meta`, so the
+    conversation window reconstructs faithfully (no lossy `User:/Assistant:` string-splitting; litectx
+    owns content, never transcript grammar). Mixing `doc` with `fact`/`episode` in one call throws (the
+    two scope axes resolve differently). Backed by a new `mem_scope.created_at` column — written
+    unconditionally, column-additive ALTER, a legacy undated row sorts last (mirrors v0.20's
+    `doc_scope.created_at`). **No per-row TTL on the memory axis** (unlike doc R5): episode staleness is
+    the existing 30-day prune, facts are durable. **O1:** `count({ scope, kind })` sizes a tenant's
+    memory by kind for `/memory`-style surfaces without pulling rows — same fences, additive across both
+    axes (so one call may sum facts ∪ shared + live docs ∪ shared), fail-closed under `strictScope`.
+    **R4:** the v0.21 per-tenant fence on the **KNN/semantic** recall path is now regression-locked — a
+    semantic nominee a *different* tenant holds is never floated past the gate (`knnCandidates` already
+    routed through `mem_scope.owner`; v0.23 adds the failable proof: a fence-bypass mutation makes a
+    cross-tenant nominee leak and the test fails). Purely additive; `ScopedView` gains `count` and
+    `recentMemory`'s `kind`.
+  *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration; v0.18 hardened the R2
+  scope default; v0.20 added the `recentMemory` empty-match recency fallback; v0.21 extended per-call
+  scope + `strictScope` to the memory axis; v0.22 added tenant-scoped `forget`; v0.23 extended
+  `recentMemory` + a new `count` to the memory axis and locked the KNN fence.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.

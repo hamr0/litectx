@@ -1051,32 +1051,58 @@ export class LiteCtx {
   }
 
   /**
-   * Recent written-`doc` memory, newest first (multis M3) — the recency sibling of `recall({kind:'doc'})`
-   * for the empty-FTS-match fallback. When a query carries no usable term (an all-stopword "what did I
-   * say"), `recall` returns `[]` (no relevance to rank on); call `recentMemory` to ground the agent on the
-   * latest uploads for its scope instead. **The consumer owns the policy** (when to fall back); litectx
-   * owns the mechanism — so it is a separate verb, not a `recall` flag (which would mix recency into a
-   * relevance ranking and let it pollute the demand signal).
+   * Recent written memory, newest first — the recency sibling of `recall` for the empty-FTS-match
+   * fallback. When a query carries no usable term (an all-stopword "what did I say"), `recall` returns
+   * `[]` (no relevance to rank on); call `recentMemory` to ground the agent on its latest memory for the
+   * scope instead. **The consumer owns the policy** (when to fall back); litectx owns the mechanism — so
+   * it is a separate verb, not a `recall` flag (which would mix recency into a relevance ranking and let
+   * it pollute the demand signal).
    *
-   * Returns direct `doc` rows (those written via {@link ingest}/{@link remember}; blobs included by
-   * filename) ordered by write time, capped at `n` (default 10). **Scope-fenced + expiry-aware exactly
-   * like `recall`:** `scope` narrows to `scope ∪ null-global` and expired rows (R5) are always excluded —
-   * the fallback can never leak another tenant's memory or surface a dead row. Under `strictScope`, a
-   * missing `scope` THROWS (the doc axis, same as `recall({kind:'doc'})`/`get`/`ingest`); pass {@link
-   * GLOBAL} for the shared tier. `fact`/`episode` (the owner/session axis) and `code`/files are not
-   * included — this is the doc axis only.
+   * **Two axes, picked by `kind` (multis M3 doc → M4 R3 memory):**
+   * - `kind` omitted or `'doc'` → the DOC axis (default; byte-identical to the original verb). Direct
+   *   `doc` rows (written via {@link ingest}/{@link remember}; blobs by filename), ordered by write time,
+   *   fenced to `scope ∪ null-global` on `doc_scope.scope`, **expiry-aware** (R5 — expired excluded). Under
+   *   `strictScope` a missing `scope` THROWS (same as `recall({kind:'doc'})`/`get`/`ingest`).
+   * - `kind: 'fact' | 'episode'` (or an array of them) → the MEMORY axis (R3). `fact`/`episode` rows for
+   *   the tenant, ordered by **`occurred_at` (episodes) / `created_at` (facts)** newest-first, fenced on
+   *   `mem_scope.owner` (`tenant ∪ shared`, session-aware) — the SAME fence as `recall`/`get` on memory, so
+   *   it can never surface another tenant's rows. Under `strictScope` a missing `scope` THROWS. No per-row
+   *   expiry on this axis (episode staleness is the 30-day prune; pruned rows are already gone).
    *
-   * Each row is a `recall`-shaped hit (`{ path, kind, format }`) plus `createdAt` (epoch ms; `null` for a
-   * doc written before this column shipped — sorted last), the opaque `meta` when present, and `body` when
-   * `body:true` (VERBATIM stored text; `null` for a blob — fetch its bytes with {@link get}). It does NOT
-   * log a recall: recency is not query-demand, so counting it would inflate `use` for whatever is newest.
+   * The two axes resolve scope differently (`doc_scope` vs `mem_scope.owner`), so a single call mixes ONE
+   * axis only: `doc` with `fact`/`episode` together THROWS — call once per axis (they are distinct stores).
+   * Pass {@link GLOBAL} for the shared tier on either.
    *
-   * @param {{ scope?: string | symbol, n?: number, body?: boolean }} [opts]
-   * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null })[]}
+   * Each row is a `recall`-shaped hit (`{ path, kind, format }`) plus `createdAt` (epoch ms; `null` if
+   * written before the column shipped — sorted last), `occurredAt` on memory rows (epoch ms; `null` for a
+   * fact), the opaque `meta` when present (where the caller parks `role`/turn markers for faithful history
+   * reconstruction), and `body` when `body:true` (VERBATIM stored text; `null` for a blob — fetch its bytes
+   * with {@link get}). It does NOT log a recall: recency is not query-demand, so counting it would inflate
+   * `use` for whatever is newest.
+   *
+   * @param {{ scope?: string | symbol, kind?: string | string[], n?: number, body?: boolean }} [opts]
+   * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null, occurredAt?: number|null })[]}
    */
   recentMemory(opts = {}) {
-    const rs = this._resolveReadScope(opts.scope, this.strictScope, "recentMemory");
-    const hits = this.store.recentMemory({ scope: rs.scope, seeAll: rs.seeAll, now: Date.now(), limit: opts.n ?? 10 });
+    const kinds = Array.isArray(opts.kind) ? opts.kind : [opts.kind ?? "doc"];
+    const bad = kinds.filter((k) => k !== "doc" && k !== "fact" && k !== "episode");
+    if (bad.length) throw new Error(`recentMemory: kind must be doc | fact | episode (got "${bad.join(", ")}")`);
+    const wantsDoc = kinds.includes("doc");
+    const memKinds = kinds.filter((k) => k === "fact" || k === "episode");
+    if (wantsDoc && memKinds.length) {
+      // the doc axis fences on doc_scope.scope, the memory axis on mem_scope.owner — distinct stores with
+      // distinct scope resolution. Mixing them in one call has no single fence; the caller queries per axis.
+      throw new Error("recentMemory: doc and fact/episode are separate scope axes — call once per axis (doc_scope vs mem_scope.owner)");
+    }
+    const hits = wantsDoc
+      ? (() => {
+          const rs = this._resolveReadScope(opts.scope, this.strictScope, "recentMemory");
+          return this.store.recentMemory({ scope: rs.scope, seeAll: rs.seeAll, now: Date.now(), limit: opts.n ?? 10 });
+        })()
+      : (() => {
+          const rs = this._resolveMemReadScope(opts.scope, "recentMemory");
+          return this.store.recentMemoryMem({ kinds: memKinds, memOwner: rs.memOwner, memSeeAll: rs.memSeeAll, limit: opts.n ?? 10 });
+        })();
     // _attachMeta/_attachBodies mutate in place reading only path/chunk/meta/body — never `score`, which
     // these unranked recency rows don't carry (their param is `Omit<Hit,"score">[]`, so no score lie).
     this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op when none)
@@ -1087,6 +1113,37 @@ export class LiteCtx {
   /** @returns {number} total stored items — indexed documents + written memory */
   size() {
     return this.store.count();
+  }
+
+  /**
+   * Count a tenant's written memory by kind (multis M4 O1) — for "you have N facts / M episodes / K docs
+   * here" surfaces (`/memory`, `/docs`) without pulling rows. Tenant-fenced + expiry-aware on the SAME
+   * predicates as {@link recall}/{@link recentMemory}: `fact`/`episode` fence on `mem_scope.owner`,
+   * direct `doc` on `doc_scope.scope` (expired excluded). Unlike `recentMemory`, a count is purely
+   * additive, so `kind` MAY span both axes in one call — each kind is counted under its own fence and
+   * the totals summed (a tenant's facts ∪ shared + its live docs ∪ shared). `scope` resolves once per
+   * axis touched (so under `strictScope` a missing scope THROWS exactly as the read verbs do); pass
+   * {@link GLOBAL} for the shared tier. `code`/file rows are repo-global — out of scope here (use
+   * {@link size} for the grand total).
+   * @param {{ scope?: string | symbol, kind?: string | string[] }} [opts]  `kind` ⊆ {fact, episode, doc};
+   *   omitted → all three (the tenant's whole writable memory). Single kind or array.
+   * @returns {number}
+   */
+  count(opts = {}) {
+    const kinds = Array.isArray(opts.kind) ? opts.kind : opts.kind ? [opts.kind] : ["fact", "episode", "doc"];
+    const bad = kinds.filter((k) => k !== "fact" && k !== "episode" && k !== "doc");
+    if (bad.length) throw new Error(`count: kind must be fact | episode | doc (got "${bad.join(", ")}")`);
+    let total = 0;
+    const memKinds = kinds.filter((k) => k === "fact" || k === "episode");
+    if (memKinds.length) {
+      const rs = this._resolveMemReadScope(opts.scope, "count");
+      total += this.store.countMem({ kinds: memKinds, memOwner: rs.memOwner, memSeeAll: rs.memSeeAll });
+    }
+    if (kinds.includes("doc")) {
+      const rs = this._resolveReadScope(opts.scope, this.strictScope, "count");
+      total += this.store.countDoc({ scope: rs.scope, seeAll: rs.seeAll, now: Date.now() });
+    }
+    return total;
   }
 
   close() {
@@ -1123,9 +1180,14 @@ export class ScopedView {
     return this._ctx.get(id, { ...opts, scope: this._scope });
   }
 
-  /** Scope-bound {@link LiteCtx#recentMemory}. @param {{ n?: number, body?: boolean }} [opts] */
+  /** Scope-bound {@link LiteCtx#recentMemory}. @param {{ kind?: string | string[], n?: number, body?: boolean }} [opts] */
   recentMemory(opts = {}) {
     return this._ctx.recentMemory({ ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#count} (multis M4 O1). @param {{ kind?: string | string[] }} [opts] */
+  count(opts = {}) {
+    return this._ctx.count({ ...opts, scope: this._scope });
   }
 
   /** Scope-bound {@link LiteCtx#reviewCandidates} (multis M4). @param {number} [threshold=5] */

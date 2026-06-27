@@ -129,3 +129,138 @@ test("ScopedView.recentMemory carries the bound scope", async () => {
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
+
+// ── memory axis (multis M4 R3): kind:'fact'|'episode' → recency over fact/episode, owner-fenced ──
+
+test("memory axis: facts newest-first by created_at; a re-stated fact bumps to front", async () => {
+  const { root, dbPath } = db("mem-fact-order");
+  const ctx = new LiteCtx({ root, dbPath });
+  await ctx.remember("fact:1", "age is 44", { kind: "fact" });
+  await sleep(3);
+  await ctx.remember("fact:2", "deadline is aug 20", { kind: "fact" });
+
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "fact", n: 50 })), ["fact:2", "fact:1"], "newest fact first");
+  // a superseding re-write of the same id (W4 upsert) refreshes created_at → ranks newest
+  await sleep(3);
+  await ctx.remember("fact:1", "age is 45", { kind: "fact" });
+  const r = ctx.recentMemory({ kind: "fact", n: 50 });
+  assert.equal(r[0].path, "fact:1", "re-stated fact bumps to front");
+  assert.equal(r.length, 2, "still one row per id — no pile-up");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: episodes order by occurred_at, NOT write time (a backdated episode sorts older)", async () => {
+  const { root, dbPath } = db("mem-ep-order");
+  const ctx = new LiteCtx({ root, dbPath });
+  const t = Date.now();
+  // ep:recent has the NEWER occurred_at but is WRITTEN FIRST; ep:old is written later but backdated.
+  // Ordering by occurred_at (not created_at/write order) must put ep:recent first.
+  await ctx.remember("ep:recent", "User: hi\nAssistant: hello", { kind: "episode", occurredAt: t });
+  await sleep(3);
+  await ctx.remember("ep:old", "User: earlier\nAssistant: yes", { kind: "episode", occurredAt: t - 100_000 });
+
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "episode", n: 50 })), ["ep:recent", "ep:old"], "occurred_at drives order");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: kind array blends fact+episode on COALESCE(occurred_at, created_at)", async () => {
+  const { root, dbPath } = db("mem-blend");
+  const ctx = new LiteCtx({ root, dbPath });
+  const t = Date.now();
+  await ctx.remember("fact:f", "a durable fact", { kind: "fact" }); // ranks on created_at ≈ t
+  await ctx.remember("ep:future", "later exchange", { kind: "episode", occurredAt: t + 100_000 }); // newest
+  await ctx.remember("ep:past", "older exchange", { kind: "episode", occurredAt: t - 100_000 }); // oldest
+
+  const r = paths(ctx.recentMemory({ kind: ["fact", "episode"], n: 50 }));
+  assert.equal(r[0], "ep:future", "future-dated episode is newest");
+  assert.equal(r[r.length - 1], "ep:past", "past-dated episode is oldest");
+  assert.ok(r.includes("fact:f"), "the fact blends in by its created_at");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: owner-fenced to tenant ∪ shared — never another tenant's memory (the security claim)", async () => {
+  const { root, dbPath } = db("mem-fence");
+  const ctx = new LiteCtx({ root, dbPath }); // ownerless instance, per-call tenant scope
+  await ctx.remember("fact:a", "tenant A secret", { kind: "fact", scope: "A" });
+  await ctx.remember("fact:b", "tenant B secret", { kind: "fact", scope: "B" });
+  await ctx.remember("fact:g", "shared truth", { kind: "fact", scope: GLOBAL });
+
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "fact", scope: "A", n: 50 })).sort(), ["fact:a", "fact:g"], "A ∪ shared, never B");
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "fact", scope: "B", n: 50 })).sort(), ["fact:b", "fact:g"], "B ∪ shared, never A");
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "fact", scope: GLOBAL, n: 50 })), ["fact:g"], "GLOBAL = shared tier only");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: body verbatim + opaque meta.role survive (faithful history reconstruction)", async () => {
+  const { root, dbPath } = db("mem-meta");
+  const ctx = new LiteCtx({ root, dbPath });
+  // multis carries role/turn markers in meta (NOT parsed from the body string) — R3 fork 2.
+  await ctx.remember("ep:u", "what is my age?", { kind: "episode", meta: { role: "user", turn: 1 } });
+  await ctx.remember("ep:a", "you are 45", { kind: "episode", meta: { role: "assistant", turn: 2 } });
+
+  const r = ctx.recentMemory({ kind: "episode", n: 50, body: true });
+  const u = r.find((h) => h.path === "ep:u");
+  const a = r.find((h) => h.path === "ep:a");
+  assert.equal(u.body, "what is my age?", "user body verbatim");
+  assert.equal(u.meta.role, "user", "role passthrough");
+  assert.equal(a.meta.role, "assistant", "role passthrough");
+  assert.ok(typeof u.occurredAt === "number", "occurredAt exposed for ordering/reconstruction");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: a recency read does NOT bump the demand signal (a recall DOES — the failable control)", async () => {
+  const { root, dbPath } = db("mem-nouse");
+  const ctx = new LiteCtx({ root, dbPath });
+  await ctx.remember("fact:jwt", "auth uses jwt tokens", { kind: "fact", scope: "A" });
+
+  // recentMemory must not log a recall → reviewCandidates(1) sees use=0 → empty.
+  ctx.recentMemory({ kind: "fact", scope: "A", n: 50 });
+  assert.deepEqual(ctx.reviewCandidates(1, { scope: "A" }).map((c) => c.id ?? c.path), [], "recentMemory left use at 0");
+
+  // the control: a real recall of the same row DOES bump it → now it's a review candidate.
+  const hits = await ctx.recall("jwt", { kind: "fact", scope: "A" });
+  assert.ok(hits.length > 0, "recall found the fact");
+  assert.ok(ctx.reviewCandidates(1, { scope: "A" }).length > 0, "recall bumped use → review candidate");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: strictScope throws on a bare memory recency read; mixing doc+mem kinds throws", async () => {
+  const { root, dbPath } = db("mem-strict");
+  const ctx = new LiteCtx({ root, dbPath, strictScope: true });
+  await ctx.remember("fact:t", "tenant fact", { kind: "fact", scope: "t1" });
+
+  assert.throws(() => ctx.recentMemory({ kind: "fact" }), /strictScope/, "missing scope throws on memory axis");
+  assert.deepEqual(paths(ctx.recentMemory({ kind: "fact", scope: "t1", n: 50 })), ["fact:t"], "explicit tenant scope works");
+  // the two axes resolve scope differently → a single call can't mix them
+  assert.throws(() => ctx.recentMemory({ kind: ["doc", "fact"], scope: "t1" }), /separate scope axes/, "doc+mem in one call throws");
+  assert.throws(() => ctx.recentMemory({ kind: "bogus", scope: "t1" }), /doc \| fact \| episode/, "unknown kind throws");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("memory axis: ScopedView binds the tenant for fact/episode recency", async () => {
+  const { root, dbPath } = db("mem-view");
+  const ctx = new LiteCtx({ root, dbPath });
+  await ctx.remember("fact:a", "A fact", { kind: "fact", scope: "A" });
+  await ctx.remember("fact:b", "B fact", { kind: "fact", scope: "B" });
+  await ctx.remember("fact:g", "shared", { kind: "fact", scope: GLOBAL });
+
+  const view = ctx.scoped("A");
+  assert.deepEqual(paths(view.recentMemory({ kind: "fact", n: 50 })).sort(), ["fact:a", "fact:g"], "bound to A + shared, never B");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});

@@ -82,7 +82,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **MCP server** (`litectx-mcp` bin — stdio, client-spawned, all public operations) + CLI write parity (`remember`/`forget`/`--embeddings`/`--no-log`) | ✅ shipped (slice 10) |
 | **KNN union** — embeddings-tier paraphrase recall for `fact`/`episode` (cosine nominates, not just re-ranks) | ✅ shipped (slice 11 — bench: para 0.000→0.574, exact/morph held) |
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
-| **`recentMemory()`** — recall's empty-FTS-match recency sibling: newest direct `doc` rows, scope-fenced + expiry-aware, doc-axis only | ✅ shipped (multis M3 fast-follow — separate verb so recency never pollutes recall ranking) |
+| **`recentMemory()`** — recall's empty-FTS-match recency sibling: newest rows by time, scope-fenced. **Doc axis** (default) + **memory axis** (`kind:'fact'|'episode'`, ordered `occurredAt`/`createdAt`) | ✅ shipped (M3 doc → M4 R3 memory — separate verb so recency never pollutes recall ranking) |
+| **`count({scope, kind})`** — per-tenant memory count by kind (`/memory`, `/docs`), tenant-fenced + expiry-aware, additive across axes | ✅ shipped (multis M4 O1) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
 | **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; `writeAudit` records a JSONL line per write **standalone (gate-independent)**; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; gate demand-gated, no producer for `memory.inject`; audit usable now without a gate) |
@@ -361,7 +362,7 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
 ### `ctx.scoped(scope)` → `ScopedView`
 A **scope-bound view** (multis M3 fail-closed ask; extended to memory in M4) — a per-tenant handle over a
 single shared instance. `ctx.scoped("chat-42")` returns a handle whose `recall` / `get` / `ingest` /
-`remember` / `recentMemory` / `reviewCandidates` / `promotionCandidates` carry that scope **automatically**,
+`remember` / `recentMemory` / `count` / `reviewCandidates` / `promotionCandidates` carry that scope **automatically**,
 so "forgot to pass a scope" becomes a non-existent code path (there is no per-call `scope` to omit). One
 bound tenant string now fences **every fenceable kind** — doc/blob uploads (via `doc_scope`) **and**
 `fact`/`episode` memory (via the per-call `mem_scope.owner`, M4) — so a single `LiteCtx` is a complete
@@ -375,7 +376,7 @@ path the only one a call site touches.
   with no scope is the very footgun this closes, so it can't be constructed. (Throws even when
   `strictScope` is off — the view's own invariant.)
 - Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `forget`, `recentMemory`,
-  `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
+  `count`, `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
   `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory.
   `impact`/`index`/`recent` are not on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
@@ -776,31 +777,58 @@ activation into recall was POC-falsified as repo-dependent (it floats the same h
 every query), so the edit→recall re-rank ships at zero. `recentActivity` also writes nothing
 to the recall audit log — it is not a demand signal.
 
-### `ctx.recentMemory(opts?)` → `(Omit<Hit, "score"> & { createdAt })[]`
-**Recent written-`doc` memory, newest first** — the recency sibling of `recall({ kind: "doc" })`,
-for the empty-FTS-match fallback. When a query carries no usable term (an all-stopword *"what did
-I say"*), `recall` returns `[]` (there is no relevance to rank on); call `recentMemory` to ground
-the agent on the latest uploads for its scope instead. The **consumer owns the policy** (whether/
-when to fall back); litectx owns the mechanism — so it is a separate verb, not a `recall` flag
-(which would mix recency into a relevance ranking and pollute the demand signal):
+### `ctx.recentMemory(opts?)` → `(Omit<Hit, "score"> & { createdAt, occurredAt? })[]`
+**Recent written memory, newest first** — the recency sibling of `recall`, for the empty-FTS-match
+fallback. When a query carries no usable term (an all-stopword *"what did I say"*), `recall` returns
+`[]` (there is no relevance to rank on); call `recentMemory` to ground the agent on its latest memory
+for the scope instead. The **consumer owns the policy** (whether/when to fall back); litectx owns the
+mechanism — so it is a separate verb, not a `recall` flag (which would mix recency into a relevance
+ranking and pollute the demand signal):
 
 ```js
 let hits = await ctx.recall(q, { kind: "doc", scope, body: true });
-if (!hits.length) hits = ctx.recentMemory({ scope, body: true });   // recency fallback
+if (!hits.length) hits = ctx.recentMemory({ scope, body: true });   // doc recency fallback
+
+// the conversation window: this tenant's latest episodes, newest-first, role carried in meta
+const turns = ctx.scoped(tenant).recentMemory({ kind: "episode", n: 20, body: true });
 ```
 
-`opts`: `scope` (a tenant scope string or `GLOBAL`), `n` (cap, default 10), `body` (inline the
-verbatim text, default off — `null` for a blob; fetch its bytes with `get`). Returns direct `doc`
-rows — those written via `ingest`/`remember` (blobs included, by filename) — ordered by write
-time, each a `recall`-shaped hit plus `createdAt` (epoch ms; `null` only for a doc written before
-this field shipped, which sorts last).
+**Two axes, picked by `kind`** (multis M3 doc → M4 memory):
+- `kind` omitted or `"doc"` → the **doc axis** (default; unchanged). Direct `doc` rows (those written
+  via `ingest`/`remember`, blobs by filename), ordered by write time, fenced to `scope ∪ null-global`
+  on `doc_scope.scope`, **expiry-aware** (expired excluded). Each row carries `createdAt` (epoch ms;
+  `null` only for a doc written before this field shipped, which sorts last).
+- `kind: "fact" | "episode"` (or an array of them) → the **memory axis** (M4 R3). `fact`/`episode`
+  rows for the tenant, ordered by **`occurredAt` (episodes) / `createdAt` (facts)** newest-first,
+  fenced on `mem_scope.owner` (`tenant ∪ shared`, session-aware) — the **same** fence as `recall`/`get`
+  on memory, so KNN can't bypass it and neither can this. No per-row expiry on this axis (episode
+  staleness is the 30-day prune; pruned rows are already gone). Each row adds `occurredAt` (epoch ms;
+  `null` for a fact).
 
-**Scope-fenced + expiry-aware exactly like `recall`:** `scope` narrows to `scope ∪ null-global`
-(`GLOBAL` = the shared tier only), and expired rows are always excluded — the fallback can never
-leak another tenant's memory or surface a dead row. Under `strictScope`, a missing `scope` **throws**
-(the doc axis, same as `recall({ kind: "doc" })` / `get` / `ingest`). The `fact`/`episode` (owner/
-session) axis and `code`/files are **not** included — this is the doc axis only. Like
-`recentActivity`, it writes nothing to the recall audit log (recency is not query-demand). Sync.
+The two axes resolve scope differently (`doc_scope` vs `mem_scope.owner`), so a single call mixes **one
+axis only** — `doc` together with `fact`/`episode` **throws** (call once per axis). `opts`: `scope`
+(tenant string or `GLOBAL`), `kind` (above), `n` (cap, default 10), `body` (inline verbatim text,
+default off — `null` for a blob). Returns `recall`-shaped hits plus the time fields above and the opaque
+`meta` when present — **where the caller parks `role`/turn markers for faithful history reconstruction;
+litectx never parses the stored text**. Under `strictScope` a missing `scope` **throws** (either axis).
+Like `recentActivity`, it writes nothing to the recall audit log (recency is not query-demand). Sync.
+
+### `ctx.count(opts?)` → `number`
+**Per-tenant memory count by kind** (multis M4 O1) — for *"you have N facts / M episodes / K docs
+here"* surfaces (`/memory`, `/docs`) without pulling rows. Tenant-fenced + expiry-aware on the **same**
+predicates as `recall`/`recentMemory`: `fact`/`episode` fence on `mem_scope.owner`, direct `doc` on
+`doc_scope.scope` (expired excluded). A count is purely additive, so `kind` **may span both axes** in
+one call — each kind is counted under its own fence and the totals summed.
+
+```js
+ctx.scoped("chat:42").count({ kind: "fact" });        // this tenant's live facts
+ctx.count({ scope: "chat:42" });                      // facts + episodes + docs for the tenant
+```
+
+`opts`: `scope` (tenant string or `GLOBAL`), `kind` ⊆ `{fact, episode, doc}` — single, array, or
+omitted (→ all three: the tenant's whole writable memory). `code`/file rows are repo-global and out of
+scope here (use `size` for the grand total). Under `strictScope` a missing `scope` **throws** for any
+axis touched. Sync, cheap (a `SELECT count(*)`).
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).

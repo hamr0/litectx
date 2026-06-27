@@ -6,12 +6,6 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
-### Docs (shipped — needs a version bump to reach npm)
-- **`litectx.context.md`: PDF complex-layout guidance.** Documented that the `pdfjs` text-layer
-  extraction is deliberately not ML-grade (the output feeds a term-keyed recall index, so layout/table/
-  OCR fidelity buys nothing), and pointed adopters with complex-layout PDFs at the existing seam — run
-  your own converter (e.g. MinerU/markitdown) and `ingest()` the resulting markdown.
-
 ### Docs (repo-only — not shipped in the npm package)
 - **PRD §3.1: recorded the litigated refusal of ML-grade PDF converters** (`MinerU`/`markitdown`) —
   rejected on two grounds (Python, so inexpressible as a JS-lib dep; and wasted on a recall index that
@@ -33,6 +27,45 @@ All notable changes to this project are documented here, following
   `docs/00-context/README.md`, `baresuite-litectx-prd.md`, `build-studies.md`, `examples/contextgraph`,
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
+
+## [0.23.0] — 2026-06-27
+
+### Added
+- **`recentMemory` on the memory axis** (multis M4 R3) — time-ordered recency over `fact`/`episode`,
+  the last piece that lets a consumer keep **no** homegrown memory store. The verb was doc-axis only
+  (newest uploads for the empty-FTS-match fallback); now a `kind` selects the axis:
+  - `kind: 'fact' | 'episode'` (or an array) → that tenant's memory, **newest-first by `occurredAt`
+    (episodes) / `createdAt` (facts)**, fenced on `mem_scope.owner` (`tenant ∪ shared`, session-aware) —
+    the **same** fence as `recall`/`get`, so it can never surface another tenant's rows.
+  - `kind` omitted or `'doc'` → unchanged doc-axis behavior (byte-identical).
+  - Returns `recall`-shaped hits + `createdAt` + `occurredAt` (memory rows) + the opaque `meta` —
+    **where the caller carries `role`/turn markers; litectx never parses the stored text** (so the
+    conversation window reconstructs faithfully without lossy string-parsing). `body:true` inlines the
+    verbatim text. Logs no recall (recency is not query-demand). Mixing `doc` with `fact`/`episode` in
+    one call **throws** (distinct scope axes). Under `strictScope`, a missing `scope` throws on either.
+  - Backed by a new `mem_scope.created_at` column, written unconditionally (column-additive ALTER; a
+    legacy row with no `created_at` sorts last, undated). `ScopedView.recentMemory` carries the bound
+    scope and gains `kind`.
+- **`count({ scope, kind })`** (multis M4 O1) — per-tenant memory count by kind for `/memory`-style
+  surfaces, without pulling rows. Tenant-fenced + expiry-aware on the **same** predicates as
+  `recall`/`recentMemory` (`fact`/`episode` on `mem_scope.owner`, direct `doc` on `doc_scope.scope` with
+  expired excluded). Additive, so `kind` may span both axes in one call (each counted under its own
+  fence, summed); `kind` omitted → all three writable kinds for the scope. Fail-closed under
+  `strictScope`. On `ScopedView` too.
+
+### Changed
+- **The per-tenant memory fence now also covers the KNN/semantic recall path** is **confirmed and
+  regression-locked** (multis M4 R4) — `recall(kind:'fact'|'episode', scope)` with embeddings on blends
+  BM25 + cosine while a semantic nominee stays inside `mem_scope.owner`: a fact only another tenant holds
+  is never floated past the gate. (No code change — `knnCandidates` already routed through the fence;
+  this release adds the proof: a fence-bypass mutation makes a cross-tenant nominee leak, and the test
+  fails.)
+
+### Docs (shipped — bundled into this bump)
+- **`litectx.context.md`: PDF complex-layout guidance.** Documented that the `pdfjs` text-layer
+  extraction is deliberately not ML-grade (the output feeds a term-keyed recall index, so layout/table/
+  OCR fidelity buys nothing), and pointed adopters with complex-layout PDFs at the existing seam — run
+  your own converter (e.g. MinerU/markitdown) and `ingest()` the resulting markdown.
 
 ## [0.22.0] — 2026-06-27
 
