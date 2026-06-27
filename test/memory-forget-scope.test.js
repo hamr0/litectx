@@ -139,9 +139,10 @@ test("M4 forget: legacy forget('id') and owner-blind forget({ kind, by }) behave
   // owner-blind { kind, by } — still reaches every tenant (legacy bulk invalidation, unchanged)
   const removedFacts = ctx.forget({ kind: "fact" }); // fact:a already gone above → fact:b + fact:human remain
   assert.equal(removedFacts, 2, "owner-blind { kind:'fact' } deletes facts across ALL tenants (fact:b + fact:human)");
-  assert.equal(ctx.get("fact:b"), null, "B's fact removed by the owner-blind bulk delete (legacy behavior)");
+  // W4: B's rows are owner-keyed, so verify via a SCOPED get (a bare get can't reach a tenant row).
+  assert.equal(ctx.get("fact:b", { scope: B }), null, "B's fact removed by the owner-blind bulk delete (legacy behavior)");
   // episodes survive the fact-kinded bulk delete
-  assert.ok(ctx.get("ep:b") != null, "episodes untouched by { kind:'fact' }");
+  assert.ok(ctx.get("ep:b", { scope: B }) != null, "episodes untouched by { kind:'fact' }");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

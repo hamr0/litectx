@@ -28,6 +28,50 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.24.0] — 2026-06-27
+
+### Added
+- **Tenant-fenced supersede by stable key** (multis M4 W4) — re-`remember`ing the same `id` under the
+  same `scope` now REPLACES the prior value in place (one row, the latest), so a restated fact never
+  piles up; the SAME `id` under a DIFFERENT `scope` is a SEPARATE row, so one tenant can never overwrite
+  another's memory by id. `remember` is the upsert; detecting "same subject, new value" stays the
+  caller's job. (litectx delivers the upsert shape of the W4 ask — `remember`'s guaranteed, documented,
+  tenant-fenced upsert — not a separate `update()` verb; the ask permits either.)
+
+### Changed
+- **Memory-axis rows are keyed by an owner-qualified physical key** (`owner\x1Fid`) so two tenants'
+  same id are distinct rows under the one `path` primary key — no table-shape change (the five mem
+  tables `mem`/`mem_text`/`mem_meta`/`mem_scope`/`file_embeddings` are untouched). The owner stays a
+  `mem_scope` column too, because every list/search fence keys on that column, not the path. The public
+  `id` is unchanged: `recall`/`get`/`recentMemory`/`promotionCandidates` strip the prefix on the way
+  out, so an id round-trips back through `remember`/`get`. An ownerless (global / single-tenant) row
+  keeps `path = id` verbatim — byte-identical to before.
+- **A bare `get(id)` (no scope) can no longer reach a tenant-scoped row** on a multi-tenant instance —
+  the owner-qualified key fences the by-id handle BY CONSTRUCTION (stronger than the prior "bare get is
+  unfenced legacy" contract). A single-tenant instance (an `owner` set at construction) still resolves
+  its own rows on a bare get; pass `{ scope }` to reach a specific tenant's row. Owner-blind precise
+  `forget('id')` / `forget({ idPrefix })` matches on the public id, so it still reaches every tenant's
+  copy of that id (the same cross-tenant reach the owner-blind `{ kind }` delete already had).
+
+### Migration
+- **One-time, automatic on open:** an existing owner-tagged `fact`/`episode` written by 0.21–0.23 (keyed
+  on the bare id) is re-keyed to `owner\x1Fid` across all five mem tables + the `recall_log` demand
+  history. Bounded (only `owner IS NOT NULL`; pre-W4 a collision was impossible, so each id had at most
+  one owner → an unambiguous re-key). A no-op on a single-tenant / fresh db. Idempotent.
+
+### Security
+- A reserved separator (`\x1F`) in a caller-supplied `id` or `scope` is rejected on write — it can't be
+  smuggled in to forge another tenant's physical key.
+
+### Docs (`litectx.context.md` — shipped)
+- Made three adopter contracts explicit (clarifying existing behavior, no API change): (1) a code hit's
+  chunk body **includes the symbol's docstring** (JS/TS leading JSDoc/`//`; Python in-body), so
+  `recall({ body: true })` returns the contract with the code for one-shot reading (blank-line-separated
+  comments excepted); (2) `remember`'s `expiresAt` is **doc-axis only** — ignored for `fact`/`episode`
+  (no per-row TTL; episodes 30-day prune, facts durable); (3) **episodes are session-fenced**, so a
+  `recentMemory({ kind:'episode' })` conversation window only survives a restart if the instance is built
+  without an explicit `session` (or reuses a stable one) — facts are cross-session.
+
 ## [0.23.0] — 2026-06-27
 
 ### Added

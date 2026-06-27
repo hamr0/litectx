@@ -232,6 +232,43 @@ const SCHEMA = [
 /** Memory kinds stored in the stemmed `mem` table; everything else rides `docs`. */
 export const MEM_KINDS = new Set(["fact", "episode"]);
 
+// Owner-qualified storage key (multis M4 W4). A `fact`/`episode` row's PHYSICAL key folds its owner
+// into the id — `owner\x1Fid` — so two tenants' same id (`fact:age`) are DISTINCT rows under the one
+// `path PRIMARY KEY`, with NO table-shape change (the alternative — a real composite PK — would have
+// to add an `owner` column to mem_text/mem_meta/file_embeddings and re-key the FTS `mem` table; this
+// keeps all five tables as-is). The owner stays a `mem_scope` column too (redundant with the prefix)
+// because every LIST/search fence keys on that column, not the path — so those queries are untouched.
+// An ownerless (global / single-tenant) row keeps `path = id` verbatim → byte-identical legacy, no
+// migration. The consumer never sees the prefix: reads strip it back to the public id ({@link memId}).
+const MEM_KEY_SEP = "\x1f"; // ASCII Unit Separator — illegal in a path/id/owner (guarded on write)
+/**
+ * Physical mem-table key for an `(owner, id)` pair. `owner == null` → the bare `id` (global tier,
+ * legacy-identical). The separator can't collide with real ids (control char), so {@link memId}
+ * reverses it unambiguously.
+ * @param {string|null|undefined} owner @param {string} id @returns {string}
+ */
+function memKey(owner, id) {
+  return owner == null ? id : owner + MEM_KEY_SEP + id;
+}
+/**
+ * Strip the owner prefix off a stored mem key → the public id the caller wrote. A no-op for an
+ * ownerless mem row, a doc/blob row, or a code/file path (none carry the separator). Applied at every
+ * consumer-facing return so a recall/get/recentMemory/promotion id round-trips back through write/get.
+ * @param {string} key @returns {string}
+ */
+export function memId(key) {
+  const i = key.indexOf(MEM_KEY_SEP);
+  return i < 0 ? key : key.slice(i + 1);
+}
+/**
+ * Reject the reserved separator in a caller-supplied id/owner (W4 injection guard): without this a
+ * tenant could embed `\x1F` in an id to forge another tenant's physical key. Thrown on write only.
+ * @param {string|null|undefined} v @param {string} what @returns {void}
+ */
+function assertNoMemSep(v, what) {
+  if (v != null && v.includes(MEM_KEY_SEP)) throw new Error(`litectx: ${what} may not contain the reserved \\x1F separator`);
+}
+
 /**
  * Reconstruct a stored embedding BLOB into a copied, 4-byte-aligned Float32Array — the copy means it
  * never aliases SQLite's internal buffer.
@@ -287,7 +324,41 @@ export class Store {
       // (undated, sort last under DESC), exactly like the doc axis. Facts order by it; episodes by occurred_at.
       const msCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(mem_scope)"));
       if (!msCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE mem_scope ADD COLUMN created_at INTEGER");
+      this.migrateOwnerKeyedMem();
     }
+  }
+
+  /**
+   * One-time W4 migration (multis M4): re-key existing owner-tagged `fact`/`episode` rows from the bare
+   * `id` to the owner-qualified `owner\x1Fid` so they share the new write scheme (else a post-upgrade
+   * `remember` of the same id would create a SECOND, duplicate row at the encoded key instead of
+   * superseding the legacy one). Ownerless/global rows (`owner IS NULL`) are left untouched — their key
+   * is `id` under both schemes (byte-identical legacy, no migration). Pre-W4 a collision was impossible,
+   * so each id had at most ONE owner → re-keying every path-keyed sidecar (incl. the `recall_log` demand
+   * history) by exact match is unambiguous. Idempotent: a path already carrying the separator (a fresh
+   * W4 write, or a prior run) is skipped. A no-op scan on a single-tenant / fresh db (no owner rows).
+   * FTS5 tolerates `UPDATE` of its UNINDEXED `path` column (MATCH survives) — verified before shipping.
+   * @returns {void}
+   */
+  migrateOwnerKeyedMem() {
+    const legacy = /** @type {{ path: string, owner: string }[]} */ (
+      this.db.prepare("SELECT path, owner FROM mem_scope WHERE owner IS NOT NULL AND instr(path, char(31)) = 0").all()
+    );
+    if (!legacy.length) return;
+    // mem/mem_text/mem_meta/mem_scope hold ONLY fact/episode rows, so a path match is unambiguous.
+    // file_embeddings + recall_log are SHARED with code/doc rows: a fact id that coincidentally equals a
+    // file path / doc id must not drag the wrong row along. file_embeddings has a single PK row per path
+    // (a fact id == file path would already have collided pre-W4, so it can't happen), but recall_log is
+    // append-only and CAN hold same-string rows of another kind → scope its re-key to the mem kinds.
+    const memTables = ["mem", "mem_text", "mem_meta", "file_embeddings", "mem_scope"]; // mem_scope last (we iterate it)
+    const tx = this.db.transaction(() => {
+      for (const { path, owner } of legacy) {
+        const newKey = memKey(owner, path);
+        for (const t of memTables) this.db.prepare(`UPDATE ${t} SET path = ? WHERE path = ?`).run(newKey, path);
+        this.db.prepare("UPDATE recall_log SET path = ? WHERE path = ? AND kind IN ('fact', 'episode')").run(newKey, path);
+      }
+    });
+    tx();
   }
 
   /**
@@ -455,32 +526,44 @@ export class Store {
    * @param {{ id: string, text: string, kind: string, format: string, provenance: string|null, occurredAt: number|null, meta?: string|null, embedding?: Float32Array, scope?: string|null, expiresAt?: number|null, createdAt?: number|null, owner?: string|null }} m
    */
   writeMemory(m) {
+    const isMem = MEM_KINDS.has(m.kind);
+    // owner is PER-CALL (multis M4): `m.owner` (resolved by the facade from a scoped/explicit write)
+    // OVERRIDES the instance owner; `undefined` (legacy single-tenant) falls back to this instance's.
+    const wOwner = m.owner !== undefined ? m.owner : this.owner;
+    // physical key (W4): a fact/episode folds its owner into the key (`owner\x1Fid`) so two tenants'
+    // same id are DISTINCT rows; a doc row is NOT owner-keyed (it fences on the separate `doc_scope`
+    // axis) and keeps `m.id`. The FTS body still tokenizes the PUBLIC id (`indexBody({ path: m.id })`)
+    // — folding the owner prefix into the search surface would let a query match on the tenant name.
+    const key = isMem ? memKey(wOwner, m.id) : m.id;
+    // the reserved separator is illegal in ANY written id (not just mem): `memId` decodes every returned
+    // path, so a `\x1F` in a doc/blob id would be silently mangled on the way out. Guard the owner too —
+    // a `\x1F` there could forge another tenant's mem key.
+    assertNoMemSep(m.id, "a written id");
+    if (isMem) assertNoMemSep(wOwner, "an owner/scope");
     const tx = this.db.transaction(() => {
       // route by kind (§5.1): fact/episode → the stemmed `mem` table; direct `doc` → `docs`
       // (one kind = one ranking domain, so a direct FAQ ranks against file docs, unstemmed).
-      if (MEM_KINDS.has(m.kind)) {
-        this.db.prepare("DELETE FROM mem WHERE path = ?").run(m.id);
+      if (isMem) {
+        this.db.prepare("DELETE FROM mem WHERE path = ?").run(key);
         this.db
           .prepare("INSERT INTO mem(path, kind, format, provenance, occurred_at, body) VALUES (@path, @kind, @format, @provenance, @occurred_at, @body)")
-          .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
-        // scope (§4.4): scope is runtime IDENTITY (who wrote it, in which run), not caller content. The
-        // owner is now PER-CALL (multis M4): `m.owner` (resolved by the facade from a scoped/explicit
-        // write) OVERRIDES the instance owner, so one shared instance can fence facts/episodes per tenant;
-        // when the facade passes none (legacy single-tenant), it falls back to this instance's owner —
-        // byte-identical. `fact` is owner-scoped (durable, cross-session); `episode` adds the instance
-        // session (volatile, own-run; single-dim tenancy keeps session instance-bound). Refresh by
-        // delete-then-insert (mirrors meta). The row is now written UNCONDITIONALLY (multis M4 R3) — even
-        // an ownerless, sessionless fact gets one — because `created_at` must exist for EVERY mem row to
-        // order `recentMemoryMem`. A `owner=NULL, session=NULL` row stays byte-identical to the old "no
-        // row" under every fence: each predicate keys on `s.owner`/`s.session` VALUES (all null-tolerant
-        // LEFT JOINs, plus the GLOBAL forget's `s.owner IS NULL`), never on row existence. `created_at` is
-        // the write time (a re-`remember` of the same id refreshes it → the updated fact ranks newest).
-        const wOwner = m.owner !== undefined ? m.owner : this.owner;
+          .run({ path: key, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+        // scope (§4.4): scope is runtime IDENTITY (who wrote it, in which run), not caller content.
+        // `fact` is owner-scoped (durable, cross-session); `episode` adds the instance session
+        // (volatile, own-run; single-dim tenancy keeps session instance-bound). Refresh by delete-then-
+        // insert (mirrors meta). The row is written UNCONDITIONALLY (multis M4 R3) — even an ownerless,
+        // sessionless fact gets one — because `created_at` must exist for EVERY mem row to order
+        // `recentMemoryMem`. A `owner=NULL, session=NULL` row stays byte-identical to the old "no row"
+        // under every fence: each predicate keys on `s.owner`/`s.session` VALUES (all null-tolerant LEFT
+        // JOINs, plus the GLOBAL forget's `s.owner IS NULL`), never on row existence. `owner` is ALSO
+        // stored here (redundant with the key prefix) because every LIST/search fence keys on this
+        // COLUMN, not the path — so those queries stay untouched by W4. `created_at` is the write time
+        // (a re-`remember` of the same id refreshes it → the updated fact ranks newest).
         const sSession = m.kind === "episode" ? this.session : null;
-        this.db.prepare("DELETE FROM mem_scope WHERE path = ?").run(m.id);
+        this.db.prepare("DELETE FROM mem_scope WHERE path = ?").run(key);
         this.db
           .prepare("INSERT INTO mem_scope(path, owner, session, created_at) VALUES (?, ?, ?, ?)")
-          .run(m.id, wOwner, sSession, m.createdAt ?? null);
+          .run(key, wOwner, sSession, m.createdAt ?? null);
       } else {
         this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
         this.db
@@ -496,25 +579,25 @@ export class Store {
       }
       // raw text alongside the searchable surface (slice 9): the FTS body is processed
       // (indexBody) and there is no file behind a written row, so this is the only copy
-      // `getItem` can hand back verbatim.
+      // `getItem` can hand back verbatim. Keyed by the same physical `key` as the row above.
       this.db
         .prepare("INSERT INTO mem_text(path, text) VALUES (@path, @text) ON CONFLICT(path) DO UPDATE SET text = excluded.text")
-        .run({ path: m.id, text: m.text });
+        .run({ path: key, text: m.text });
       // sealed opaque metadata (RT-3 #3): upsert when supplied, else clear any prior — the row tracks
       // the latest write. Stored verbatim, read by no FTS/ranking path.
       if (m.meta != null) {
         this.db
           .prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta")
-          .run({ path: m.id, meta: m.meta });
+          .run({ path: key, meta: m.meta });
       } else {
-        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(m.id);
+        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(key);
       }
       if (m.embedding) {
         this.db
           .prepare("INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
-          .run({ path: m.id, dim: m.embedding.length, vec: Buffer.from(m.embedding.buffer, m.embedding.byteOffset, m.embedding.byteLength) });
+          .run({ path: key, dim: m.embedding.length, vec: Buffer.from(m.embedding.buffer, m.embedding.byteOffset, m.embedding.byteLength) });
       } else {
-        this.db.prepare("DELETE FROM file_embeddings WHERE path = ?").run(m.id);
+        this.db.prepare("DELETE FROM file_embeddings WHERE path = ?").run(key);
       }
     });
     tx();
@@ -545,6 +628,7 @@ export class Store {
    * @param {{ id: string, bytes: Uint8Array, filename: string, format: string, meta?: string|null, scope?: string|null, expiresAt?: number|null, createdAt?: number|null }} b
    */
   writeBlob(b) {
+    assertNoMemSep(b.id, "a written id"); // reserved separator illegal in any id (memId decodes every returned path)
     const bytes = Buffer.isBuffer(b.bytes) ? b.bytes : Buffer.from(b.bytes);
     const tx = this.db.transaction(() => {
       this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(b.id);
@@ -656,10 +740,16 @@ export class Store {
     const clauses = [];
     /** @type {Record<string, string>} */
     const params = {};
-    if (sel.id != null) (clauses.push("path = @id"), (params.id = sel.id));
+    // W4: a fact/episode key folds in the owner (`owner\x1Fid`), so an owner-blind precise delete must
+    // match on the PUBLIC id — the substring after the separator. `instr` returns 0 for an unencoded
+    // row (a doc id, or a global/ownerless fact), and `substr(path, 1)` is then the whole path, so this
+    // one expression matches both forms; an owner-blind `forget('id')` therefore reaches every tenant's
+    // copy of that id (the same cross-tenant reach the owner-blind `{ kind }` delete already has).
+    const PUB_ID = "substr(path, instr(path, char(31)) + 1)";
+    if (sel.id != null) (clauses.push(`${PUB_ID} = @id`), (params.id = sel.id));
     if (sel.idPrefix != null) {
-      // the base id itself OR any `<base>#<segment>` row. Escape LIKE metacharacters in the base.
-      clauses.push("(path = @idExact OR path LIKE @idLike ESCAPE '\\')");
+      // the base id itself OR any `<base>#<segment>` row, matched on the public id. Escape LIKE metachars.
+      clauses.push(`(${PUB_ID} = @idExact OR ${PUB_ID} LIKE @idLike ESCAPE '\\')`);
       params.idExact = sel.idPrefix;
       params.idLike = sel.idPrefix.replace(/[\\%_]/g, "\\$&") + "#%";
     }
@@ -1083,8 +1173,20 @@ export class Store {
    * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
    */
   getItem(id, now, scope, globalOnly) {
+    // memory axis (W4): a fact/episode's physical key folds in the owner, so resolve the caller's own
+    // row first (`owner\x1Fid`); an ownerless caller (GLOBAL/bare) reads the bare `id`. A tenant whose
+    // own row is absent falls back to the global (ownerless) row — mirroring recall's owner∪global view
+    // — unless `globalOnly` restricts to the shared tier. docs/blob/file/stash are never owner-keyed, so
+    // they look up under the raw `id` throughout (their fence is the separate `doc_scope` axis).
+    // a tenant scope names the owner; GLOBAL (globalOnly) is the shared tier (no owner); a bare fetch
+    // falls back to the INSTANCE owner — so a single-tenant instance (owner set at construction) finds
+    // its own encoded rows, and a global instance (owner null) reads the bare id (byte-identical legacy).
+    // This mirrors the recall/recentMemory owner fence, which falls back to the instance owner too.
+    const memOwner = typeof scope === "string" ? scope : globalOnly ? null : this.owner;
+    const memSel = this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?");
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
-      this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(id) ??
+      memSel.get(memKey(memOwner, id)) ??
+        (memOwner != null && !globalOnly ? memSel.get(id) : undefined) ??
         this.db
           .prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = ? ORDER BY (source = 'direct') DESC LIMIT 1")
           .get(id)
@@ -1109,7 +1211,7 @@ export class Store {
         // inert here — only an explicit scope/globalOnly fences. Mirror the doc branch on `owner`.
         if (scope != null || globalOnly) {
           const ms = /** @type {{ owner: string|null } | undefined} */ (
-            this.db.prepare("SELECT owner FROM mem_scope WHERE path = ?").get(id)
+            this.db.prepare("SELECT owner FROM mem_scope WHERE path = ?").get(row.path)
           );
           const owner = ms ? ms.owner : null;
           if (globalOnly) {
@@ -1118,7 +1220,7 @@ export class Store {
         }
       } else {
         const ds = /** @type {{ scope: string|null, expires_at: number|null } | undefined} */ (
-          this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(id)
+          this.db.prepare("SELECT scope, expires_at FROM doc_scope WHERE path = ?").get(row.path)
         );
         if (ds) {
           if (now != null && ds.expires_at != null && ds.expires_at <= now) return null;
@@ -1136,13 +1238,13 @@ export class Store {
     let meta = null;
     if (row.source === "direct") {
       // a blob: bytes are the deliverable, the docs body is only the filename → never return it as text.
-      const blob = /** @type {{ bytes: Buffer } | undefined} */ (this.db.prepare("SELECT bytes FROM blobs WHERE path = ?").get(id));
+      const blob = /** @type {{ bytes: Buffer } | undefined} */ (this.db.prepare("SELECT bytes FROM blobs WHERE path = ?").get(row.path));
       if (blob) bytes = blob.bytes;
       else {
-        const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(id));
+        const raw = /** @type {{ text: string } | undefined} */ (this.db.prepare("SELECT text FROM mem_text WHERE path = ?").get(row.path));
         text = raw ? raw.text : row.body;
       }
-      const mrow = /** @type {{ meta: string } | undefined} */ (this.db.prepare("SELECT meta FROM mem_meta WHERE path = ?").get(id));
+      const mrow = /** @type {{ meta: string } | undefined} */ (this.db.prepare("SELECT meta FROM mem_meta WHERE path = ?").get(row.path));
       meta = mrow ? mrow.meta : null;
     }
     return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text, bytes, meta };
@@ -1225,8 +1327,12 @@ export class Store {
         edges: { imports, importedBy },
       };
     }
+    // W4: a fact/episode is keyed by `owner\x1Fid`, so resolve the instance owner's row first, then the
+    // bare/global id — mirroring getItem's bare-fetch fallback (a single-tenant instance finds its own
+    // rows; a global instance reads the bare id). The returned `id` is the caller's PUBLIC id, unchanged.
+    const memSel = this.db.prepare("SELECT kind, format, provenance FROM mem WHERE path = ?");
     const mem = /** @type {{ kind: string, format: string, provenance: string|null } | undefined} */ (
-      this.db.prepare("SELECT kind, format, provenance FROM mem WHERE path = ?").get(id)
+      memSel.get(memKey(this.owner, id)) ?? (this.owner != null ? memSel.get(id) : undefined)
     );
     if (mem) return { id, kind: mem.kind, format: mem.format, source: "direct", provenance: mem.provenance, git: null, chunks: [], edges: { imports: 0, importedBy: 0 } };
     return null;

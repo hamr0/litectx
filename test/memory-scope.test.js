@@ -146,14 +146,17 @@ test("M4: get(id) for a fact/episode is tenant-fenced — a guessed id can't cro
   rmSync(root, { recursive: true, force: true });
 });
 
-test("M4 control: with strictScope OFF, a bare get(id) for a fact is unfenced (legacy by-id model intact)", async () => {
+test("M4/W4: with strictScope OFF, a bare get(id) cannot reach a tenant-scoped fact (the owner-qualified key fences by construction)", async () => {
   const { root, dbPath } = sharedDb();
-  const ctx = new LiteCtx({ root, dbPath }); // strict OFF
+  const ctx = new LiteCtx({ root, dbPath }); // strict OFF, no instance owner (a multi-tenant host)
   await ctx.scoped("cust:B").remember("fact:b", "B's note", { kind: "fact" });
-  // legacy: a bare get by id returns the row regardless of owner (unchanged — the by-id model is opt-in to fence)
-  assert.equal(ctx.get("fact:b")?.text, "B's note", "bare non-strict get is unfenced (legacy)");
-  // but a SCOPED get still fences even with strict off — a different tenant's row reads as absent
-  assert.equal(ctx.get("fact:b", { scope: "cust:A" }), null, "a scoped get fences by owner even with strict off");
+  // W4: a tenant fact is stored under an owner-qualified key (`owner\x1Fid`), so a bare ownerless get
+  // can't reach it — the by-id leak is now closed BY CONSTRUCTION, not only by an opt-in scope fence.
+  // (Stronger than the pre-W4 "bare get is unfenced legacy" contract this test used to assert.)
+  assert.equal(ctx.get("fact:b"), null, "bare get on a multi-tenant instance can't read a tenant row");
+  // the owner names the row: B's own scoped get retrieves it; a different tenant's reads absent
+  assert.equal(ctx.get("fact:b", { scope: "cust:B" })?.text, "B's note", "B's scoped get retrieves its own row");
+  assert.equal(ctx.get("fact:b", { scope: "cust:A" }), null, "A's scoped get fences B's row out");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -168,14 +171,17 @@ test("M4: the owner fence reaches the embeddings/KNN path — cosine can't float
   await ctx.scoped("cust:B").remember("ep:b", "alpha alpha beta deployment", { kind: "episode" });
 
   // hit knnCandidates DIRECTLY (isolate the semantic path from BM25) with each tenant's owner fence
+  // NB: this hits the STORE directly (white-box), which keys rows by the owner-qualified path
+  // (`owner\x1Fid`, W4) — the facade is what decodes back to the public id. The fence is proven by
+  // WHICH rows return, not the string form, so the expectations carry the encoded keys.
   const qvec = await markerStub().embed("alpha beta");
   const nomA = ctx.store.knnCandidates("episode", qvec, 10, new Set(), { memOwner: "cust:A", memSeeAll: false });
-  assert.deepEqual(nomA.map((h) => h.path).sort(), ["ep:a"], "KNN nominates only A's episode under A's fence");
+  assert.deepEqual(nomA.map((h) => h.path).sort(), ["cust:A\x1Fep:a"], "KNN nominates only A's episode under A's fence");
   const nomB = ctx.store.knnCandidates("episode", qvec, 10, new Set(), { memOwner: "cust:B", memSeeAll: false });
-  assert.deepEqual(nomB.map((h) => h.path).sort(), ["ep:b"], "KNN nominates only B's episode under B's fence");
+  assert.deepEqual(nomB.map((h) => h.path).sort(), ["cust:B\x1Fep:b"], "KNN nominates only B's episode under B's fence");
   // control: seeAll (admin) nominates both — proves the fence above is what excluded, not a miss
   const nomAll = ctx.store.knnCandidates("episode", qvec, 10, new Set(), { memSeeAll: true });
-  assert.deepEqual(nomAll.map((h) => h.path).sort(), ["ep:a", "ep:b"], "seeAll nominates both — the fence is what isolates");
+  assert.deepEqual(nomAll.map((h) => h.path).sort(), ["cust:A\x1Fep:a", "cust:B\x1Fep:b"], "seeAll nominates both — the fence is what isolates");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

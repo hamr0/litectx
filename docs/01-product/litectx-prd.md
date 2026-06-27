@@ -383,10 +383,38 @@ Design rules (DECIDED):
     routed through `mem_scope.owner`; v0.23 adds the failable proof: a fence-bypass mutation makes a
     cross-tenant nominee leak and the test fails). Purely additive; `ScopedView` gains `count` and
     `recentMemory`'s `kind`.
+  - **Tenant-fenced supersede by stable key (v0.24, multis M4 W4)** — closes the last write-side gap:
+    memory was append-only by id, so a restated fact (`age 44→45`, `deadline Aug 20→23`) piled up two
+    contradicting rows, and on a shared instance two tenants' same id (both `fact:age`) **clobbered**
+    each other (the write's delete-before-insert keyed on the bare id, owner-blind). W4 makes the
+    **`(scope, id)` pair the supersede key**: re-`remember`ing the same id under the same scope replaces
+    in place (one row, the latest); the same id under a different scope is a separate row (no cross-tenant
+    clobber). Mechanism: a `fact`/`episode`'s **physical key folds in the owner** (`owner\x1Fid`) so two
+    tenants' same id are distinct rows under the one `path` primary key — **no table-shape change** (the
+    real-composite-PK alternative would have to add an `owner` column to `mem_text`/`mem_meta`/
+    `file_embeddings` and re-key the FTS `mem` table; this keeps all five untouched). The owner stays a
+    `mem_scope` column too, so every list/search fence (which keys on that column, not the path) is
+    unchanged. The **public id never carries the prefix** — `recall`/`get`/`recentMemory`/
+    `promotionCandidates` strip it on the way out, so an id round-trips back through `remember`/`get`; an
+    ownerless (global / single-tenant) row keeps `path = id` (byte-identical legacy). A bare `get(id)`
+    therefore **can no longer reach a tenant row by a guessed id** (fenced by construction, stronger than
+    the prior "bare get unfenced" contract); owner-blind precise `forget('id')` matches on the public id
+    so it still reaches every tenant's copy. A one-time, automatic, idempotent **migration** re-keys any
+    0.21–0.23 owner-tagged row on open (bounded: `owner IS NOT NULL`; pre-W4 ≤1 owner per id → unambiguous;
+    no-op on a single-tenant/fresh db). The reserved `\x1F` separator is rejected in a caller `id`/`scope`
+    (key-forgery guard). **litectx delivers the *upsert* shape of the W4 ask** — `remember`'s guaranteed,
+    documented, tenant-fenced upsert — **not** a separate `update()` verb: the ask permits either, the
+    upsert delivers the intent (overwrite to stop pile-up) and the cross-tenant-isolation acceptance, and
+    an explicit fail-closed `update()` would mean a second write path (its own write-gate/audit vetting,
+    re-embedding, meta handling) for the marginal "edit-only, never-create" case — deferred until a
+    consumer needs it. (This deliberately revises R-G5's 2026-06-12 "supersede = duplicative" verdict for
+    the *multi-tenant* case: a bare upsert was enough single-tenant, but tenant isolation needed the
+    owner-fenced key — see §8.1 R-G5.)
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration; v0.18 hardened the R2
   scope default; v0.20 added the `recentMemory` empty-match recency fallback; v0.21 extended per-call
   scope + `strictScope` to the memory axis; v0.22 added tenant-scoped `forget`; v0.23 extended
-  `recentMemory` + a new `count` to the memory axis and locked the KNN fence.)*
+  `recentMemory` + a new `count` to the memory axis and locked the KNN fence; v0.24 added the tenant-
+  fenced supersede key.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.
@@ -2142,7 +2170,7 @@ The first adopter may *fine-tune* these (thresholds, defaults), but it does not 
 | **R-C7** | `compress(node,{level})` | ✅ **SHIPPED.** Signature tier = tree-sitter cut at the `body` field (+ method-chunk wrapping); saves **~82% bytes WITH the doc kept** on 627 real symbols (not the earlier naive "95–98%"). aurora-calibrated (`decompose.py:243-310`). **De-risks `assemble()` — it's the render half assemble composes.** | `poc/rc7-compress*-poc.mjs`, `test/compress.test.js` |
 | **R-G7** | `evict(id \| {olderThan, maxCount})` | ✅ **SHIPPED 2026-06-12** (the stash-cleanup verb). `evict(id)` (one payload) / `{olderThan}` (epoch-ms floor, `created_at <`) / `{maxCount}` (keep newest N) — both policies compose (age then count). **API-only** (§10.5) and **stash-only by construction** — only the `stash` table is touched, so a bulk age/size sweep can never reach a durable `fact`/`episode`. This split is the point: `forget` was made **memory-only** (its old id-fallthrough into `stash` removed — a breaking change, ~zero blast radius: no live stash consumer exists), so the model-facing "drop knowledge" verb and the runtime-only "reclaim scratch" verb sit on opposite sides of the §10.5 line. Runtime owns the policy; litectx owns the delete. POC `poc/evict-poc.mjs`; tests in `test/stash.test.js` (incl. the *evict-never-touches-memory* + *forget-can't-reach-stash* invariants). | `poc/evict-poc.mjs`, `test/stash.test.js` |
 | ~~**R-S8**~~ | ~~`recall().quality`~~ | **DROPPED — premise falsified (2026-06-12 grounding).** Sold as litectx-original "off the **activation distribution**, only we hold those scores." **Those scores do not exist in shipped recall:** Part 1 §4 deferred base-level activation and Part 1 §14 #4 *falsified it for recall ranking on real edit data* (`poc/access-bench.mjs`: topic-blind, repo-dependent — ships at zero). The only ACT-R term in recall is import-spreading (code-only). A quality label would fall back to **raw BM25 magnitude** — repo/query-length-dependent score-thresholding, the *exact* class of prior Part 1 §4 forbids recall to ship. Building it re-litigates a settled falsification. **The one candidate residue — a confidence label off the embeddings cosine distribution — was then POC-falsified too** (`poc/confidence-poc.mjs`, 2026-06-12): top raw cosine separates answerable from unanswerable queries in aggregate (AUC 0.92) but has **no usable threshold** — the paraphrase/morph answers (the queries the label would *exist* to judge) score in the same 0.21–0.54 band as the unanswerable ones (≤0.36), so any τ that catches "nothing here" falsely flags ~25% of real answers as "weak," worst on exactly the semantic hits. Same shape as Part 1 §4: real for *aggregate* judgment, useless for the *per-query* decision. Closed on evidence (Part 1 §14 #7). | `poc/confidence-poc.mjs` |
-| ~~**R-G5**~~ | ~~`supersede(old,new)`~~ | **DROPPED — duplicative (2026-06-12 grounding).** Retire = `forget(id)`; replace-in-place = `remember(sameId, …)` (upsert, `store.js:395`); auto-freshness = `pruneStaleEpisodes` on every episode write; supersede-by-promotion = the `reviewCandidates` re-`remember` flow. `supersede(old,new)` is `forget(old); remember(new)` with a ribbon. The only uncovered sliver — an audit forward-pointer (old→new lineage) — nobody asked for, and its content-verdict is ceded to bareguard (R-X2). Document the `forget`+`remember` idiom instead. | n/a |
+| ~~**R-G5**~~ | ~~`supersede(old,new)`~~ | **DROPPED — duplicative (2026-06-12 grounding).** Retire = `forget(id)`; replace-in-place = `remember(sameId, …)` (upsert, `store.js:395`); auto-freshness = `pruneStaleEpisodes` on every episode write; supersede-by-promotion = the `reviewCandidates` re-`remember` flow. `supersede(old,new)` is `forget(old); remember(new)` with a ribbon. The only uncovered sliver — an audit forward-pointer (old→new lineage) — nobody asked for, and its content-verdict is ceded to bareguard (R-X2). Document the `forget`+`remember` idiom instead. **Revised for multi-tenancy (v0.24, multis M4 W4):** the replace-in-place upsert is now **tenant-fenced** — the `(scope, id)` pair is the supersede key (owner-qualified physical key) so one tenant's restated fact never clobbers another's same id. The bare single-tenant upsert verdict held; multi-tenancy needed the owner fence on the key (Part 1 §13 v0.24). Still no `supersede()`/`update()` verb — `remember`'s upsert is the mechanism. | n/a |
 
 *Half-in:* **R-W7 `recordUseful`** — the boost *mechanism* is buildable + aurora-calibrated
 (+0.2/+0.05), but whether the boost helps ranking wants a real loop feeding "what was useful" →

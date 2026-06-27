@@ -9,7 +9,7 @@
 
 import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
-import { Store, MEM_KINDS } from "./store.js";
+import { Store, MEM_KINDS, memId } from "./store.js";
 import { collectFiles, diffFiles } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
@@ -499,6 +499,7 @@ export class LiteCtx {
       this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(hits); // RT-3 inline-body — content, not a pointer
       if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
+      for (const h of hits) h.path = memId(h.path); // W4: strip the owner prefix → public id (no-op for code/doc); AFTER logRecall so the demand-join keeps the encoded key
       return hits;
     }
     // grouped: an explicit subset of kinds, or all known kinds when omitted. One FTS query per
@@ -514,6 +515,7 @@ export class LiteCtx {
       if (opts.body) this._attachBodies(grouped[k]); // RT-3 inline-body — content, not a pointer
     }
     if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
+    for (const arr of Object.values(grouped)) for (const h of arr) h.path = memId(h.path); // W4: public id (no-op off the mem axis); AFTER logRecall
     return grouped;
   }
 
@@ -701,8 +703,8 @@ export class LiteCtx {
         text = null; // indexed but gone from disk — stale until the next index() sweeps it
       }
     }
-    if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch");
-    return { id: r.path, kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, bytes: r.bytes ?? null, meta: r.meta != null ? JSON.parse(r.meta) : null };
+    if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch"); // demand log on the encoded key
+    return { id: memId(r.path), kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, bytes: r.bytes ?? null, meta: r.meta != null ? JSON.parse(r.meta) : null }; // W4: public id out
   }
 
   /**
@@ -711,6 +713,13 @@ export class LiteCtx {
    * (also the update/forget handle — recommend namespacing it, e.g. `"fact:auth-uses-jwt"`). Stored
    * **whole** (never chunked). Written rows are `source='direct'`, so `index()` never reconciles them
    * away; recall finds them like any other kind. Embeds the text when the embeddings tier is on.
+   *
+   * **Upsert is tenant-fenced (multis M4 W4): the `(scope, id)` pair is the supersede key.** Re-
+   * `remember`ing the same `id` under the same `scope` REPLACES the prior value in place (one row, the
+   * latest — so a restated fact never piles up). The SAME `id` under a DIFFERENT `scope` is a SEPARATE
+   * row: one tenant can never overwrite another's memory by id (the row's physical key folds in the
+   * owner; the public `id` you get back is unchanged). Detecting "same subject, new value" is the
+   * caller's job — litectx supplies the keyed, fenced upsert mechanism.
    *
    * @param {string} id    caller key / identity (lands in the row's `path`)
    * @param {string} text  the content
@@ -995,7 +1004,7 @@ export class LiteCtx {
    */
   reviewCandidates(threshold = 5, opts = {}) {
     const ms = this._resolveMemReadScope(opts.scope, "reviewCandidates");
-    return this.store.reviewCandidates(threshold, { memOwner: ms.memOwner, memSeeAll: ms.memSeeAll });
+    return this.store.reviewCandidates(threshold, { memOwner: ms.memOwner, memSeeAll: ms.memSeeAll }).map((c) => ({ ...c, path: memId(c.path) })); // W4: public id out
   }
 
   /**
@@ -1024,7 +1033,7 @@ export class LiteCtx {
    */
   promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD, opts = {}) {
     const ms = this._resolveMemReadScope(opts.scope, "promotionCandidates");
-    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS, memOwner: ms.memOwner, memSeeAll: ms.memSeeAll });
+    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS, memOwner: ms.memOwner, memSeeAll: ms.memSeeAll }).map((c) => ({ ...c, path: memId(c.path) })); // W4: public id out
   }
 
   /**
@@ -1107,6 +1116,7 @@ export class LiteCtx {
     // these unranked recency rows don't carry (their param is `Omit<Hit,"score">[]`, so no score lie).
     this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op when none)
     if (opts.body) this._attachBodies(hits); // verbatim stored text (null for a blob)
+    for (const h of hits) h.path = memId(h.path); // W4: public id out (no-op on the doc axis); AFTER meta/body fill, which key on the encoded path
     return hits;
   }
 

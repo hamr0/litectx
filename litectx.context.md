@@ -285,9 +285,13 @@ return shape follows the `kind` argument:
 > ranking stays file-level and bench-identical. The most *specific* match wins: a class that
 > merely contains the matching method never shadows it, and an anonymous arrow is labeled with
 > its nearest named container. A symbol's chunk now **includes its own leading doc-comment**
-> (JSDoc / `//` / `#` block immediately above it), so a query phrased in a function's
-> *documentation* localizes to that function — not to the file preamble where the comment would
-> otherwise orphan. `null` when nothing localizes: written memory has no chunks
+> (JS/TS JSDoc / `//` immediately above the def; Python's docstring is in-body so already inside) —
+> two payoffs: a query phrased in a function's *documentation* localizes to that function (not the
+> file preamble where the comment would orphan), **and `recall({ body: true })` returns the docstring
+> *with* the code**, so a one-shot reader gets the symbol's contract without a second fetch (no need to
+> go grab the docstring separately). Caveat: a doc-comment separated from the def by a **blank line**
+> is treated as the file's, not the symbol's, and localizes to the preamble instead.
+> `null` when nothing localizes: written memory has no chunks
 > (the row IS the unit), and a match carried only by the filename names none.
 > `body` rides only when you pass `{ body: true }` (see the option above); `meta` is the **sealed
 > opaque metadata** (RT-3) a caller attached via `remember({ meta })` — returned verbatim but stored
@@ -340,9 +344,13 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   M4), returns `null`. A global (null-scope/null-owner) row stays visible to every tenant; `GLOBAL` fetches
   **only** the shared tier (a tenant row reads as `null`). This closes the by-id leak on the memory axis too
   — fencing `recall` without `get` is only half the boundary (a guessed/known id must not cross tenants).
-  Only `code`/file rows have no sidecar and are never fenced. Omit it and `get` is **unfenced by id** —
-  **unless `strictScope` is on**, where a **bare `get(id)` throws** (a guessable id can't be fenced without
-  a scope, so a missing one is a leak; pass a tenant `scope` or `GLOBAL` to fetch).
+  Only `code`/file rows have no sidecar and are never fenced. Omit it and a `get` on the **doc/blob axis**
+  is **unfenced by id** (a guessed `doc` id can cross `doc_scope`) — **unless `strictScope` is on**, where
+  a **bare `get(id)` throws** (pass a tenant `scope` or `GLOBAL`). On the **memory axis** (`fact`/`episode`)
+  a bare `get(id)` is fenced **by construction** (multis M4 W4): a tenant row is stored under an owner-
+  qualified key, so a bare ownerless `get` can only reach a *global* row (or, on a single-tenant instance
+  with an `owner` set at construction, that instance's own rows) — it can never reach another tenant's
+  fact/episode even by a guessed id. Pass `{ scope }` to fetch a specific tenant's row.
 
 > **Tenant isolation needs BOTH (R2).** `recall({ scope })` fences *search*, but ids can be
 > guessed (a derived id slugs the filename), so a customer-reachable `get` must pass the requesting
@@ -466,9 +474,14 @@ laid over it — never drawn as edges (so a probabilistic signal can't masquerad
 
 ### `await ctx.remember(id, text, opts?)` → `Promise<void>`
 Write one **directly-authored memory** — knowledge that isn't a file (slice 7). The write
-counterpart to `index()`. **Upsert by `id`**: writing the same id again replaces the
-content. The `id` is your handle for update/forget — namespace it (`"fact:auth-uses-jwt"`,
-`"faq:refunds"`, `"ep:2026-06-09-deploy"`); it appears as the hit's `path` in recall.
+counterpart to `index()`. **Tenant-fenced upsert by `(scope, id)`** (multis M4 W4): writing the
+same id again **under the same scope** replaces the content in place (one row, the latest — a
+restated fact never piles up); the **same id under a *different* scope is a separate row**, so one
+tenant can never overwrite another's memory by id. The supersede key is `(scope, id)` — detecting
+"same subject, new value" is your job; litectx guarantees the keyed, fenced upsert. The `id` is your
+handle for forget — namespace it (`"fact:auth-uses-jwt"`, `"faq:refunds"`, `"ep:2026-06-09-deploy"`);
+it appears as the hit's `path` in recall (the public id — internally a tenant row is keyed by an
+owner-qualified key, but that prefix never surfaces and the id round-trips back through `get`).
 
 - `opts.kind?: "fact" | "episode" | "doc"` — default `"fact"`.
   - **`fact`** — a durable, decontextualized assertion ("we use JWT"). No timestamp.
@@ -491,6 +504,10 @@ content. The `id` is your handle for update/forget — namespace it (`"fact:auth
 - `opts.injectionRisk?: "low" | "medium" | "high"` — an **optional guardrails shape flag** forwarded
   to a wired `writeGate` action. litectx core never computes it (the §6 line — content judgment is the
   guardrails tier's / gate's job); it only passes through what a caller sets. Ignored when no `writeGate`.
+- `opts.expiresAt?: number` — **doc-axis only.** A retention timestamp here applies to a `kind:"doc"`
+  row (same as `ingest`'s `expiresAt`); on a **`fact`/`episode` it is ignored** — the memory axis has
+  **no per-row TTL** (episodes self-prune on a 30-day rolling window, facts are durable until `forget`).
+  So don't set a fact "expiry" expecting it to lapse; model expiry as content + an explicit `forget`.
 
 **Write-gate (§10.1, opt-in via `writeGate` config).** When a `writeGate` is wired, `remember()` first
 builds a gate-able action `{ type: "memory.write", kind, provenance: by, text, id, meta?, injectionRisk? }`
@@ -804,6 +821,13 @@ const turns = ctx.scoped(tenant).recentMemory({ kind: "episode", n: 20, body: tr
   on memory, so KNN can't bypass it and neither can this. No per-row expiry on this axis (episode
   staleness is the 30-day prune; pruned rows are already gone). Each row adds `occurredAt` (epoch ms;
   `null` for a fact).
+  > **Conversation-window gotcha (episodes are session-fenced).** Episodes are fenced by `session` as
+  > well as owner (recency is not a ranking term, so a run's own episodes mustn't be buried by another's
+  > — see the `session` config). So `recentMemory({ kind: 'episode' })` returns **only the current
+  > session's** episodes when a `session` is set. To use it as a conversation window that **survives a
+  > restart**, construct the instance **without an explicit `session`** (episodes write `session=NULL` →
+  > always visible) or reuse a **stable** session id per chat; otherwise each restart's window starts
+  > empty. **Facts are unaffected** (always cross-session).
 
 The two axes resolve scope differently (`doc_scope` vs `mem_scope.owner`), so a single call mixes **one
 axis only** — `doc` together with `fact`/`episode` **throws** (call once per axis). `opts`: `scope`
