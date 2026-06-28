@@ -28,6 +28,26 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.25.0] — 2026-06-28
+
+### Added
+- **Configurable episode retention window** (`episodeWindowDays`, retention model 2026-06-27) — the
+  rolling window an `episode` stays retained and promote-eligible is now a `LiteCtxConfig` knob (default
+  **30**, unchanged). One value drives **both** consumer sites — the write-time self-prune
+  (`pruneStaleEpisodes`) and the `promotionCandidates` floor — so the two can never diverge. Shorten the
+  window for data-minimization, lengthen it to retain older episodes longer; the formerly-hardcoded
+  `ACTIVE_EPISODE_DAYS` demotes to the default for the field. **Facts are durable and untouched.**
+  ⚠ The window is *coupled to the promotion ladder*: a window shorter than an episode's promote-and-prove
+  time can prune it (and drop it below the promotion floor) before it reaches the threshold, so it never
+  promotes — `30` is the safe default for exactly this reason. A non-positive / non-finite value is
+  rejected at construction (it would silently destroy the scratchpad).
+
+### Changed
+- The two episode-window consumer sites (`pruneStaleEpisodes` on episode write; `promotionCandidates`'
+  active-window floor) now read the resolved `this.episodeWindowDays` instead of the `ACTIVE_EPISODE_DAYS`
+  const. With the option unset the resolved value is `30`, so the default path is byte-identical to 0.24.0
+  (the unchanged `test/promotion.test.js` regression suite passes against the new code).
+
 ## [0.24.0] — 2026-06-27
 
 ### Added

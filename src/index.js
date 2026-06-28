@@ -38,11 +38,13 @@ const QUERY_CACHE_CAP = 128; // LRU of query→vector so repeated queries skip r
 const KNN_K = 8;
 
 // Episode promotion ladder (slice 5b, §14 #4 view #4). Episodes are the agent's ephemeral
-// scratchpad; they graduate by USE into durable facts. ACTIVE_EPISODE_DAYS = the rolling window an
-// episode stays promote-eligible AND retained — older episodes self-prune on the next episode write
-// (anything that mattered was already distilled into a fact, which never prunes). 30 days is long
-// enough to promote-and-prove and keeps the set bounded with one knob (no count cap). The promote
-// threshold runs higher than facts' review (10 vs 5) — episodes are noisier and more numerous.
+// scratchpad; they graduate by USE into durable facts. The rolling window an episode stays
+// promote-eligible AND retained — older episodes self-prune on the next episode write (anything that
+// mattered was already distilled into a fact, which never prunes). 30 days is long enough to
+// promote-and-prove and keeps the set bounded with one knob (no count cap). The promote threshold runs
+// higher than facts' review (10 vs 5) — episodes are noisier and more numerous. ACTIVE_EPISODE_DAYS is
+// now the DEFAULT for the `episodeWindowDays` config knob (retention model 2026-06-27); both consumer
+// sites read the resolved `this.episodeWindowDays`, never this const directly.
 const ACTIVE_EPISODE_DAYS = 30;
 const EPISODE_PROMOTE_THRESHOLD = 10;
 const DAY_MS = 86_400_000;
@@ -125,6 +127,17 @@ export const GLOBAL = Symbol("litectx:global");
  *                                         episodes. A host running concurrent agents sets it so a run's
  *                                         own episodes aren't buried by more-relevant other sessions
  *                                         (gate #1, 2026-06-13). `fact`s ignore it (always cross-session).
+ * @property {number} [episodeWindowDays]  the rolling window (in days) an `episode` stays RETAINED and
+ *                                         promote-eligible (default {@link ACTIVE_EPISODE_DAYS} = 30). On
+ *                                         each episode write, episodes older than this self-prune; the same
+ *                                         window floors {@link LiteCtx#promotionCandidates}. One knob bounds
+ *                                         the agent scratchpad (no count cap). ⚠ This is NOT a free hygiene
+ *                                         dial — it is COUPLED to the promotion ladder: a window shorter than
+ *                                         an episode's promote-and-prove time can prune it (and drop it below
+ *                                         the promotion floor) BEFORE it reaches the threshold, so it never
+ *                                         promotes. Shorten it for data-minimization, lengthen it to retain
+ *                                         older episodes longer (the set grows); 30d is the safe default that
+ *                                         leaves room to promote-and-prove. Facts are durable and untouched.
  * @property {WriteGateLike} [writeGate]   optional write-gate hook (CE-PRD §10.1) — when set, `remember()`
  *                                         emits a `{type:"memory.write", …}` action and `await`s
  *                                         `writeGate.check(action)` BEFORE persisting; a `deny` outcome
@@ -186,6 +199,14 @@ export class LiteCtx {
     // fail-closed DOC-axis scope (multis M3 ask): off = legacy (null scope = see-all); on = a missing
     // doc scope throws on read AND write, so a forgotten scope is a loud error, never a silent tenant leak.
     this.strictScope = config.strictScope ?? false;
+    // episode retention window (retention model 2026-06-27) — the default ACTIVE_EPISODE_DAYS demotes from
+    // "the value" to "the default for this field". Guarded: a non-positive/non-finite window would prune the
+    // whole scratchpad and starve the ladder silently, so reject it loudly rather than corrupt data quietly.
+    const ewd = config.episodeWindowDays;
+    if (ewd != null && (!Number.isFinite(ewd) || ewd <= 0)) {
+      throw new Error(`LiteCtx: episodeWindowDays must be a positive number of days (got ${ewd})`);
+    }
+    this.episodeWindowDays = ewd ?? ACTIVE_EPISODE_DAYS;
     this.store = new Store(this.dbPath, { owner: this.owner, session: this.session });
 
     // embeddings tier (slice 6) — off by default. The embedder is lazy: built on first use only when
@@ -777,7 +798,7 @@ export class LiteCtx {
     // never prunes). Bounds the store with no cron; only episode writes grow the set, so that is where
     // it's trimmed. Pruned BEFORE the write so the episode the caller just authored — even one with an
     // explicit backdated occurredAt — is always honored, never deleted by its own write.
-    if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS);
+    if (kind === "episode") this.store.pruneStaleEpisodes(Date.now() - this.episodeWindowDays * DAY_MS);
     this.store.writeMemory({ id, text, kind, format, provenance: by, occurredAt, meta, embedding, scope: writeScope, owner: writeOwner, expiresAt: opts.expiresAt, createdAt: Date.now() });
   }
 
@@ -1010,8 +1031,9 @@ export class LiteCtx {
   /**
    * Episode promotion candidates (§14 #4 view #4, slice 5b) — the agent-side first rung of the
    * promotion ladder. Returns agent-written `episode`s recalled at least `threshold` times within the
-   * {@link ACTIVE_EPISODE_DAYS}-day rolling active window (older episodes have decayed out and
-   * self-prune on the next episode write). The intended loop is the **consumer's agent**: read each
+   * rolling active window (`episodeWindowDays`, default 30 — older episodes have decayed out and
+   * self-prune on the next episode write). The window floor here is the SAME knob the prune uses, so a
+   * candidate is never surfaced after it would have been pruned. The intended loop is the **consumer's agent**: read each
    * candidate (`get(id)`), distil a durable `fact` via `remember(id, text, { kind: "fact", by:
    * "agent" })` — which then rides the existing `reviewCandidates(5)` → human-validate path. litectx
    * **flags, never summarizes** (no extraction LLM): it supplies the trigger; the agent writes the
@@ -1033,7 +1055,7 @@ export class LiteCtx {
    */
   promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD, opts = {}) {
     const ms = this._resolveMemReadScope(opts.scope, "promotionCandidates");
-    return this.store.promotionCandidates({ threshold, since: Date.now() - ACTIVE_EPISODE_DAYS * DAY_MS, memOwner: ms.memOwner, memSeeAll: ms.memSeeAll }).map((c) => ({ ...c, path: memId(c.path) })); // W4: public id out
+    return this.store.promotionCandidates({ threshold, since: Date.now() - this.episodeWindowDays * DAY_MS, memOwner: ms.memOwner, memSeeAll: ms.memSeeAll }).map((c) => ({ ...c, path: memId(c.path) })); // W4: public id out
   }
 
   /**
@@ -1076,7 +1098,8 @@ export class LiteCtx {
    *   the tenant, ordered by **`occurred_at` (episodes) / `created_at` (facts)** newest-first, fenced on
    *   `mem_scope.owner` (`tenant ∪ shared`, session-aware) — the SAME fence as `recall`/`get` on memory, so
    *   it can never surface another tenant's rows. Under `strictScope` a missing `scope` THROWS. No per-row
-   *   expiry on this axis (episode staleness is the 30-day prune; pruned rows are already gone).
+   *   expiry on this axis (episode staleness is the rolling-window prune — `episodeWindowDays`, default
+   *   30; pruned rows are already gone).
    *
    * The two axes resolve scope differently (`doc_scope` vs `mem_scope.owner`), so a single call mixes ONE
    * axis only: `doc` with `fact`/`episode` together THROWS — call once per axis (they are distinct stores).

@@ -1201,6 +1201,32 @@ end-to-end before the next one exists, so nothing is built apart and wired up la
   gate (a synthetic promotion oracle = the circularity trap), so the "scenario bench" is a scenario
   integration test scripting the ladder, not a floored MRR bench; POC-first
   (`poc/promotion-ladder-poc.mjs`) proved composition. 5 tests (126 total); tsc clean; gates untouched.
+  - **Retention model (settled 2026-06-27, multis M4).** Two concerns, kept separate — this is the whole
+    model:
+    1. **Operational hygiene** (bound the episode scratchpad) is *litectx's* job → episodes hard-prune on
+       a rolling window (default **30 days**; `ACTIVE_EPISODE_DAYS` is the default for the
+       **`episodeWindowDays`** config knob, **delivered 0.25.0** — the formerly-deferred opt-in, un-deferred
+       once the model needed an adopter-tunable window). The window is *coupled to the promotion ladder* — it
+       is simultaneously the **retention** bound and the **promote-eligibility** floor (both `pruneStaleEpisodes`
+       and `promotionCandidates` read the one resolved `this.episodeWindowDays`), so a window shorter than an
+       episode's promote-and-prove time can prune it before it ever promotes (POC `episode-window-config-poc.mjs`
+       proved both the coupling and that the default path is byte-identical). 30d is the safe default for
+       exactly this reason; a non-positive/non-finite window is rejected at construction.
+    2. **Lifecycle / compliance policy** (90/365-day schemes, right-to-erasure, "delete everything when
+       done") is the *adopter's* job → composed from `forget` on lifecycle events. `forget({ scope })` is
+       the immediate, complete tenant wipe — and it is the *correct* compliance primitive precisely
+       because it deletes **now**, not when a timer fires (a TTL would let data linger past the event).
+    - **Facts are durable by default** — load-bearing for the ladder: an episode is promoted to a fact so
+      it *outlives* the scratchpad window; auto-expiring facts would undo the promotion. **No per-row TTL
+      on the memory axis** — `expiresAt` + `purge()` are **doc-axis only** (a `remember({ kind:'fact',
+      expiresAt })` is silently ignored). A per-fact `expiresAt` (reusing the doc-axis machinery —
+      `expires_at` on `mem_scope` + `purge`) is a **deferred opt-in** — un-defer condition: *a consumer
+      needs time-based (not event-based) fact aging*.
+    - **Net:** 30-day episodes (default; tunable via `episodeWindowDays` since 0.25.0) · durable facts · no per-row TTL · all
+      other retention is **explicit `forget`** (by `scope` = whole-tenant/compliance, or `id`/`idPrefix`/
+      `kind`). The old homegrown 90/365-day fact retention is NOT rebuilt on litectx — it maps to
+      promotion→durable-fact + `forget({ scope })` on the lifecycle event (which is the more correct shape
+      than a fixed timer anyway).
 - **Slice 5a (access-log tier) — `recentActivity()`: "what was I working on" — ✅ SHIPPED
   (2026-06-11).** The first access-log-tier slice, and the legitimate home of the witnessed-edit
   signal the bench POCs validated for *next-use* (AUC 0.79–0.97) but falsified for *recall re-ranking*

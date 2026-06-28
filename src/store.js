@@ -1115,8 +1115,8 @@ export class Store {
    * time (possibly backdated) wins where present, else the write time — the spec's ordering.
    *
    * No expiry predicate: the memory axis carries no per-row TTL (unlike the doc axis's `expires_at`);
-   * episode staleness is handled upstream by the 30-day {@link pruneStaleEpisodes} (pruned rows are
-   * deleted, so absent here by construction). A row written before `created_at` existed sorts last (NULL).
+   * episode staleness is handled upstream by the rolling-window {@link pruneStaleEpisodes} (`episodeWindowDays`,
+   * default 30 — pruned rows are deleted, so absent here by construction). A row written before `created_at` existed sorts last (NULL).
    * Logs NO recall — recency is not query-demand (mirrors the doc-axis verb). `path` (the id) feeds
    * {@link getItem}; the facade attaches verbatim body + opaque meta (where the caller parks `role`, etc).
    * @param {{ kinds: string[], memOwner?: string|null, memSeeAll?: boolean, limit: number }} filter
