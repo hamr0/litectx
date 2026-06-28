@@ -28,6 +28,26 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.26.0] — 2026-06-28
+
+### Added
+- **`enumerate({ kind, scope, offset, limit, body })`** — exhaustive, rank-free, scope-fenced paginated
+  walk of one memory kind (`fact` | `episode`), for bareagent's RLM `scan` (count / "all of them"
+  questions). The **structural opposite of `recall`**: no query, no score, no embedder — an ordered
+  `rowid` table read that runs identically with the embeddings tier on or off. `recall` is FTS-gated,
+  ranked, and capped, so it *misses the tail by design* (measured 0.05–0.24 recall on a "how many" ask);
+  `enumerate` returns **exactly** the rows of a kind visible to the scope — unioning every page (`offset`
+  0 until `nextOffset === null`) is gapless and dup-free. Returns `{ items, total, offset, nextOffset }`;
+  `items` are pointer rows (`{ path, kind, format, occurredAt }`) plus verbatim `body` when `body:true`
+  (same fidelity as `recall({body:true})`, `=== get(id).text`). `total` is the kind's scoped count.
+  **Scope-fenced on `mem_scope.owner`** via the same resolver `recall`/`count` use (own ∪ shared only;
+  `GLOBAL` → shared tier; `strictScope` → a missing scope throws), so it cannot leak another tenant's
+  rows. Writes nothing to the recall audit log (a full scan is batch tooling, not user demand).
+  **API-only, never model-callable** (like `stash`) — absent from the MCP/CLI surface. Bound on
+  `ScopedView` so a tenant scope can't be forgotten. v1 is the **memory axis only**; a non-mem `kind`
+  throws. (`code`/`doc` enumeration — a second expiry-aware `doc_scope` path — lands when a codebase-scan
+  consumer exists. `OFFSET` is O(n) in SQLite; a `rowid`-cursor is the deferred large-store path.)
+
 ## [0.25.0] — 2026-06-28
 
 ### Added

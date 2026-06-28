@@ -174,6 +174,19 @@ export const GLOBAL = Symbol("litectx:global");
  */
 
 /**
+ * One row of an {@link LiteCtx#enumerate} page — a pointer record (search-only fields like `score`
+ * omitted; this is an unranked table read). Field name is `path` (the public id, decoded via `memId`),
+ * uniform with `recall`/`recentMemory`/`get`.
+ * @typedef {Object} EnumItem
+ * @property {string} path               the written-memory id (public, owner-prefix stripped)
+ * @property {string} kind               "fact" | "episode"
+ * @property {string} format             the stored format
+ * @property {number|null} occurredAt    episode timestamp (epoch ms); null for a fact
+ * @property {string} [body]             VERBATIM stored text — present only when `body:true`
+ * @property {Record<string, unknown>} [meta]  opaque caller metadata, present only when the row carries it
+ */
+
+/**
  * @typedef {Object} IndexResult
  * @property {number} files      total documents in the index after the pass
  * @property {number} added      newly indexed files
@@ -1143,6 +1156,47 @@ export class LiteCtx {
     return hits;
   }
 
+  /**
+   * Exhaustive, scope-aware, deterministic, paginated read of ONE memory kind — the structural opposite
+   * of {@link recall} (FTS-gated + ranked + capped, so it MISSES the tail by design; measured 0.05–0.24
+   * recall on a "how many" ask). For batch "count / all of them" operations (bareagent RLM `scan` over
+   * accrued memory): no query, no ranking, no embedder — an ordered `rowid` table read that runs
+   * identically with the embeddings tier on or off. **API-only, never model-callable** (like `stash`):
+   * the deterministic scan orchestrator is the only caller — an LLM must never say "dump everything".
+   *
+   * Unioning every page (`offset` 0 until `nextOffset === null`) yields EXACTLY the rows of `kind`
+   * visible to this scope — gapless, no dupes (the load-bearing property). Scope-fenced on
+   * `mem_scope.owner` via the SAME resolver {@link recall}/{@link count} use, so a scoped instance sees
+   * its own ∪ shared only (pass {@link GLOBAL} for the shared tier; under `strictScope` a missing scope
+   * THROWS). `total` is the scoped count of the kind; `nextOffset = offset + items.length` while rows
+   * remain, else `null`. `body:true` inlines the VERBATIM stored text (same path as `recall({body:true})`).
+   * Writes NO recall audit log — a full scan is batch tooling, not user demand.
+   *
+   * v1 is the **memory axis only** (`fact`/`episode` — the scan targets). `code`/`doc` enumeration (a
+   * second expiry-aware `doc_scope` path, file-granular) lands when a codebase-scan consumer exists.
+   *
+   * Async to match the `recall` family's signature (no embedder is actually touched).
+   *
+   * @param {{ kind: 'fact'|'episode', scope?: string | symbol, offset?: number, limit?: number, body?: boolean }} opts
+   * @returns {Promise<{ items: EnumItem[], total: number, offset: number, nextOffset: number | null }>}
+   */
+  async enumerate(opts) {
+    const { kind, offset = 0, limit = 100, body = false } = opts ?? {}; // clean validation throw, not a raw TypeError, on a no-arg JS call
+    if (kind !== "fact" && kind !== "episode")
+      throw new Error(`enumerate: kind must be fact | episode (got "${kind}") — v1 is the memory axis only`);
+    if (!Number.isInteger(offset) || offset < 0) throw new Error(`enumerate: offset must be a non-negative integer (got ${offset})`);
+    if (!Number.isInteger(limit) || limit <= 0) throw new Error(`enumerate: limit must be a positive integer (got ${limit})`);
+    const rs = this._resolveMemReadScope(opts.scope, "enumerate");
+    const total = this.store.countMem({ kinds: [kind], memOwner: rs.memOwner, memSeeAll: rs.memSeeAll });
+    const items = this.store.enumerateMem({ kind, memOwner: rs.memOwner, memSeeAll: rs.memSeeAll, offset, limit });
+    this._attachMeta(items); // opaque caller metadata, verbatim (no-op when none)
+    if (body) this._attachBodies(items); // verbatim stored text
+    for (const it of items) it.path = memId(it.path); // W4: public id out — AFTER meta/body fill, which key on the encoded path
+    // gapless stop: only past the last row does items.length stop short of `limit` AND offset+len reach total.
+    const nextOffset = offset + items.length < total ? offset + items.length : null;
+    return { items, total, offset, nextOffset };
+  }
+
   /** @returns {number} total stored items — indexed documents + written memory */
   size() {
     return this.store.count();
@@ -1221,6 +1275,11 @@ export class ScopedView {
   /** Scope-bound {@link LiteCtx#count} (multis M4 O1). @param {{ kind?: string | string[] }} [opts] */
   count(opts = {}) {
     return this._ctx.count({ ...opts, scope: this._scope });
+  }
+
+  /** Scope-bound {@link LiteCtx#enumerate} (bareagent RLM scan). @param {{ kind: 'fact'|'episode', offset?: number, limit?: number, body?: boolean }} opts */
+  enumerate(opts) {
+    return this._ctx.enumerate({ ...opts, scope: this._scope });
   }
 
   /** Scope-bound {@link LiteCtx#reviewCandidates} (multis M4). @param {number} [threshold=5] */

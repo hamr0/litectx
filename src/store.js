@@ -1144,6 +1144,37 @@ export class Store {
   }
 
   /**
+   * Exhaustive, scope-fenced, `rowid`-ordered page of ONE memory kind (bareagent RLM `scan` — enumerate).
+   * The structural opposite of {@link search}/{@link knnCandidates}: no query, no rank, no embedder — an
+   * ordered table read. Same owner/session fence as every other mem read (via {@link _memFilter}), so a
+   * scoped instance still sees only its own ∪ shared, never another tenant's rows. Order by `rowid`
+   * (insertion order, the same stable key `nodesForPath` uses) is identical across calls on an unchanged
+   * store, so a consumer's multi-pass union over `offset` is gapless + dup-free. Pairs with
+   * {@link countMem} for the kind's scoped `total` (so a walk can stop exactly at the last page).
+   * @param {{ kind: string, memOwner?: string|null, memSeeAll?: boolean, offset: number, limit: number }} o
+   *   `kind` ∈ {fact, episode}; `memOwner`/`memSeeAll` the resolved fence; `offset`/`limit` the page window
+   * @returns {{ path: string, kind: string, format: string, occurredAt: number|null }[]}
+   */
+  enumerateMem({ kind, memOwner, memSeeAll, offset, limit }) {
+    const f = this._memFilter({ memOwner, memSeeAll });
+    return /** @type {{ path: string, kind: string, format: string, occurredAt: number|null }[]} */ (
+      this.db
+        .prepare(
+          "SELECT m.path AS path, m.kind AS kind, m.format AS format, m.occurred_at AS occurredAt " +
+            "FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
+            "WHERE m.kind = :kind " +
+            // identical owner/session fence to search()/knnCandidates/recentMemoryMem — enumerate can't
+            // bypass it any more than they can (Test 3 scope-isolation locks this).
+            "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
+            "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid) " +
+            // rowid = insertion order → stable base order for the consumer's multi-pass shuffle/union.
+            "ORDER BY m.rowid LIMIT :limit OFFSET :offset"
+        )
+        .all({ kind, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session, limit, offset })
+    );
+  }
+
+  /**
    * One stored item's full record by id — any id (slice 9): a written-memory id or an indexed
    * file's repo-relative path. Written rows carry their raw text (`mem_text`); file rows carry
    * `text: null` here — the caller reads the file from disk (the index is not a file cache).

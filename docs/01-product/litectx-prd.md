@@ -410,11 +410,35 @@ Design rules (DECIDED):
     consumer needs it. (This deliberately revises R-G5's 2026-06-12 "supersede = duplicative" verdict for
     the *multi-tenant* case: a bare upsert was enough single-tenant, but tenant isolation needed the
     owner-fenced key — see §8.1 R-G5.)
+  - **Exhaustive paginated read `enumerate()` (v0.26, bareagent RLM `scan`)** — the one read the relevance
+    engine structurally could not do. Every existing read (`recall`, `search`) is **FTS-gated**: it needs a
+    query and returns a ranked top-N — by design, to *avoid* dumping the corpus. But a "count / all of them"
+    question (*"how many of these records are X?"*) needs the opposite: **retrieval cannot count** — BM25
+    caps at lexical hits, KNN at `K`, and no `n` makes recall exhaustive (it over-includes confusers and
+    *still* misses the tail; measured 0.05–0.24 true-set recovery upstream). `enumerate({ kind, scope,
+    offset, limit, body })` is an **ordered `rowid` table read** — no query, no score, no embedder, runs
+    identically with the embeddings tier on or off. Unioning every page (`offset` 0 until `nextOffset ===
+    null`) yields **exactly** the rows of the kind visible to the scope: **gapless, no dupes** (the
+    load-bearing property). It reuses the **same `mem_scope.owner` fence** as `recall`/`count` (own ∪ shared
+    only; `GLOBAL` → shared tier; `strictScope` → a missing scope throws), so it can't leak a tenant's rows;
+    `total` is the kind's scoped count; `body:true` inlines verbatim text (`=== get(id).text`). It writes
+    **nothing** to the recall audit log (a full scan is batch tooling, not user demand — the same carve-out
+    `recentMemory` makes). **API-only, never model-callable** (like `stash`): an LLM must never say *"dump
+    everything"* — only a deterministic orchestrator calls it; it is absent from the MCP/CLI surface. A
+    **distinct verb**, not `search(null)`: overloading the relevance API with "no query = everything" hides
+    an exhaustive read behind a ranking surface (the same mechanism-vs-policy reason `recentMemory` is a
+    separate verb, not a `recall` flag). **v1 is the memory axis only** (`fact`/`episode` — the scan
+    targets; a non-mem `kind` throws); `code`/`doc` enumeration (a second expiry-aware `doc_scope` path,
+    file-granular per upload path — `nodesForPath` already covers one file's chunks) lands when a
+    codebase-scan consumer exists. `OFFSET` is O(n) in SQLite — fine for the targeted row counts; a
+    `rowid`-cursor (`afterId`) is the **deferred** large-store path (**un-defer condition:** a consumer
+    reports measurable latency on a large store, same trigger as `recentMemory`'s deferred FTS index).
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration; v0.18 hardened the R2
   scope default; v0.20 added the `recentMemory` empty-match recency fallback; v0.21 extended per-call
   scope + `strictScope` to the memory axis; v0.22 added tenant-scoped `forget`; v0.23 extended
   `recentMemory` + a new `count` to the memory axis and locked the KNN fence; v0.24 added the tenant-
-  fenced supersede key.)*
+  fenced supersede key; v0.26 added `enumerate` — the exhaustive, rank-free paginated read for batch
+  "all of them" scans.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.

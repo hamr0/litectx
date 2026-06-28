@@ -84,6 +84,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
 | **`recentMemory()`** — recall's empty-FTS-match recency sibling: newest rows by time, scope-fenced. **Doc axis** (default) + **memory axis** (`kind:'fact'|'episode'`, ordered `occurredAt`/`createdAt`) | ✅ shipped (M3 doc → M4 R3 memory — separate verb so recency never pollutes recall ranking) |
 | **`count({scope, kind})`** — per-tenant memory count by kind (`/memory`, `/docs`), tenant-fenced + expiry-aware, additive across axes | ✅ shipped (multis M4 O1) |
+| **`await enumerate({kind, scope, offset, limit, body})`** — exhaustive, rank-free, scope-fenced paginated walk of one memory kind (`fact`/`episode`): the structural opposite of `recall` (FTS-gated/ranked/capped → misses the tail). For batch "count / all of them" (bareagent RLM `scan`). **API-only**, no embedder | ✅ shipped (bareagent RLM scan — gapless union, rowid-ordered, no recall-log) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
 | **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; `writeAudit` records a JSONL line per write **standalone (gate-independent)**; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; gate demand-gated, no producer for `memory.inject`; audit usable now without a gate) |
@@ -371,7 +372,7 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
 ### `ctx.scoped(scope)` → `ScopedView`
 A **scope-bound view** (multis M3 fail-closed ask; extended to memory in M4) — a per-tenant handle over a
 single shared instance. `ctx.scoped("chat-42")` returns a handle whose `recall` / `get` / `ingest` /
-`remember` / `recentMemory` / `count` / `reviewCandidates` / `promotionCandidates` carry that scope **automatically**,
+`remember` / `recentMemory` / `count` / `enumerate` / `reviewCandidates` / `promotionCandidates` carry that scope **automatically**,
 so "forgot to pass a scope" becomes a non-existent code path (there is no per-call `scope` to omit). One
 bound tenant string now fences **every fenceable kind** — doc/blob uploads (via `doc_scope`) **and**
 `fact`/`episode` memory (via the per-call `mem_scope.owner`, M4) — so a single `LiteCtx` is a complete
@@ -385,7 +386,7 @@ path the only one a call site touches.
   with no scope is the very footgun this closes, so it can't be constructed. (Throws even when
   `strictScope` is off — the view's own invariant.)
 - Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `forget`, `recentMemory`,
-  `count`, `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
+  `count`, `enumerate`, `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
   `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory.
   `impact`/`index`/`recent` are not on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
@@ -854,6 +855,40 @@ ctx.count({ scope: "chat:42" });                      // facts + episodes + docs
 omitted (→ all three: the tenant's whole writable memory). `code`/file rows are repo-global and out of
 scope here (use `size` for the grand total). Under `strictScope` a missing `scope` **throws** for any
 axis touched. Sync, cheap (a `SELECT count(*)`).
+
+### `await ctx.enumerate(opts)` → `{ items: EnumItem[], total, offset, nextOffset }`
+**Exhaustive, rank-free, paginated walk of one memory kind** — the structural opposite of `recall`.
+`recall` is FTS-gated, ranked, and capped: it answers *"the most relevant N"* and **misses the tail by
+design** (measured 0.05–0.24 recall on a *"how many of these are X"* ask — BM25 caps at lexical hits,
+KNN at `K`, and no `n` makes it exhaustive). `enumerate` is the read for **count / "all of them"**
+batch questions: no query, no score, no embedder — an ordered `rowid` table read that runs identically
+with the embeddings tier on or off. **API-only, never model-callable** (like `stash`): a deterministic
+orchestrator is the only caller — an LLM must never be able to say *"dump everything"*. The primary
+consumer is bareagent's RLM `scan`.
+
+```js
+// walk every fact for a tenant, in stable insertion order, judging each — the only honest count
+let off = 0, all = [];
+do {
+  const page = await ctx.scoped("chat:42").enumerate({ kind: "fact", offset: off, limit: 200, body: true });
+  all.push(...page.items);                 // page.items: { path, kind, format, occurredAt, body? }
+  off = page.nextOffset;                   // advances by items.length; null at the last page
+} while (off !== null);
+// unioning every page === EXACTLY the tenant's fact rows — gapless, no dupes
+```
+
+`opts`: `kind` — **`fact` | `episode` only** (v1 is the memory axis; a non-mem `kind` **throws**);
+`scope` (tenant string or `GLOBAL`); `offset`/`limit` (page window, default `0`/`100` — validated
+non-negative / positive integers); `body` (inline verbatim stored text, default off — same fidelity as
+`recall({body:true})`, `=== get(id).text`). Returns `total` (the kind's **scoped** count, `=== count`),
+the page `offset`, and `nextOffset` (`offset + items.length` while rows remain, else `null`).
+**Scope-fenced on `mem_scope.owner`** via the **same** resolver `recall`/`count` use (own ∪ shared only;
+`GLOBAL` → shared tier; `strictScope` → a missing `scope` **throws**), so it cannot leak another
+tenant's rows. Order is `rowid` (insertion order) → **deterministic and stable**, so a consumer's
+multi-pass union/shuffle over `offset` is gapless. Writes **nothing** to the recall audit log (a full
+scan is batch tooling, not user demand). `code`/`doc` enumeration (a second expiry-aware `doc_scope`
+path, file-granular) lands when a codebase-scan consumer exists. (`OFFSET` is O(n) in SQLite; fine for
+the row counts targeted — a `rowid`-cursor is the deferred large-store path.)
 
 ### `ctx.size()` → `number`
 Indexed document count (file-granularity).
