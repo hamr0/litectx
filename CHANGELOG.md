@@ -28,6 +28,15 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.26.1] — 2026-06-29
+
+### Docs (shipped in the npm package)
+- **README: dropped the hardcoded version from the status line** (`Status: v0.16.1 — …` → `npm i litectx`).
+  The version *badge* (auto from `package.json`) is now the single source of truth, so the headline can't
+  drift behind the release the way the stale `v0.16.1` had (ten releases). No API change; the recent
+  memory primitives (`forget({scope})`, `recentMemory`, `count`, supersede, `episodeWindowDays`,
+  `enumerate`) were already documented under the Memory group.
+
 ## [0.26.0] — 2026-06-28
 
 ### Added

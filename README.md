@@ -16,7 +16,7 @@
 
 litectx handles the parts of context that trip agents up: remembering across sessions, finding the right code, and fitting it all into the window. It makes the *context* better, not the model smarter — which matters most when the model is small, cheap, or local and the window is tight. It owns no loop and calls no model of its own. Light enough to read in an afternoon; complete enough that you don't reinvent memory, recall, or budget-fitting. One production dependency (`better-sqlite3`). Import what you need, ignore the rest.
 
-> **Status: v0.16.1 — `npm i litectx`.** Pre-1.0: the surface is stable and CI-gated, but may still evolve (`recall()` / `impact()` / `assemble()` are async). Release detail in the [CHANGELOG](CHANGELOG.md).
+> **`npm i litectx`.** Pre-1.0: the surface is stable and CI-gated, but may still evolve (`recall()` / `impact()` / `assemble()` are async). Release detail in the [CHANGELOG](CHANGELOG.md).
 
 ## Two cores
 
