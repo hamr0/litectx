@@ -433,12 +433,36 @@ Design rules (DECIDED):
     codebase-scan consumer exists. `OFFSET` is O(n) in SQLite — fine for the targeted row counts; a
     `rowid`-cursor (`afterId`) is the **deferred** large-store path (**un-defer condition:** a consumer
     reports measurable latency on a large store, same trigger as `recentMemory`'s deferred FTS index).
+  - **Semantic score on recall + scoped delete-by-key (v0.27, multis M13/M14)** — two additive gaps on
+    the same `recall`/`forget` memory surface, both **retiring a consumer workaround**. (1) *`cosine` on
+    recall hits (M13)*: a semantic `recall` already embeds the query and cosines it against stored vectors
+    to rank — but that cosine was **computed and discarded** (a paraphrase with zero shared tokens ranks
+    correctly yet its `score` reads `0.0`, indistinguishable from an unrelated note). It is now **surfaced
+    verbatim** as `hit.cosine` (raw `[-1,1]`, `fact`/`episode` + embeddings tier only) so multis's supersede
+    **pre-check** reads it directly instead of re-embedding the note and every candidate. It is an
+    **unblessed signal** — surfaced, never a verdict: separable in aggregate but **no reliable per-query
+    threshold** (the **R-S8** finding restated — a real paraphrase and an unrelated note share a cosine
+    band), so litectx returns the number and the *consumer* owns the cut and its false-skip risk. `score`
+    is unchanged and ranking is byte-identical (the value was already computed for the blend). Absent on
+    `code`/`doc` (there cosine is a gated re-rank signal, not a surfaced score — the query shares
+    identifiers with its answer). (2) *scoped delete-by-key (M14)*: `scoped(tenant).forget({ id })` /
+    `{ idPrefix }` now **combine** with the fence — the delete-side mirror of the v0.24 `(scope, id)`
+    upsert. The two delete paths didn't compose before: `scoped().forget` **threw** on `{ id }`, and base
+    `forget({ id })` is owner-**blind**, so "delete THIS tenant's row by id" forced a policy bridge
+    (scoped-`get` to verify, then blind delete) that was correct **only if ids were globally unique** — a
+    lib-external invariant. The fix makes the fence **structural**: the delete matches the owner-qualified
+    physical key (`owner\x1Fid`, the v0.24 mechanism), so a foreign tenant's id matches nothing → **`0`**
+    (the fence, not id-matching, decides). `{ scope, by }` still throws (owner-blind provenance = the
+    omission footgun). Defense-in-depth (physical-key match **and** the redundant `mem_scope.owner` fence —
+    either alone suffices; a leak needs both broken, mutation-verified). Both are **library-surface** (via
+    `ctx.scoped()`); the single-tenant MCP/CLI `forget` verbs are unchanged.
   *(PDF/DOCX was DEFERRED through v0.16; R2/R3/R5 added for the multis M3 migration; v0.18 hardened the R2
   scope default; v0.20 added the `recentMemory` empty-match recency fallback; v0.21 extended per-call
   scope + `strictScope` to the memory axis; v0.22 added tenant-scoped `forget`; v0.23 extended
   `recentMemory` + a new `count` to the memory axis and locked the KNN fence; v0.24 added the tenant-
   fenced supersede key; v0.26 added `enumerate` — the exhaustive, rank-free paginated read for batch
-  "all of them" scans.)*
+  "all of them" scans; v0.27 surfaced the semantic `cosine` on recall hits and added scoped
+  delete-by-key.)*
 - **Type-specific decay (§4) is keyed by `kind`** — adding a kind = add a decay rate + a
   chunker; no schema change. ACT-R applies uniformly across kinds, which is precisely how
   long/short-term doc memory lands later.

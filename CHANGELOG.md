@@ -28,6 +28,35 @@ All notable changes to this project are documented here, following
   archived `barecontext-prd.md`). Frozen `.claude/stash/*` and prior dated CHANGELOG entries are left
   intact (renaming history would falsify it).
 
+## [0.27.0] — 2026-07-05
+
+### Added
+- **`cosine` on recall hits — the semantic score, surfaced** (multis M13). In embeddings mode,
+  `fact`/`episode` recall hits now carry `cosine`: the raw query↔hit semantic similarity in `[-1,1]`
+  — the very KNN cosine litectx already computes to rank, returned verbatim so a consumer needn't
+  re-embed the note and every candidate to get it. Distinct from `score` (blended BM25 + spreading,
+  which reads `0.0` for a zero-shared-token paraphrase); `cosine` carries the meaning signal directly.
+  **An unblessed signal, not a verdict** — it separates related from unrelated *in aggregate* but has
+  **no reliable per-query threshold** (a real paraphrase and an unrelated note can share a band — the
+  R-S8 finding), so the caller owns any cut. Absent in BM25-only mode and on `code`/`doc` hits (there
+  cosine is a gated re-rank signal, not a surfaced score). Additive: `score` is unchanged; ranking is
+  byte-identical (the cosine was already computed for the blend — now attached, not recomputed).
+- **`scoped(tenant).forget({ id })` / `{ idPrefix }` — tenant-fenced delete-by-key** (multis M14).
+  `{ id }`/`{ idPrefix }` now **combine** with a tenant scope to delete one row / one id's `#`-segments
+  **for that owner only** — the delete-side mirror of the W4 `(scope, id)` upsert. The fence is
+  **structural**: it matches the owner-qualified physical key (`owner\x1Fid`), so a *foreign* tenant's
+  id matches nothing and returns **`0`** — the fence, not id-matching, decides (like a cross-tenant
+  `get`). Retires the consumer's "scoped-`get` to verify, then owner-blind delete" bridge, which was
+  safe only under a lib-external globally-unique-id invariant. `{ scope, by }` **still throws** (`by`
+  is owner-blind provenance — the omission footgun). Base `ctx.forget({ id })` stays owner-blind
+  (unchanged); `strictScope` fail-closed unchanged. Mem-axis only (never `docs`/blob). Defense-in-depth:
+  the physical-key match **and** the redundant `mem_scope.owner` fence both hold — either alone suffices
+  (mutation-verified: a leak needs both broken).
+
+### Notes
+- Both are additive and library-surface (reached via `ctx.scoped()`); the MCP/CLI `forget` verbs are
+  single-tenant and owner-blind, so they are unchanged.
+
 ## [0.26.1] — 2026-06-29
 
 ### Docs (shipped in the npm package)

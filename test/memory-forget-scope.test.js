@@ -202,21 +202,79 @@ test("M4 forget: a precise { idPrefix } is allowed even under strictScope (it na
   rmSync(root, { recursive: true, force: true });
 });
 
-// === 9. The combination guard — scope + (id/idPrefix/by) must NOT silently widen to a tenant wipe ===
+// === 9. The combination guard — scope + { by } must NOT silently widen to a tenant wipe ==========
+// (Feature B, 0.27.0: scope + { id }/{ idPrefix } NO LONGER throw — they fence a delete-by-key; see §10.)
 
-test("M4 forget: { scope } + a narrower (id/idPrefix/by) THROWS — never silently widens into a tenant-wide wipe", async () => {
+test("M4 forget: { scope } + { by } still THROWS — an owner-blind provenance filter can't ride a tenant fence", async () => {
   const { root, dbPath } = sharedDb();
   const ctx = new LiteCtx({ root, dbPath, strictScope: true });
   await seedTwoTenants(ctx);
 
-  assert.throws(() => ctx.forget({ scope: A, idPrefix: "fact" }), /does not combine/, "base method rejects scope + idPrefix");
-  assert.throws(() => ctx.forget({ scope: A, id: "fact:a" }), /does not combine/, "base method rejects scope + id");
-  assert.throws(() => ctx.forget({ scope: A, by: "human" }), /does not combine/, "base method rejects scope + by (would silently drop the by-filter and wipe all of A)");
-  // the footgun this closes: a scoped view injects the scope, so a stray narrower would otherwise wipe ALL of A
-  assert.throws(() => ctx.scoped(A).forget({ idPrefix: "fact:a" }), /does not combine/, "scoped view rejects idPrefix too (scope is injected)");
-  assert.throws(() => ctx.scoped(A).forget({ by: "human" }), /does not combine/, "scoped view rejects by too (else a by-filter silently widens to a full tenant wipe)");
+  assert.throws(() => ctx.forget({ scope: A, by: "human" }), /does not combine with \{ by \}/, "base method rejects scope + by (would silently drop the by-filter and wipe all of A)");
+  // the footgun this closes: a scoped view injects the scope, so a stray { by } would otherwise wipe ALL of A
+  assert.throws(() => ctx.scoped(A).forget({ by: "human" }), /does not combine with \{ by \}/, "scoped view rejects by too (else a by-filter silently widens to a full tenant wipe)");
   // nothing was deleted by the throwing calls
   assert.deepEqual(paths(await ctx.scoped(A).recall("auth JWT tokens", { kind: "fact" })), ["fact:a"], "A's fact intact — the throw prevented an over-wide wipe");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+// === 10. Feature B (0.27.0) — tenant-fenced delete-by-key (AC 1–4) ===============================
+
+test("Feature B AC1: scoped(A).forget({ id }) removes A's own row — 1 removed, A no longer has it", async () => {
+  const { root, dbPath } = sharedDb();
+  const ctx = new LiteCtx({ root, dbPath });
+  await seedTwoTenants(ctx);
+  assert.equal(ctx.scoped(A).forget({ id: "fact:a" }), 1, "A's own id → 1 removed");
+  assert.equal(ctx.scoped(A).get("fact:a"), null, "A's row is gone");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("Feature B AC2: the FENCE, not id-matching, decides — B deleting A's id removes 0, A survives", async () => {
+  const { root, dbPath } = sharedDb();
+  const ctx = new LiteCtx({ root, dbPath });
+  await seedTwoTenants(ctx);
+  // B and A are distinct owners (A='user:1' is a textual PREFIX of B='user:12') — a naive id/LIKE fence
+  // would leak; the physical-key fence must not. Also cross-check the SAME public id under both tenants.
+  await ctx.scoped(B).remember("fact:a", "B's own note that happens to reuse A's id", { kind: "fact" });
+  assert.equal(ctx.scoped(B).forget({ id: "fact:a" }), 1, "B deletes B's OWN fact:a → 1");
+  assert.equal(ctx.scoped(A).forget({ id: "fact:b" }), 0, "A deleting B's id fact:b → 0 (fence, not id, decides)");
+  assert.deepEqual(paths(await ctx.scoped(A).recall("auth JWT tokens", { kind: "fact" })), ["fact:a"], "A's fact:a SURVIVES — never reached by B's or by the cross-id delete");
+  assert.deepEqual(paths(await ctx.scoped(B).recall("auth JWT tokens", { kind: "fact" })), ["fact:b"], "B keeps fact:b; B's reused fact:a is gone");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("Feature B AC3: { id, kind } narrows; a missing scope still THROWS under strictScope", async () => {
+  const { root, dbPath } = sharedDb();
+  const ctx = new LiteCtx({ root, dbPath, strictScope: true });
+  await seedTwoTenants(ctx);
+  // id present but WRONG kind → 0 (fact:a is a fact, not an episode); right kind → 1
+  assert.equal(ctx.scoped(A).forget({ id: "fact:a", kind: "episode" }), 0, "{ id, kind:'episode' } does not match the fact");
+  assert.equal(ctx.scoped(A).forget({ id: "fact:a", kind: "fact" }), 1, "{ id, kind:'fact' } narrows and removes");
+  // fail-closed: a base by-key delete with NO scope under strictScope is exempt (precise target), but a
+  // scoped view always carries its scope, so this proves the fence path itself doesn't loosen strict.
+  assert.throws(() => ctx.forget({ scope: undefined, kind: "fact" }), /requires an explicit scope/, "scope-less bulk delete still throws under strict");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("Feature B AC4: symmetry — the same (scope, id) that upserts (W4) also deletes; idPrefix drops segments", async () => {
+  const { root, dbPath } = sharedDb();
+  const ctx = new LiteCtx({ root, dbPath });
+  // W4 upsert under a scope, then delete by the SAME (scope, id) → round-trip to empty.
+  await ctx.scoped(A).remember("fact:w4", "first value", { kind: "fact" });
+  await ctx.scoped(A).remember("fact:w4", "superseded value", { kind: "fact" }); // W4 upsert-in-place
+  assert.equal(ctx.scoped(A).forget({ id: "fact:w4" }), 1, "the (scope, id) that upserts also deletes → exactly 1 row");
+  assert.equal(ctx.scoped(A).get("fact:w4"), null, "round-tripped to empty");
+  // idPrefix drops a base id and its #segment siblings, tenant-fenced (chunked doc-in-memory shape).
+  await ctx.scoped(A).remember("note:big", "root", { kind: "fact" });
+  await ctx.scoped(A).remember("note:big#0", "seg 0", { kind: "fact" });
+  await ctx.scoped(A).remember("note:big#1", "seg 1", { kind: "fact" });
+  await ctx.scoped(B).remember("note:big", "B's own note:big — must survive", { kind: "fact" });
+  assert.equal(ctx.scoped(A).forget({ idPrefix: "note:big" }), 3, "A's base + 2 segments dropped");
+  assert.equal(ctx.scoped(B).get("note:big").text, "B's own note:big — must survive", "B's same-id row untouched by A's idPrefix delete");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
