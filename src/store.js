@@ -53,6 +53,11 @@ const STASH_TAIL = 80;
  * @property {string} kind
  * @property {string} format
  * @property {number} score   higher = more relevant
+ * @property {number} [cosine]  raw query↔hit semantic similarity in [-1,1] (fact/episode, embeddings
+ *                            mode only; absent in BM25-only mode). The KNN cosine litectx already
+ *                            computes for ranking, surfaced verbatim — NOT re-normalized into `score`.
+ *                            An UNBLESSED signal: it separates related from unrelated in aggregate but
+ *                            has no reliable per-query threshold (R-S8), so the caller owns any cut.
  * @property {import("./gitsig.js").GitSig | null} [git]  file-level git activity (grounding, not scored)
  * @property {ChunkRef | null} [chunk]  the best-matching chunk inside the hit (function pointer >
  *                            file pointer); null when nothing localizes — written memory has no
@@ -735,7 +740,7 @@ export class Store {
    * @returns {number}
    */
   forgetMemory(sel) {
-    if (sel.ownerFenced) return this.forgetMemoryByOwner(sel.owner ?? null, sel.kind);
+    if (sel.ownerFenced) return this.forgetMemoryByOwner(sel.owner ?? null, sel.kind, sel.id != null || sel.idPrefix != null ? { id: sel.id, idPrefix: sel.idPrefix } : undefined);
     /** @type {string[]} */
     const clauses = [];
     /** @type {Record<string, string>} */
@@ -805,11 +810,21 @@ export class Store {
    * unchanged by the unconditional write. "Delete every owner" is intentionally unexpressible here — that
    * is {@link reset}'s job.
    *
+   * **Feature B (0.27.0) — a fenced delete-BY-KEY.** With `precise` (`{ id }` / `{ idPrefix }`) this
+   * deletes exactly one tenant's row(s) by id, tenant-fenced — the delete-side mirror of the W4
+   * `(scope, id)` upsert. The fence is STRUCTURAL: it matches the owner-qualified physical key
+   * `memKey(owner, id)`, so a foreign tenant's row (a different owner prefix — or the bare id for the
+   * GLOBAL tier) is unmatchable, not policy-filtered → 0 removed, exactly like a cross-tenant `get`.
+   * The redundant `mem_scope.owner` fence (`scopePred`) stays as defense-in-depth (path prefix and
+   * column must agree by construction). Without `precise`, the whole-tenant wipe (unchanged).
+   *
    * @param {string | null} owner  a tenant `mem_scope.owner`, or `null` for the GLOBAL/shared tier
    * @param {string} [kind]  optional narrow to one kind (e.g. just `episode`); omitted → both
+   * @param {{ id?: string, idPrefix?: string }} [precise]  Feature B: a fenced delete-by-key (id, or an
+   *   id + its `#segment` rows); omitted → the whole-tenant wipe
    * @returns {number}
    */
-  forgetMemoryByOwner(owner, kind) {
+  forgetMemoryByOwner(owner, kind, precise) {
     /** @type {Record<string, string>} */
     const params = {};
     // tenant → exact owner (JOIN); GLOBAL/ownerless → owner IS NULL (LEFT JOIN, matching a present
@@ -820,7 +835,18 @@ export class Store {
         : ((params.owner = owner), "JOIN mem_scope s ON s.path = m.path WHERE s.owner = @owner");
     let kindPred = "";
     if (kind != null) (kindPred = " AND m.kind = @kind"), (params.kind = kind);
-    const selectSql = `SELECT m.path FROM mem m ${scopePred}${kindPred}`;
+    // Feature B: fence a precise delete on the owner-qualified physical key. `memKey(owner, id)` folds
+    // the owner into the key, so this alone identifies exactly the one tenant's row (bare `id` for the
+    // GLOBAL tier); the `#segment` rows of a multi-segment id ride the idPrefix LIKE (escaped).
+    let idPred = "";
+    if (precise?.id != null) (idPred = " AND m.path = @physId"), (params.physId = memKey(owner, precise.id));
+    else if (precise?.idPrefix != null) {
+      const base = memKey(owner, precise.idPrefix);
+      idPred = " AND (m.path = @physExact OR m.path LIKE @physLike ESCAPE '\\')";
+      params.physExact = base;
+      params.physLike = base.replace(/[\\%_]/g, "\\$&") + "#%";
+    }
+    const selectSql = `SELECT m.path FROM mem m ${scopePred}${kindPred}${idPred}`;
     const tx = this.db.transaction(() => {
       const paths = /** @type {{ path: string }[]} */ (this.db.prepare(selectSql).all(params)).map((r) => r.path);
       if (!paths.length) return 0;
