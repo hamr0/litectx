@@ -84,6 +84,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`recentActivity()`** — "what was I working on": witnessed chunk-edits, recency-windowed, isolated from recall | ✅ shipped (slice 5a — access-log tier, view #3) |
 | **`recentMemory()`** — recall's empty-FTS-match recency sibling: newest rows by time, scope-fenced. **Doc axis** (default) + **memory axis** (`kind:'fact'|'episode'`, ordered `occurredAt`/`createdAt`) | ✅ shipped (M3 doc → M4 R3 memory — separate verb so recency never pollutes recall ranking) |
 | **`count({scope, kind})`** — per-tenant memory count by kind (`/memory`, `/docs`), tenant-fenced + expiry-aware, additive across axes | ✅ shipped (multis M4 O1) |
+| **`cosine` on recall hits** — raw query↔hit semantic similarity surfaced on `fact`/`episode` hits (embeddings tier); the KNN cosine litectx already computes, unblessed (aggregate-separable, no per-query threshold — R-S8) | ✅ shipped (multis M13 — no re-embed to read the semantic score) |
+| **`scoped(t).forget({id})`** — tenant-fenced delete-by-key: drop one row / one id's segments for that owner only; foreign id → `0` (structural owner-qualified-key fence; delete-side mirror of the `(scope,id)` upsert) | ✅ shipped (multis M14 — retires the scoped-get-then-blind-delete bridge) |
 | **`await enumerate({kind, scope, offset, limit, body})`** — exhaustive, rank-free, scope-fenced paginated walk of one memory kind (`fact`/`episode`): the structural opposite of `recall` (FTS-gated/ranked/capped → misses the tail). For batch "count / all of them" (bareagent RLM `scan`). **API-only**, no embedder | ✅ shipped (bareagent RLM scan — gapless union, rowid-ordered, no recall-log) |
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
@@ -119,6 +121,7 @@ const hits = await ctx.recall("where do we validate the auth token?", { kind: "c
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
 const facts = await ctx.recall("jwt auth", { kind: "fact" });
 // fact/episode hits also carry provenance/use/occurredAt — surfaced for you to weigh, never scored
+// (+ cosine, the raw semantic similarity, when the embeddings tier is on)
 ctx.get("fact:auth-uses-jwt")?.text;                  // the body itself (recall returns ranked pointers)
 ctx.forget("fact:auth-uses-jwt");                     // by key; or forget({ by: "agent" }) in bulk
 ctx.close();
@@ -268,6 +271,8 @@ return shape follows the `kind` argument:
   provenance?: "human" | "agent",  // validation status (signed-off vs the agent's own assertion)
   use?: number,                    // recall-demand count ('recall' rows only); a fresh memory reads 0
   occurredAt?: number|null,        // episode timestamp (epoch ms); null for facts
+  cosine?: number,                 // raw query↔hit semantic similarity in [-1,1] (fact/episode + embeddings
+                                   // tier only; absent otherwise) — the KNN cosine, surfaced verbatim
   body?: string | null,            // the hit's content — ONLY when called with { body: true } (see above)
   meta?: Record<string, unknown> } // opaque caller metadata (RT-3), verbatim; written memory only
 ```
@@ -282,6 +287,18 @@ return shape follows the `kind` argument:
 > fresh memory, **not** a demerit. Ranking on either would be a who-said-it / popularity prior, which
 > the access-log POCs falsified (a trust/use tie-break can't reorder safely and buries better-matching
 > or fresh answers). They're absent on indexed-file hits — a file is not a claim awaiting validation.
+>
+> `cosine` (fact/episode hits, embeddings tier only) is the **raw query↔hit semantic similarity** in
+> `[-1,1]` — the very KNN cosine litectx already computes to rank, surfaced verbatim so you don't
+> re-embed to get it. It is **unlike `score`**: `score` is the blended BM25 + spreading rank (BM25-blind
+> on a zero-shared-token paraphrase, so it can read `0.0` for a semantically perfect match), whereas
+> `cosine` carries the semantic signal directly. It is **an unblessed signal, not a verdict**: it
+> separates related from unrelated *in aggregate*, but has **no reliable per-query threshold** (a real
+> paraphrase and an unrelated note can share a cosine band — the R-S8 finding), so a fixed cut will
+> mis-classify at the margin. Use it to *rank* or as a *conservative* pre-filter you own the risk of;
+> don't treat a number as proof two notes mean the same thing. Absent in BM25-only mode and on
+> `code`/`doc` hits (where the query shares identifiers with its answer, so cosine is a gated re-rank
+> signal, not a surfaced score).
 > `chunk` is **chunk-granular recall**: the function / method / md-section inside the file that
 > best carries your query terms (0-based inclusive lines). It **localizes, never reorders** —
 > ranking stays file-level and bench-identical. The most *specific* match wins: a class that
@@ -387,7 +404,8 @@ path the only one a call site touches.
   `strictScope` is off — the view's own invariant.)
 - Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `forget`, `recentMemory`,
   `count`, `enumerate`, `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
-  `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory.
+  `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory; `forget({ id })`
+  / `forget({ idPrefix })` delete one of its rows **by key**, tenant-fenced (a foreign id → `0`).
   `impact`/`index`/`recent` are not on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
 ```js
@@ -679,9 +697,17 @@ Delete directly-written memory. Returns the number of rows removed.
   (separate `doc_scope` axis), other tenants' rows, and the stash are untouched. Prefer the bound
   `ctx.scoped(tenant).forget()` (no scope to omit). Under `strictScope`, a **scope-less** memory forget
   (`forget({})` or owner-blind `forget({ kind })`) **throws** — a tenant-blind wipe is unexpressible by
-  omission. **Combines only with `{ kind }`** — passing `{ id }` / `{ idPrefix }` / `{ by }` alongside
-  **throws** rather than silently dropping the narrower and widening into a tenant-WIDE wipe (also closes
-  the scoped-view footgun: `scoped(A).forget({ by })` would otherwise inject `scope: A` and wipe all of A).
+  omission.
+- `forget({ scope, id })` / `forget({ scope, idPrefix })` — **tenant-fenced delete-by-key** (Feature B):
+  `{ id }` / `{ idPrefix }` **combine** with the fence to drop **one row / one id's `#`-segments for that
+  owner only** — the delete-side mirror of the `(scope, id)` upsert (supersede). The fence is
+  **structural**: it matches the owner-qualified physical key, so a *foreign* tenant's id matches nothing
+  and returns **`0`** (the fence, not id-matching, decides — exactly like a cross-tenant `get`). This
+  retires the "scoped-`get` to verify, then owner-blind delete" bridge (which was safe only if ids were
+  globally unique). `{ scope, by }` **still throws** (`by` is owner-blind provenance; combined with a
+  fence it is the omission footgun — `scoped(A).forget({ by })` would inject `scope: A` and wipe all of A;
+  use base `forget({ by })` for an owner-blind provenance delete). Reachable via the bound
+  `ctx.scoped(tenant).forget({ id })`.
 
 **`forget` can never touch indexed files** — it operates only on written
 (`remember`-created) rows. To remove an indexed file from the store, delete the file and
