@@ -81,6 +81,16 @@ const SPREAD_WEIGHT = 0.3;
 export const KINDS = ["code", "doc", "fact", "episode"];
 
 /**
+ * The kinds `remember()` accepts — the WRITE-side vocabulary ({@link KINDS} minus `code`, which
+ * enters only via `index()` from files). `remember()` validates against this exact list, so it is the
+ * single source of truth for "what can be written directly." Consumers that gate a config *before*
+ * calling `remember` (e.g. a schema validator) should bind this instead of re-typing the subset, so
+ * they can never drift if the write set widens or narrows.
+ * @type {readonly string[]}
+ */
+export const WRITE_KINDS = ["fact", "episode", "doc"];
+
+/**
  * The shared-tier scope sentinel (multis M3 fail-closed ask). Under `strictScope`, a missing scope
  * THROWS — so reading or writing the global knowledge base needs an explicit, unambiguous opt-in that
  * is never spelled the same as "I forgot." That is `GLOBAL`: pass it as a `scope` (to `recall`/`get`/
@@ -786,8 +796,8 @@ export class LiteCtx {
    */
   async remember(id, text, opts = {}) {
     const kind = opts.kind ?? "fact";
-    if (kind !== "fact" && kind !== "episode" && kind !== "doc") {
-      throw new Error(`remember: kind must be fact | episode | doc (got "${kind}"); code/doc-from-file enter via index()`);
+    if (!WRITE_KINDS.includes(kind)) {
+      throw new Error(`remember: kind must be ${WRITE_KINDS.join(" | ")} (got "${kind}"); code/doc-from-file enter via index()`);
     }
     const by = opts.by ?? "agent";
     if (by !== "human" && by !== "agent") throw new Error(`remember: by must be "human" | "agent" (got "${by}")`);
