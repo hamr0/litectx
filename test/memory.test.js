@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LiteCtx } from "../src/index.js";
+import { LiteCtx, WRITE_KINDS } from "../src/index.js";
 
 /** Build a throwaway repo on disk; returns its root. */
 function fixtureRepo() {
@@ -186,6 +186,24 @@ test("remember rejects an invalid kind and an invalid provenance", async () => {
   await assert.rejects(() => ctx.remember("x", "t", { kind: "code" }), /kind must be fact/);
   await assert.rejects(() => ctx.remember("x", "t", { kind: "fact", by: "robot" }), /by must be/);
   assert.throws(() => ctx.forget({}), /needs at least/);
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("WRITE_KINDS is the single source of truth for remember()'s accepted kinds", async () => {
+  // The exported vocabulary is exactly the write-side set (KINDS minus `code`).
+  assert.deepEqual([...WRITE_KINDS], ["fact", "episode", "doc"]);
+
+  const root = fixtureRepo();
+  const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+  // Drift guard: every WRITE_KINDS member is accepted, and nothing outside it is. If either the
+  // constant or remember()'s validation changes alone, one of these directions fails.
+  for (const kind of WRITE_KINDS) {
+    await ctx.remember(`ok:${kind}`, "content", { kind });
+  }
+  for (const kind of ["code", "stash", ""]) {
+    await assert.rejects(() => ctx.remember("x", "t", { kind }), /kind must be fact/);
+  }
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });

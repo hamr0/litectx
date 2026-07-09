@@ -6,6 +6,17 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-07-09
+
+### Added
+- **`WRITE_KINDS` — the write-side kind vocabulary, exported** (adaptlearn upstream ask A2). The kinds
+  `remember()` accepts (`fact | episode | doc` — `KINDS` minus `code`, which enters only via
+  `index()`) are now a bindable constant, and `remember()`'s own validation checks against it (single
+  source of truth — no re-typed list). Consumers that gate a config *before* calling `remember` (a
+  schema validator) can import `WRITE_KINDS` instead of hardcoding the subset, so they can't drift if
+  the write set ever widens or narrows. No behavior change; a drift-guard test asserts the accepted set
+  equals the constant.
+
 ### Docs (repo-only — not shipped in the npm package)
 - **PRD §3.1: recorded the litigated refusal of ML-grade PDF converters** (`MinerU`/`markitdown`) —
   rejected on two grounds (Python, so inexpressible as a JS-lib dep; and wasted on a recall index that

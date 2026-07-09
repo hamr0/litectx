@@ -1061,6 +1061,10 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).
+- `WRITE_KINDS: readonly string[]` — the write-side subset `remember()` accepts:
+  `["fact", "episode", "doc"]` (`KINDS` minus `code`, which enters only via `index()`).
+  `remember()` validates against this exact constant, so bind it (rather than re-typing the list)
+  when gating a config before you write — it can't drift if the write set ever changes.
 - `GLOBAL: symbol` — the shared-tier scope sentinel (the `strictScope` / `scoped()` opt-in for the
   doc axis). A read/write **sentinel, never stored** (maps to `doc_scope.scope IS NULL`); pass it as a
   `scope` or bind `ctx.scoped(GLOBAL)` to act on the global KB deliberately. See the scope note + `scoped()`.
