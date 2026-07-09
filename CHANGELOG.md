@@ -6,6 +6,8 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+## [0.28.0] — 2026-07-09
+
 ### Added
 - **`WRITE_KINDS` — the write-side kind vocabulary, exported** (adaptlearn upstream ask A2). The kinds
   `remember()` accepts (`fact | episode | doc` — `KINDS` minus `code`, which enters only via
