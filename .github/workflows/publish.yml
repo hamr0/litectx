@@ -21,10 +21,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
-          node-version: "22"   # npm@latest (OIDC, needs >=11.5.1) now requires Node >=22.22; Node 20 EBADENGINE
+          node-version: "20"
           registry-url: "https://registry.npmjs.org"
       - run: sudo apt-get update && sudo apt-get install -y ripgrep   # impact() runtime dep (rg -w); needed for `npm test`
-      - run: npm install -g npm@latest   # trusted publishing (OIDC) needs npm >= 11.5.1
+      - run: npm install -g npm@11   # OIDC trusted publishing needs npm >= 11.5.1; pin to 11 (npm@12 dropped Node 20 → EBADENGINE, and Node 22's ABI has no better-sqlite3 prebuilt)
       - run: npm ci
       # ---- same gates as CI before anything ships ----
       - run: npm run typecheck
