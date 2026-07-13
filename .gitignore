@@ -18,8 +18,9 @@ npm-debug.log*
 .DS_Store
 *.swp
 
-# Local agent settings (personal, not shared)
-.claude/settings.local.json
+# Agent working state — personal, not shared (memory, stashes, friction, settings).
+# `.github/` stays tracked; it is CI, not agent state.
+.claude/
 
 # Browser-tool scratch
 poc/.barebrowse/

@@ -6,6 +6,20 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### CI / repo (repo-only — not shipped in the npm package)
+- **Pinned the publish workflow's npm to `npm@11`** (was a floating `npm install -g npm@latest`).
+  `npm@latest` rolled to `npm@12`, which dropped Node 20 (`EBADENGINE`) and broke the OIDC publish
+  step. `npm@11` is still `>= 11.5.1` (what trusted publishing requires) and runs on Node 20, so the
+  workflow stays on the Node version `better-sqlite3` has a prebuilt binary for. A floating CI
+  dependency breaks on someone else's release schedule — pin it.
+  *Known debt:* moving CI to Node 22+ will require a coupled `better-sqlite3` bump (no Node-22 ABI
+  prebuilt at the pinned version). Node 20 is near EOL, so this is dated.
+- **Untracked `.claude/`** (agent working state — memory, stashes, friction, local settings) via
+  `.gitignore` + `git rm -r --cached`. Files stay on disk; they were never part of the package.
+  `.github/` remains tracked — it is CI, not agent state.
+- Committed the `package-lock.json` version bump to `0.28.0`, which was missed when `0.28.0` was cut
+  (the lockfile still read `0.27.0` while `package.json` read `0.28.0`).
+
 ## [0.28.0] — 2026-07-09
 
 ### Added
