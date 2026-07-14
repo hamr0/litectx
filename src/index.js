@@ -9,8 +9,9 @@
 
 import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { Store, MEM_KINDS, memId } from "./store.js";
-import { collectFiles, diffFiles } from "./indexer.js";
+import { collectFiles, diffFiles, indexStamp } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
 import { buildResolveCtx, resolveImports } from "./edges.js";
 import { collectGitSig } from "./gitsig.js";
@@ -103,6 +104,34 @@ export const WRITE_KINDS = ["fact", "episode", "doc"];
  * @type {symbol}
  */
 export const GLOBAL = Symbol("litectx:global");
+
+/** sha256 of a file's text — the same digest {@link diffFiles} records in `file_index.content_hash`. */
+const sha256 = (/** @type {string} */ s) => createHash("sha256").update(s).digest("hex");
+
+/**
+ * Thrown by `get(path, { startLine, endLine })` when the file changed on disk after it was indexed, so
+ * the pointer's line range no longer describes the chunk it was issued for.
+ *
+ * This is deliberately loud rather than a `null`. A `null` reads as "not there"; the truth is "it IS
+ * there, and I can no longer tell you *which* code it is" — and the tempting fallback (slice the lines
+ * anyway) returns a *different symbol's body* with no error at all. That is the one outcome worse than
+ * an exception, so we refuse. It is also fully recoverable: re-run `index()` (~6ms when nothing moved)
+ * and `recall()` for a fresh pointer.
+ */
+export class StalePointerError extends Error {
+  /** @param {string} path  the repo-relative path whose content moved on */
+  constructor(path) {
+    super(
+      `stale pointer: "${path}" changed on disk after it was indexed, so its chunk line range now ` +
+        `describes different code. Re-run index() then recall() for a fresh pointer.`,
+    );
+    this.name = "StalePointerError";
+    /** @type {string} */
+    this.code = "STALE_POINTER";
+    /** @type {string} */
+    this.path = path;
+  }
+}
 
 /**
  * @typedef {Object} LiteCtxConfig
@@ -303,6 +332,13 @@ export class LiteCtx {
    * dropped. Pass `force` for a full rebuild, or `paths` (git pathspecs) to scope the pass —
    * a scoped pass never deletes files outside its scope.
    *
+   * **Self-healing on upgrade.** An index also goes stale when *litectx itself* changes: the chunker
+   * decides where a chunk starts, and mtime/size cannot see that a new chunker would have drawn the
+   * boundary somewhere else. So an index is stamped with {@link indexStamp}, and a stamp mismatch
+   * forces a full re-chunk exactly as `force` would. Without this an upgraded library keeps serving
+   * boundaries its old self wrote — silently, forever. The rebuild clears file-sourced rows only;
+   * written memory survives it (§3.2).
+   *
    * @param {{ paths?: string[], force?: boolean }} [opts]
    * @returns {Promise<IndexResult>}
    */
@@ -310,8 +346,30 @@ export class LiteCtx {
     const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs);
     // force = re-read every FILE from disk. Written memory is not re-derivable from any file and
     // must survive even a force pass (§3.2) — so this clears file-sourced data only, never reset().
-    if (opts.force) this.store.clearIndexed();
-    const prev = opts.force ? new Map() : this.store.loadIndex();
+    //
+    // A stale stamp means every stored chunk boundary may be wrong, and healing that needs a full
+    // re-chunk. But `opts.paths` narrows this pass to a SUBSET of the index, and clearing the whole
+    // index inside one would delete files outside the caller's scope — the one thing a scoped pass
+    // promises never to do. So a per-call scoped pass never triggers the rebuild: instead it re-reads
+    // the files it DOES cover (dropping them from `prev`), so a scoped caller still converges file by
+    // file, deleting nothing. And it must not stamp — only a pass over the whole index can vouch for
+    // the whole index.
+    const partial = opts.paths !== undefined;
+    const stamp = indexStamp();
+    const stale = this.store.storedStamp() !== stamp;
+    const rebuild = opts.force === true || (stale && !partial);
+    if (rebuild) this.store.clearIndexed();
+    const prev = rebuild ? new Map() : this.store.loadIndex();
+    // stale stamp + scoped pass: re-chunk what IS in scope, delete nothing. Invalidate rather than
+    // delete the prior entry — `diffFiles` fast-skips on (mtime, size) and only *touches* when the hash
+    // still matches, so a sentinel that can match neither forces a real re-read and re-chunk, while
+    // `prev.has(path)` stays true so the file is still counted as `updated` and not falsely as `added`.
+    if (stale && partial && !rebuild) {
+      for (const p of files) {
+        const was = prev.get(p);
+        if (was) prev.set(p, { hash: "", mtime: -1, size: -1 });
+      }
+    }
 
     const { upserts, touch, unchanged } = diffFiles(this.root, files, prev);
     const current = new Set(files);
@@ -350,9 +408,10 @@ export class LiteCtx {
     }
 
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
-    // first build or a `force` rebuild mass-inserts every chunk, which is loading, not editing. `prev`
-    // is empty in both those cases (force clears it above), so its size is the cold-build test.
+    // first build or a rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
+    // empty in both those cases (a rebuild clears it above), so its size is the cold-build test.
     this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0);
+    if (!partial) this.store.setStoredStamp(stamp); // only a pass over the WHOLE index can vouch for it
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
     return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged };
@@ -564,14 +623,49 @@ export class LiteCtx {
   }
 
   /**
+   * The ONE place the index is checked before a stored chunk body is served — shared by
+   * `get(path, {startLine, endLine})` and `recall({ body: true })`, so the drift guard cannot be true
+   * of one and false of the other.
+   *
+   * A chunk's line range only means anything against the file the index actually saw. Two ways that
+   * breaks, and they are **not** the same thing:
+   * - **`drifted`** — the file still exists but its content changed, so the range now spans *different
+   *   code*. This is the dangerous one: slicing anyway returns another symbol's body, silently. The
+   *   stored body is also now a lie (it would hand an editing caller back its own pre-edit code).
+   * - **`missing`** — the file is gone from disk entirely. Nothing can be misread as anything else,
+   *   and the stored body is the only record left. Callers legitimately differ on whether they want it,
+   *   so this reports the fact rather than deciding: `recall` serves it (its chunk bodies are
+   *   deliberately index-truth and survive a deletion), `get` returns `null` (it is disk-truth — a
+   *   whole-file `get` of a deleted path already yields `text: null`).
+   *
+   * @param {string} path  repo-relative
+   * @param {number} startLine  0-based, inclusive
+   * @param {number} endLine    0-based, inclusive
+   * @returns {{ ok: true, body: string | null } | { ok: false, reason: "missing" | "drifted" }}
+   *   `ok` with `body: null` means the file is current but no chunk sits at that range.
+   */
+  _chunkState(path, startLine, endLine) {
+    let disk;
+    try {
+      disk = readFileSync(join(this.root, path), "utf8");
+    } catch {
+      return { ok: false, reason: "missing" }; // gone from disk — stale until the next index() sweeps it
+    }
+    if (this.store.fileHash(path) !== sha256(disk)) return { ok: false, reason: "drifted" };
+    return { ok: true, body: this.store.chunkBodyAt(path, startLine, endLine) };
+  }
+
+  /**
    * Fill each hit's `body` with its content (RT-3 inline-body, the opt-in for `recall({ body: true })`).
    * Kind-routed — the reason this is litectx's job, not an adapter's: written memory (`source:'direct'`)
    * returns its VERBATIM stored text (the FTS body is a processed search surface, never the deliverable);
-   * an indexed file hit returns its localized chunk's indexed body (drift-free, exactly what ranked) via
-   * {@link Store#chunkBodyAt}; when nothing localized, the whole file is read fresh from disk (matching
-   * {@link get}'s freshness). `null` when the file is gone or the id is unknown. Mutates in place; bounded
-   * disk reads (≤ hits, file-kind only). Note: does NOT log a fetch — body-fill is part of recall, not a
-   * `get`, so it never pollutes the demand signal.
+   * an indexed file hit returns its localized chunk's indexed body via {@link LiteCtx#_chunkState}, which
+   * verifies the file has not changed since it was indexed — a hit whose file drifted gets `body: null`
+   * rather than the pre-edit text (serving that silently is exactly the bug the chunk fetch exists to
+   * kill, and it must not survive on this path either). When nothing localized, the whole file is read
+   * fresh from disk (matching {@link get}'s freshness). `null` when the file is gone, drifted, or the id
+   * is unknown. Mutates in place; bounded disk reads (≤ hits, file-kind only). Note: does NOT log a
+   * fetch — body-fill is part of recall, not a `get`, so it never pollutes the demand signal.
    * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
    *   `recentMemory`'s unranked scoreless row) — reads `path`/`chunk`, writes `body`; `score` unused
    * @returns {Omit<import("./store.js").Hit, "score">[]}
@@ -579,7 +673,12 @@ export class LiteCtx {
   _attachBodies(hits) {
     for (const h of hits) {
       if (h.chunk) {
-        h.body = this.store.chunkBodyAt(h.path, h.chunk.startLine, h.chunk.endLine);
+        const st = this._chunkState(h.path, h.chunk.startLine, h.chunk.endLine);
+        // drifted → withhold: the stored text is what the file USED to say, and handing it to a caller
+        // who just edited that file is the silent pre-edit-code bug. Null the one hit rather than throw
+        // — a single stale file must not blow up a whole result set. missing → still serve: these chunk
+        // bodies are index-truth by design and survive the file being deleted (nothing to misread).
+        h.body = st.ok ? st.body : st.reason === "missing" ? this.store.chunkBodyAt(h.path, h.chunk.startLine, h.chunk.endLine) : null;
         continue;
       }
       const item = this.store.getItem(h.path);
@@ -736,11 +835,29 @@ export class LiteCtx {
    * a convenience. Pass a tenant `scope` or `GLOBAL` to fetch. With strictScope off, `get(id)` is unfenced
    * by id (the legacy behaviour), exactly as before.
    *
+   * **Fetching ONE chunk instead of the whole file.** Pass the `startLine`/`endLine` from a recall
+   * hit's {@link ChunkRef} and `text` is that chunk's body alone — the answer a pointer promised,
+   * without dragging its whole file through context. The lines are a *handle you hand back*, never a
+   * range you compute: they mean nothing except against the file the index actually saw.
+   *
+   * Which is why this is gated on the file's content hash. If the file changed since it was indexed,
+   * those line numbers now describe *different code* — slicing by them returns another symbol's body,
+   * silently, with no error. So a drifted file throws {@link StalePointerError} rather than guess. When
+   * the hash matches, the indexed chunk and the live file are identical by construction, so the stored
+   * body is served verbatim (no re-parse). Symbol names deliberately play no part: they are duplicated
+   * (`recall` exists on both `LiteCtx` and `ScopedView`), renamed, and absent on ~40% of chunks — the
+   * hash is the only anchor that holds for every chunk in every language.
+   *
+   * Recover by re-running {@link index} (a no-op pass is ~6ms) and re-`recall`ing for a fresh pointer.
+   * A line range that matches no chunk returns `null` — never a silent fallback to the whole file.
+   *
    * Sync (no embedder involved). Returns `null` for an unknown id.
    *
    * @param {string} id  a written-memory id, a stashed payload's id, or an indexed file's repo-relative path
-   * @param {{ log?: boolean, scope?: string | symbol }} [opts]
+   * @param {{ log?: boolean, scope?: string | symbol, startLine?: number, endLine?: number }} [opts]
+   *   `startLine`/`endLine` (0-based, inclusive) — a recall hit's `chunk` range; both or neither
    * @returns {Item | null}
+   * @throws {StalePointerError} when a chunk is requested from a file that changed since indexing
    */
   get(id, opts = {}) {
     // strictScope: a bare get(id) throws (can't fence a guessable id without a scope). GLOBAL → shared
@@ -750,13 +867,27 @@ export class LiteCtx {
     // reads as absent (R2 — fences the by-id handle, not only recall).
     const r = this.store.getItem(id, Date.now(), rs.scope, rs.globalOnly);
     if (!r) return null;
+    const { startLine: sl, endLine: el } = opts;
+    const wantChunk = sl != null && el != null;
     let text = r.text;
     if (r.source === "file") {
-      try {
-        text = readFileSync(join(this.root, r.path), "utf8");
-      } catch {
-        text = null; // indexed but gone from disk — stale until the next index() sweeps it
+      if (!wantChunk) {
+        try {
+          text = readFileSync(join(this.root, r.path), "utf8");
+        } catch {
+          text = null; // indexed but gone from disk — stale until the next index() sweeps it
+        }
+      } else {
+        const st = this._chunkState(r.path, sl, el);
+        // drifted → throw: the caller asked for exactly this chunk and deserves to know why it can't
+        // have it (and slicing anyway is a different symbol's body, silently). missing → null, matching
+        // a whole-file get of a deleted path. Never falls back to the whole file.
+        if (!st.ok && st.reason === "drifted") throw new StalePointerError(r.path);
+        if (!st.ok || st.body === null) return null;
+        text = st.body;
       }
+    } else if (wantChunk) {
+      return null; // written memory is stored whole, never chunked — there is no chunk to fetch
     }
     if (opts.log !== false) this.store.logRecall([{ path: r.path, kind: r.kind }], Date.now(), "fetch"); // demand log on the encoded key
     return { id: memId(r.path), kind: r.kind, format: r.format, source: r.source, provenance: r.provenance, occurredAt: r.occurred_at, text, bytes: r.bytes ?? null, meta: r.meta != null ? JSON.parse(r.meta) : null }; // W4: public id out
@@ -1291,7 +1422,11 @@ export class ScopedView {
       : this._ctx.recall(query, { ...opts, kind: opts.kind, scope: this._scope });
   }
 
-  /** Scope-bound {@link LiteCtx#get}. @param {string} id @param {{ log?: boolean }} [opts] */
+  /**
+   * Scope-bound {@link LiteCtx#get}. Carries the chunk fetch (`startLine`/`endLine`) through unchanged.
+   * @param {string} id
+   * @param {{ log?: boolean, startLine?: number, endLine?: number }} [opts]
+   */
   get(id, opts = {}) {
     return this._ctx.get(id, { ...opts, scope: this._scope });
   }

@@ -5,7 +5,9 @@
 //   Embeddings (semantic recall) are ON by default; pass --no-embeddings for the BM25-only base.
 //   litectx index [root] [--force] [--no-embeddings]
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--no-embeddings] [--no-log]
-//   litectx get <id> [--root <dir>] [--no-log]
+//   litectx get <id> [--lines <A-B>] [--root <dir>] [--no-log]
+//     --lines fetches ONE chunk (the symbol a recall hit pointed at, docstring included) instead of
+//     the whole file. Copy A-B verbatim from what `recall` printed (`→ keywords:65-72`).
 //   litectx recent [--root <dir>] [--since <days>] [-n <n>]
 //   litectx promotions [--root <dir>] [--threshold <n>]   # episodes to consider distilling into facts
 //   litectx impact <symbol> [--root <dir>]
@@ -18,10 +20,11 @@ import { LiteCtx, KINDS } from "../src/index.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, force: false, embeddings: true, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, embeddings: true, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
+    else if (rest[i] === "--lines") opts.lines = rest[++i];
     else if (rest[i] === "-n" || rest[i] === "--limit") opts.n = Number(rest[++i]);
     else if (rest[i] === "--since") opts.since = Number(rest[++i]);
     else if (rest[i] === "--threshold") opts.threshold = Number(rest[++i]);
@@ -79,11 +82,22 @@ async function main() {
   if (cmd === "get") {
     const id = opts.words[0];
     if (!id) fail("get needs an id (a written-memory id or an indexed file path)");
+    // --lines A-B fetches ONE chunk instead of the whole file. 1-BASED — copy the range exactly as
+    // `litectx recall` prints it (`→ keywords:65-72`), which is 1-based for humans. The library API is
+    // 0-based (it exchanges raw ChunkRefs), so convert here rather than make the CLI contradict itself.
+    let range;
+    if (opts.lines !== undefined) {
+      const m = /^([1-9]\d*)-([1-9]\d*)$/.exec(opts.lines); // 1-based: a start of 0 is a caller error,
+      // not a silent -1 that then misses with a misleading "no chunk" (it reads as a bad range, sending
+      // you hunting for the wrong problem). Reject it here, where the message can say why.
+      if (!m) fail("--lines takes START-END, 1-based inclusive, exactly as `litectx recall` prints it (e.g. --lines 65-72)");
+      range = { startLine: Number(m?.[1]) - 1, endLine: Number(m?.[2]) - 1 };
+    }
     const ctx = new LiteCtx({ root: opts.root });
-    const item = ctx.get(id, { log: opts.log });
+    const item = ctx.get(id, { log: opts.log, ...range }); // StalePointerError propagates: its message is the fix
     ctx.close();
     if (!item) {
-      console.error(`litectx: '${id}' is not in the index`);
+      console.error(range ? `litectx: no chunk at ${opts.lines} in '${id}'` : `litectx: '${id}' is not in the index`);
       process.exit(1);
     }
     // metadata to stderr, body to stdout — so `litectx get <id>` pipes clean text
@@ -222,7 +236,7 @@ function relAge(sec) {
 // invoked above this point in source order — a `const` here would be in its TDZ at that call.
 function usage() {
   return (
-    "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by   (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
+    "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--lines <A-B>] [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by   (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
     "\noutput columns (tab-separated):\n" +
     "  recall  score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)   (memory hits also: provenance use:N)\n" +
     "  recent  age(m|h|d)  edits×  kind  path  › symbol"

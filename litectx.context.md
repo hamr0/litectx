@@ -73,6 +73,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
+| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file; content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.0) |
+| **Index self-heals on upgrade** — the index is stamped with the litectx source that built it; a mismatch forces a re-chunk (file rows only; written memory survives) | ✅ shipped (v0.29.0) |
 | **`recall(q, {body:true})`** — inline each hit's content (verbatim memory / localized chunk / whole-file fallback); off by default | ✅ shipped (v0.10.0 — RT-3) |
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
 | **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (v0.10.0 — RT-3) |
@@ -201,6 +203,39 @@ Builds or **incrementally refreshes** the index over `root`.
   removed: number,    // dropped (no longer present)
   unchanged: number } // skipped (mtime/size or content unchanged)
 ```
+
+#### Self-healing across a litectx upgrade
+
+An index goes stale for a second reason nothing above catches: **litectx itself changed.** The chunker
+decides where a chunk *starts* — and `(mtime, size)` cannot see that a newer chunker would have drawn
+that boundary somewhere else. So an index built by an old litectx keeps serving the old boundaries
+forever, silently, even after you upgrade the package.
+
+So every index is **stamped** with a fingerprint of the litectx source that built it, and `index()`
+**rebuilds automatically when the stamp doesn't match**. In practice:
+
+| situation | cost |
+|---|---|
+| first index of a repo | full build (unchanged from before) |
+| first `index()` after upgrading litectx | one full re-chunk |
+| every other pass | incremental — a no-op is ~6 ms |
+
+The rebuild clears **file-sourced rows only**. Written memory (`remember`, `ingest`, `stash`) is not
+re-derivable from any file and survives it, exactly as it survives `force`.
+
+A **`paths`-scoped pass never triggers the rebuild** — clearing the index inside one would delete files
+the caller never mentioned, and a scoped pass never deletes outside its scope. Instead it **re-chunks
+the files it does cover**, so a scoped caller still converges file by file, and it does **not** write
+the stamp: only a pass over the whole index can vouch for the whole index. (So a consumer that *only*
+ever indexes scoped subsets heals incrementally, on the files it touches, and its stamp stays stale
+until it runs one full `index()`.)
+
+The stamp is a **hash of litectx's own source**, not the package version — most releases don't touch
+indexing, and stamping the version would force a needless re-chunk on every patch. It is stored in
+SQLite's built-in `PRAGMA user_version`, so it costs no table and no migration; a pre-stamp index reads
+as `0`, which never matches, so **the indexes already in the wild self-heal on their next pass**.
+It over-triggers slightly (a change to an unrelated module also moves it) — the safe direction: an
+unnecessary rebuild costs seconds, a skipped one serves wrong chunk boundaries indefinitely.
 
 ### `await ctx.recall(query, opts?)` → `Promise<Hit[] | Record<kind, Hit[]>>`
 Ranked recall over the index, **scoped by memory `kind`**. **Async** (since slice 6 — the
@@ -346,6 +381,75 @@ Item = {
   meta: Record<string, unknown>|null,// opaque caller metadata, verbatim; null for files / none
 }
 ```
+
+#### Fetching ONE chunk — `get(path, { startLine, endLine })`
+
+A recall hit points at a **symbol**, not a file. Pass that hit's `chunk.startLine` / `chunk.endLine`
+back to `get` and `text` is **that chunk's body alone** — the answer the pointer promised, without
+dragging its whole file through context. Since a chunk starts at its **doc-comment**, this is how you
+get code *and* its docstring in one bounded read.
+
+```js
+const [hit] = await ctx.recall("keywords", { kind: "code", n: 1 });
+// hit.chunk → { symbol: "keywords", nodeType: "function_declaration", startLine: 64, endLine: 71 }
+
+ctx.get(hit.path, { startLine: hit.chunk.startLine, endLine: hit.chunk.endLine });
+//  →  261 bytes: the JSDoc + the 7-line function
+ctx.get(hit.path);
+//  → 3474 bytes: the whole file
+```
+
+The line numbers are a **handle you hand back, never a range you compute**. They mean nothing except
+against the file the index actually saw.
+
+Which is why the fetch is **gated on the file's content hash**. If the file changed since it was
+indexed, those line numbers now describe *different code* — slicing by them would return another
+symbol's body, silently and with no error. So a drifted file throws **`StalePointerError`** instead of
+guessing. When the hash matches, the indexed chunk and the live file are identical by construction, so
+the stored body is served verbatim (no re-parse, ~0.6 ms).
+
+Recover by re-running `index()` (a no-op pass is ~6 ms) and re-`recall`ing for a fresh pointer:
+
+```js
+import { StalePointerError } from "litectx";
+
+try {
+  item = ctx.get(path, { startLine, endLine });
+} catch (e) {
+  if (!(e instanceof StalePointerError)) throw e;
+  await ctx.index();                       // the file moved on; re-chunk it
+  [hit] = await ctx.recall(q, { kind: "code", n: 1 });   // fresh pointer
+}
+```
+
+> **Why not `get(path, { symbol })`?** Because a symbol is not a reliable anchor and the failure is
+> silent. Names are **duplicated** (`recall` is defined on both `LiteCtx` and `ScopedView`; a Python
+> method and a module function routinely share a name), they are **renamed** by the very edits this
+> guards against, and roughly **40% of chunks have no symbol at all** (arrow callbacks, `test(...)`
+> blocks, preambles). A name-keyed lookup returns the *first* match — the wrong body, no error. Lines
+> plus the hash address every chunk in every language, exactly once.
+
+A line range matching **no chunk** returns `null` — never a silent fallback to the whole file, which
+would reintroduce the bloat invisibly. Written memory is stored whole and has no chunks, so asking it
+for a range also returns `null`. Both `startLine` and `endLine` are required together.
+
+`recall({ body: true })` serves bodies from the same gate: a hit whose file has drifted comes back with
+**`body: null`** rather than the pre-edit text (it nulls the one hit instead of throwing, so a single
+stale file can't blow up a whole result set). The hit itself still ranks — a drifted file is withheld,
+not hidden.
+
+> **Line bases differ between the API and the CLI, deliberately.** The library and the MCP `get` tool
+> are **0-based** — they exchange raw `ChunkRef`s, machine to machine. The CLI's `--lines` is
+> **1-based**, because it must match what `litectx recall` *prints* (`→ keywords:65-72`), so you can
+> copy a range straight off the terminal. Same chunk, two audiences:
+>
+> ```sh
+> litectx recall keywords --kind code -n 1     # → keywords:65-72
+> litectx get src/tokenize.js --lines 65-72    # 1-based, exactly as printed
+> ```
+> ```js
+> ctx.get("src/tokenize.js", { startLine: 64, endLine: 71 });   // 0-based, as ChunkRef carries it
+> ```
 
 Unknown id → `null`. An **expired** upload (`expiresAt` past — multis M3 R5) also returns `null`,
 exactly as recall hides it. On the (pathological) collision of a written id with a real file

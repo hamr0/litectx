@@ -1,6 +1,6 @@
 {
   "name": "litectx",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Lite, local-first memory across kinds for AI agents: a code+context graph with ranked recall and impact (blast-radius) views, plus a write path for facts/episodes. SQLite + FTS5, tree-sitter + ripgrep edges, embeddings opt-in. CLI and stdio MCP server included.",
   "type": "module",
   "main": "./src/index.js",
