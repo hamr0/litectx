@@ -4,6 +4,21 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.1] — 2026-07-14
+
+### Fixed
+- **The CLI no longer buries a stale-pointer's recovery instruction.** `StalePointerError` is designed
+  so its *message is the fix* ("re-run index, then recall") — but a thrown error went through the
+  CLI's usage-error path, which appended the whole usage block and column legend. The one line that
+  helps you scrolled off under five that don't. A runtime failure now prints the message and nothing
+  else; a genuine *usage* error (a malformed `--lines`) still gets the usage block, as it should.
+- **`litectx get --lines` no longer dead-ends on a range that isn't a chunk boundary.** It said
+  `no chunk at 7-10 in 'auth.js'` and stopped there. It now says where a valid range comes from —
+  copy it from what `recall` printed — matching what the MCP surface already told its callers. The
+  refusal itself is unchanged: it never widens to the whole file.
+
+Both are CLI-only. The library and MCP surfaces are untouched, and no contract changed.
+
 ## [0.29.0] — 2026-07-14
 
 ### Added
