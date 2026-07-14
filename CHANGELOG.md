@@ -4,7 +4,7 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.29.0] — 2026-07-14
 
 ### Added
 - **`get(path, { startLine, endLine })` — fetch ONE chunk instead of the whole file.** A recall hit

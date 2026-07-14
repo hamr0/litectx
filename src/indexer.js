@@ -27,14 +27,19 @@ let stampCache = null;
  * direction: an unnecessary rebuild costs time, a skipped one serves wrong chunk boundaries forever.
  *
  * Computed once per process (~0.6ms) — the source cannot change under a running process.
- * @returns {number}  a non-negative i32 (the width `PRAGMA user_version` stores)
+ * @returns {number}  a POSITIVE i32 (the width `PRAGMA user_version` stores). Never 0 — see below.
  */
 export function indexStamp() {
   if (stampCache !== null) return stampCache;
   const dir = dirname(fileURLToPath(import.meta.url));
   const h = createHash("sha256");
   for (const f of readdirSync(dir).filter((f) => f.endsWith(".js")).sort()) h.update(readFileSync(join(dir, f)));
-  stampCache = h.digest().readInt32BE(0) & 0x7fffffff;
+  // `|| 1` because 0 is RESERVED: an index that predates the stamp (or was never written) reads back as
+  // 0, and that is precisely what means "rebuild me". A source hash that happened to land on 0 would be
+  // indistinguishable from never-stamped — and would read as *fresh*, so the legacy indexes this exists
+  // to heal would silently keep their stale boundaries. Vanishingly unlikely, permanently wrong: the one
+  // combination the mechanism cannot afford. Mapping that single value to 1 costs nothing.
+  stampCache = (h.digest().readInt32BE(0) & 0x7fffffff) || 1;
   return stampCache;
 }
 

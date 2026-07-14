@@ -197,6 +197,26 @@ test("an index written by a DIFFERENT litectx is rebuilt, and written memory sur
   assert.equal(ctx.get("fact:survives")?.text, "must outlive a rebuild", "the rebuild clears FILE rows only (§3.2)");
 });
 
+// The two halves of the reserved-0 invariant, which only hold TOGETHER: an index that predates the
+// stamp reads back as 0 and must rebuild, so a live stamp may never BE 0 (`indexStamp`'s `|| 1`).
+// Were they ever to collide, a legacy index would read as fresh and keep its stale boundaries forever
+// — the silent rot the stamp exists to kill. The collision itself is unreachable from a test without
+// seaming production code to inject a hash, so this locks the invariant rather than red-greening it.
+test("0 is the reserved 'never stamped' sentinel: a legacy index rebuilds, and a live stamp is never 0", async () => {
+  const root = fixtureRepo();
+  const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+  await ctx.index();
+
+  assert.notEqual(indexStamp(), 0, "a live stamp must never collide with the sentinel");
+  assert.ok(indexStamp() > 0, "and stays a positive i32 — the width PRAGMA user_version stores");
+
+  ctx.store.setStoredStamp(0); // exactly what every pre-stamp index in the wild reads back as
+  const r = await ctx.index();
+  assert.equal(r.added, 1, "a 0-stamped index is rebuilt, not fast-skipped");
+  assert.equal(r.unchanged, 0);
+  assert.equal(ctx.store.storedStamp(), indexStamp(), "and is re-stamped with a non-zero stamp");
+});
+
 // Regression (code-review F1): a stamp mismatch triggers a full re-chunk, which CLEARS the index. A
 // `paths`-scoped pass covers only a subset — clearing inside one would delete files the caller never
 // mentioned, breaking `index()`'s promise that "a scoped pass never deletes files outside its scope".

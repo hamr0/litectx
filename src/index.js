@@ -659,7 +659,7 @@ export class LiteCtx {
    * Fill each hit's `body` with its content (RT-3 inline-body, the opt-in for `recall({ body: true })`).
    * Kind-routed — the reason this is litectx's job, not an adapter's: written memory (`source:'direct'`)
    * returns its VERBATIM stored text (the FTS body is a processed search surface, never the deliverable);
-   * an indexed file hit returns its localized chunk's indexed body via {@link LiteCtx#_chunkBody}, which
+   * an indexed file hit returns its localized chunk's indexed body via {@link LiteCtx#_chunkState}, which
    * verifies the file has not changed since it was indexed — a hit whose file drifted gets `body: null`
    * rather than the pre-edit text (serving that silently is exactly the bug the chunk fetch exists to
    * kill, and it must not survive on this path either). When nothing localized, the whole file is read
