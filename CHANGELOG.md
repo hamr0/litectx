@@ -6,6 +6,49 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Added
+- **`get(path, { startLine, endLine })` — fetch ONE chunk instead of the whole file.** A recall hit
+  points at a *symbol*; this is how you read just that symbol. Pass the hit's `chunk.startLine` /
+  `chunk.endLine` back to `get` and `text` is that chunk's body alone. Because a chunk starts at its
+  doc-comment, this returns **code + its docstring** in one bounded read. Measured on this repo:
+  `keywords()` is **261 bytes** as a chunk vs **3,474** as a whole file — and the consumer that
+  motivated this had been re-reading a 117 KB file nine times to find it.
+  - The line numbers are a **handle you hand back, never a range you compute.**
+  - **Gated on the file's content hash.** If the file changed since indexing, those lines now describe
+    *different code* — slicing by them would return another symbol's body silently, with no error. A
+    drifted file throws the new **`StalePointerError`** (exported) instead of guessing; recover with
+    `index()` (~6 ms) + a fresh `recall()`. When the hash matches, the stored chunk and the live file
+    are identical by construction, so the body is served verbatim with no re-parse (~0.6 ms).
+  - Deliberately **not** keyed on symbol name: names are duplicated (`recall` exists on both `LiteCtx`
+    and `ScopedView`), renamed by the very edits this guards against, and absent on ~40% of chunks —
+    and a name-keyed lookup returns the *first* match, i.e. the wrong body, with no error.
+  - A range matching no chunk → `null`, never a silent fallback to the whole file. Written memory is
+    stored whole and has no chunks → `null`. `startLine`/`endLine` are required together.
+  - `recall({ body: true })` is served through the **same gate**: a hit whose file drifted comes back
+    with `body: null` rather than the pre-edit text (it nulls the one hit instead of throwing, so a
+    single stale file can't blow up a result set). Previously it served the stale body silently.
+  - Reachable from the MCP `get` tool (`startLine`/`endLine`, **0-based**, as `ChunkRef` carries them)
+    and the CLI (`litectx get <id> --lines A-B`, **1-based** — it matches what `litectx recall` prints,
+    so a range can be copied straight off the terminal). `ScopedView.get` carries it through.
+
+### Fixed
+- **An index no longer survives a litectx upgrade that would chunk it differently.** The chunker
+  decides where a chunk *starts*, and `(mtime, size)` cannot see that a newer chunker would draw that
+  boundary elsewhere — so an index built by an older litectx kept serving the old boundaries forever,
+  silently, even after upgrading the package. Found in the wild: a consumer on 0.28.0 was reading chunk
+  boundaries written a month earlier, and reported a docstring-attachment bug that had already been
+  fixed — their index simply never re-chunked.
+  - `index()` now stamps the index with a fingerprint of the litectx source that built it and
+    **rebuilds automatically on a mismatch**. Cost: one full re-chunk on the first pass after an
+    upgrade; every other pass is incremental as before.
+  - The rebuild clears **file-sourced rows only** — written memory (`remember` / `ingest` / `stash`)
+    survives it, exactly as it survives `force`.
+  - The stamp is a **hash of litectx's own source**, not the package version (most releases don't touch
+    indexing; stamping the version would force a needless re-chunk on every patch) and not a
+    hand-maintained constant (which is forgettable — and forgetting it is precisely this bug). Stored
+    in SQLite's built-in `PRAGMA user_version`: no new table, no migration. A pre-stamp index reads as
+    `0`, which never matches, so **indexes already in the wild self-heal on their next pass**.
+
 ### CI / repo (repo-only — not shipped in the npm package)
 - **Pinned the publish workflow's npm to `npm@11`** (was a floating `npm install -g npm@latest`).
   `npm@latest` rolled to `npm@12`, which dropped Node 20 (`EBADENGINE`) and broke the OIDC publish

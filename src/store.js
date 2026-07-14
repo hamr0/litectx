@@ -1335,6 +1335,43 @@ export class Store {
   }
 
   /**
+   * The content hash recorded for an indexed file — the arbiter of whether the index still describes
+   * what is on disk. `null` if the path was never indexed.
+   * @param {string} path
+   * @returns {string | null}
+   */
+  fileHash(path) {
+    const row = /** @type {{ content_hash: string } | undefined} */ (
+      this.db.prepare("SELECT content_hash FROM file_index WHERE path = ?").get(path)
+    );
+    return row ? row.content_hash : null;
+  }
+
+  /**
+   * The index-format stamp STORED IN THIS DB, via SQLite's built-in `PRAGMA user_version` — a free i32
+   * in the file header, so this needs no table and no migration. Compare it against `indexStamp()` (the
+   * *library's* current stamp, from `indexer.js`) to decide whether this index still describes the
+   * litectx that will read it. Named `storedStamp`, not `indexStamp`, precisely so the two can never be
+   * mistaken for each other at a call site — they mean opposite things and appear on the same line.
+   *
+   * `0` on any db that predates the stamp (or was never indexed), which never matches a real stamp and
+   * therefore reads as "rebuild me" — exactly right for the pre-stamp indexes already in the wild.
+   * @returns {number}
+   */
+  storedStamp() {
+    return Number(this.db.pragma("user_version", { simple: true }));
+  }
+
+  /**
+   * Record the index-format stamp. Called only after a pass that covered the WHOLE index — a scoped
+   * pass cannot vouch for the files it never looked at.
+   * @param {number} stamp
+   */
+  setStoredStamp(stamp) {
+    this.db.pragma(`user_version = ${stamp | 0}`); // interpolated: PRAGMA takes no bound params; coerced to i32
+  }
+
+  /**
    * Every node defining symbol `name` (over-count: a name defined in N files returns N rows). The
    * def's `body` powers callee/complexity analysis (impact, slice 5); `format` routes the parser.
    * @param {string} name

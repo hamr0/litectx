@@ -61,10 +61,14 @@ const TOOLS = [
   {
     name: "get",
     description:
-      "Fetch the full body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk.",
+      "Fetch the body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk. To read ONE chunk instead of the whole file, pass startLine/endLine copied verbatim from that hit's `chunk` — a recall hit points at a symbol, and this is how you read just that symbol without dragging its whole file through context. Copy the numbers; never compute or widen them.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", description: "written-memory id or indexed file path" } },
+      properties: {
+        id: { type: "string", description: "written-memory id or indexed file path" },
+        startLine: { type: "number", description: "0-based, inclusive — copy from a recall hit's chunk.startLine. Requires endLine." },
+        endLine: { type: "number", description: "0-based, inclusive — copy from a recall hit's chunk.endLine. Requires startLine." },
+      },
       required: ["id"],
     },
   },
@@ -138,8 +142,17 @@ async function callTool(name, a) {
   if (name === "index") return JSON.stringify(await ctx.index({ force: a.force === true }));
   if (name === "recall") return JSON.stringify(await ctx.recall(a.query, { kind: a.kind, n: a.n }), null, 1);
   if (name === "get") {
-    const item = ctx.get(a.id);
-    if (!item) throw new Error(`'${a.id}' is not in the index — ids come from recall hits`);
+    const chunked = a.startLine != null || a.endLine != null;
+    if (chunked && (a.startLine == null || a.endLine == null)) throw new Error("startLine and endLine must be passed together");
+    // StalePointerError surfaces as-is: its message tells the agent to re-index, which is the fix.
+    const item = ctx.get(a.id, chunked ? { startLine: a.startLine, endLine: a.endLine } : {});
+    if (!item) {
+      throw new Error(
+        chunked
+          ? `no chunk at ${a.startLine}-${a.endLine} in '${a.id}' — copy startLine/endLine from a recall hit's chunk`
+          : `'${a.id}' is not in the index — ids come from recall hits`,
+      );
+    }
     if (item.text == null) throw new Error(`'${a.id}' is indexed but missing from disk (stale until the next index)`);
     return JSON.stringify(item, null, 1);
   }

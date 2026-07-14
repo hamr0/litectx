@@ -5,9 +5,38 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, extname } from "node:path";
+import { join, relative, extname, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".litectx", "dist", "build", "coverage", ".venv", "__pycache__"]);
+
+/** @type {number | null} */
+let stampCache = null;
+
+/**
+ * A fingerprint of the litectx source that decides *what gets written* at index time — the chunker,
+ * the tokenizer, the schema. Stored in the index (`PRAGMA user_version`) so an index built by an
+ * older litectx can be recognised and rebuilt.
+ *
+ * Why a source hash and not the package version: most releases don't touch indexing, and stamping the
+ * package version would force a full re-chunk of every consumer's repo on every patch. And why not a
+ * hand-maintained constant: someone edits the chunker, forgets to bump it, and the index silently rots
+ * — which is the exact failure this exists to kill. A hash cannot be forgotten.
+ *
+ * It over-triggers slightly (a change to an unrelated module also moves it). That is the safe
+ * direction: an unnecessary rebuild costs time, a skipped one serves wrong chunk boundaries forever.
+ *
+ * Computed once per process (~0.6ms) — the source cannot change under a running process.
+ * @returns {number}  a non-negative i32 (the width `PRAGMA user_version` stores)
+ */
+export function indexStamp() {
+  if (stampCache !== null) return stampCache;
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const h = createHash("sha256");
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".js")).sort()) h.update(readFileSync(join(dir, f)));
+  stampCache = h.digest().readInt32BE(0) & 0x7fffffff;
+  return stampCache;
+}
 
 // extension → format tag (and, via the tag, kind). Routing is by extension only (§6).
 const FORMAT = {

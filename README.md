@@ -49,8 +49,11 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo", include: [".ts", ".js", ".py", ".md"] });
 await ctx.index();
 
-const hits  = await ctx.recall("where do we validate the auth token?", { kind: "code" });
+const [hit] = await ctx.recall("where do we validate the auth token?", { kind: "code" });
 const blast = await ctx.impact("validateToken");          // what a change would touch + a risk bucket
+
+// a hit points at a SYMBOL — read just that symbol (with its docstring), not its whole file
+const { text } = ctx.get(hit.path, { startLine: hit.chunk.startLine, endLine: hit.chunk.endLine });
 
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
 const facts = await ctx.recall("how does login work", { kind: "fact" });   // matches by meaning
@@ -82,7 +85,7 @@ One substrate — a typed code+context graph in one file — and the verbs that 
 
 | Group | Verbs | What it does |
 |---|---|---|
-| **Substrate** | `index` · `getNode` · `related` · `get` | Index a repo (routed by file extension) into typed nodes + import edges. Address a node, walk its edges, fetch any body. |
+| **Substrate** | `index` · `getNode` · `related` · `get` | Index a repo (routed by file extension) into typed nodes + import edges. Address a node, walk its edges, fetch any body — or **just one chunk** (`get(path, {startLine, endLine})`: the symbol a hit pointed at, docstring included, instead of its whole file). The index **self-heals on upgrade**: it records which litectx built it and re-chunks when that changes, so a chunker fix actually reaches you. |
 | **Select** | `recall` · `impact` | **recall** ranks by relevance now, not just keyword match. **impact** walks callers/callees to what a change touches + a risk bucket. |
 | **Memory** | `remember` · `ingest` · `forget` · `purge` · `recentMemory` · `count` · `enumerate` · `recentActivity` · `promotionCandidates` · `reviewCandidates` | Knowledge that isn't a repo file — facts, episodes, notes, and **uploaded files** (`ingest`: md/PDF/DOCX/txt/log/csv → extract → segment → recall by meaning; **any other file** → stored **byte-exact**, found by filename; optional lazy parser tier). A per-call **`scope`** fences one chat/customer from another across **every kind** — uploads *and* facts/episodes, on **search, direct `get`, `forget`, and write** (a guessed id can't cross tenants; one tenant's wipe can't reach another's memory; re-`remember`ing the same id **supersedes in place per tenant** — a restated fact never piles up and never clobbers another tenant's) — so one shared instance is a complete multi-tenant store (`strictScope: true` + `ctx.scoped(scope)` make a forgotten scope impossible, not just discouraged); optional **`expiresAt`** retention (`purge` reclaims); **`recentMemory`** is the newest-first recency view — the empty-query fallback *and* the conversation window (latest facts/episodes by time, scope-fenced) — and **`count`** sizes a tenant's memory by kind, while **`enumerate`** walks *every* row of a kind exhaustively (rank-free, scope-fenced, paginated) for batch "all of them" passes recall can't answer. Same store, same ranking, carries provenance, survives re-index. Episodes auto-prune on a configurable rolling window (default 30 days). |
 | **Compress / Isolate** | `assemble` · `summaryWindow` · `trim` · `compress` · `stash` · `peek` · `evict` | Fit a transcript to a budget, roll old turns into a restorable summary, render a symbol full/signature/dropped, park a payload and page it back. |

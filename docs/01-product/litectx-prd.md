@@ -655,6 +655,26 @@ body access + tagged fetch logging) → ~~MCP/CLI~~ (✅ slice 10 — `litectx-m
 write parity) → access-log tier; activation calibration is all "run the bench" and that bench
 doesn't exist yet (the biggest IOU).
 
+**Closing the pointer loop (v0.29.0 — bareloop LC-1/LC-2).** Slice 8 gave hits a `chunk` pointer and
+slice 9 gave `get(id)` a whole-file body; nothing let a caller *redeem* the pointer. A consumer whose
+worker had no ranged read therefore swallowed whole files: it read a 117 KB source file **nine times**
+to reach a 7-line function recall had already located. `get(path, {startLine, endLine})` closes it —
+the same handle recall issues, redeemed for that chunk alone (261 B vs 3,474 B for `keywords()` here),
+docstring included because a chunk begins at its doc-comment.
+
+Two design results worth carrying, both POC-falsified before the build:
+- **Lines + a content hash, never a symbol name.** Resolve-by-symbol looks obvious and is silently
+  wrong: names are duplicated (`recall` on both `LiteCtx` and `ScopedView`; a Python method and a
+  module function sharing a name), renamed by the very edits it must survive, and **absent on ~40% of
+  chunks** — and `.find()` returns the *first* match, i.e. the wrong body with no error. The hash is
+  the only anchor that holds for every chunk in every language.
+- **The index must self-heal on upgrade.** A pointer's lines only mean anything against the file the
+  index saw, *and* against the chunker that drew them. `(mtime, size)` sees neither, so an index built
+  by an older litectx served its old boundaries forever — the bug that produced LC-2, a report of a
+  chunker defect that had in fact been fixed a month earlier. `index()` now stamps the index with a
+  hash of litectx's own source and re-chunks on mismatch. **Over-rebuild is safe; under-rebuild serves
+  wrong boundaries indefinitely** — the same asymmetry §7 applies to impact.
+
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
   default, which is blocked by the embedder being an **optional peer dep**
