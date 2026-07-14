@@ -97,8 +97,11 @@ async function main() {
     const item = ctx.get(id, { log: opts.log, ...range }); // StalePointerError propagates: its message is the fix
     ctx.close();
     if (!item) {
-      console.error(range ? `litectx: no chunk at ${opts.lines} in '${id}'` : `litectx: '${id}' is not in the index`);
-      process.exit(1);
+      // A miss here means the range is not a chunk boundary — almost always a range that was typed or
+      // computed rather than copied. Say so: the bare "no chunk at 7-10" is a dead end, and the MCP
+      // surface already tells its caller where the numbers come from. Never widen to the whole file.
+      if (range) die(`no chunk at ${opts.lines} in '${id}' — copy the range exactly as \`litectx recall\` printed it (\`→ symbol:6-10\`); it is a chunk boundary, not any span of lines`);
+      die(`'${id}' is not in the index`);
     }
     // metadata to stderr, body to stdout — so `litectx get <id>` pipes clean text
     console.error(`${item.kind}/${item.format}\t${item.source}${item.provenance ? `/${item.provenance}` : ""}\t${item.id}`);
@@ -187,7 +190,11 @@ async function main() {
   fail(`unknown command: ${cmd ?? "(none)"}`);
 }
 
-main().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+// A thrown error is a RUNTIME failure, not a usage error — the argv was fine. Print the message and
+// nothing else: `fail` would append the usage block, and the errors that reach here are the ones whose
+// message IS the recovery (StalePointerError says how to re-index). Burying that under five lines of
+// usage is how a fix scrolls off the screen. Every usage error already exits via `fail` before this.
+main().catch((e) => die(e instanceof Error ? e.message : String(e)));
 
 /**
  * Render the hit's chunk pointer (chunk-granular recall, slice 8) — the matching function/section
@@ -249,9 +256,15 @@ function help() {
   process.exit(0);
 }
 
-/** @param {string} msg */
+/** A USAGE error: you invoked it wrong, so the usage block is the answer. @param {string} msg */
 function fail(msg) {
   console.error(`litectx: ${msg}`);
   console.error(usage());
+  process.exit(1);
+}
+
+/** A RUNTIME error: the invocation was valid, so the message alone is the answer. @param {string} msg */
+function die(msg) {
+  console.error(`litectx: ${msg}`);
   process.exit(1);
 }

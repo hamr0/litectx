@@ -300,3 +300,55 @@ test("the stamp is stable across processes and moves only with litectx's own sou
   assert.ok(Number.isInteger(indexStamp()) && indexStamp() > 0, "a positive i32 — the width PRAGMA user_version stores");
   assert.notEqual(indexStamp(), 0, "0 is reserved for a db that never carried a stamp, so it must never collide");
 });
+
+// ---- the CLI's error surface: a recovery instruction nobody reads is not a recovery instruction ----
+//
+// Both of these are about what a HUMAN is left looking at. They exercise the real binary rather than the
+// library, because the defect they lock is entirely in the delivery: `get` already refused correctly in
+// both cases — it just said so uselessly.
+
+/** Run the real CLI. Returns its stderr and exit code (never throws on a non-zero exit). */
+function cli(root, args) {
+  try {
+    execFileSync(process.execPath, [join(import.meta.dirname, "..", "bin", "litectx.js"), ...args], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    return { code: 0, stderr: "" };
+  } catch (e) {
+    const err = /** @type {{ status: number, stderr: string }} */ (e);
+    return { code: err.status, stderr: err.stderr };
+  }
+}
+
+test("CLI: a stale pointer prints the fix and NOTHING else — no usage block to bury it", async () => {
+  const root = fixtureRepo(); // no git: collectFiles walks the FS, and `git init` with no commit would
+  cli(root, ["index", ".", "--no-embeddings"]); // make `git ls-files` return nothing and index ZERO files
+
+  const target = (await chunksOf(root)).find((c) => c.symbol === "validateToken");
+  if (!target) throw new Error("fixture lost validateToken");
+  const lines = `${target.startLine + 1}-${target.endLine + 1}`; // the CLI speaks 1-based, as recall prints
+
+  writeFileSync(join(root, "src", "a.js"), SRC.replace("return verifySignature(t);", "return verifySignature(t) && t.length > 8;"));
+  const r = cli(root, ["get", "src/a.js", "--lines", lines, "--no-log"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /stale pointer/, "still says what went wrong");
+  assert.doesNotMatch(r.stderr, /^usage:/m, "a RUNTIME error is not a usage error — the usage block would bury the fix");
+  assert.equal(r.stderr.trim().split("\n").length, 1, "exactly one line: the recovery instruction, alone");
+});
+
+test("CLI: a range that is not a chunk boundary says where the numbers come from", async () => {
+  const root = fixtureRepo(); // no git: collectFiles walks the FS, and `git init` with no commit would
+  cli(root, ["index", ".", "--no-embeddings"]); // make `git ls-files` return nothing and index ZERO files
+
+  const target = (await chunksOf(root)).find((c) => c.symbol === "validateToken");
+  if (!target) throw new Error("fixture lost validateToken");
+  // off by one from the real boundary — what you get by TYPING the range instead of copying it
+  const r = cli(root, ["get", "src/a.js", "--lines", `${target.startLine + 2}-${target.endLine + 1}`, "--no-log"]);
+
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /no chunk at/, "refuses — never widens to the whole file");
+  assert.match(r.stderr, /litectx recall/, "and points at where a valid range comes from, instead of dead-ending");
+});
