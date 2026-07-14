@@ -73,8 +73,8 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
-| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file; content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.0) |
-| **Index self-heals on upgrade** — the index is stamped with the litectx source that built it; a mismatch forces a re-chunk (file rows only; written memory survives) | ✅ shipped (v0.29.0) |
+| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file; content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.1) |
+| **Index self-heals on upgrade** — the index is stamped with the litectx source that built it; a mismatch forces a re-chunk (file rows only; written memory survives) | ✅ shipped (v0.29.1) |
 | **`recall(q, {body:true})`** — inline each hit's content (verbatim memory / localized chunk / whole-file fallback); off by default | ✅ shipped (v0.10.0 — RT-3) |
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
 | **`liteCtxAsStore(lc)`** — mount litectx as a host `Store` (`{store,search,get,delete}`); drop-in for a substring-scan backend, ranked recall | ✅ shipped (v0.10.0 — RT-3) |
@@ -449,6 +449,14 @@ not hidden.
 > ```
 > ```js
 > ctx.get("src/tokenize.js", { startLine: 64, endLine: 71 });   // 0-based, as ChunkRef carries it
+> ```
+>
+> Get it wrong and nothing silently widens to the whole file — the CLI refuses, and points you back at
+> where a valid range comes from:
+>
+> ```
+> litectx: no chunk at 64-71 in 'src/tokenize.js' — copy the range exactly as `litectx recall`
+> printed it (`→ symbol:6-10`); it is a chunk boundary, not any span of lines
 > ```
 
 Unknown id → `null`. An **expired** upload (`expiresAt` past — multis M3 R5) also returns `null`,

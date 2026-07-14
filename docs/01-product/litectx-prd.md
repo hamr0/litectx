@@ -655,7 +655,7 @@ body access + tagged fetch logging) → ~~MCP/CLI~~ (✅ slice 10 — `litectx-m
 write parity) → access-log tier; activation calibration is all "run the bench" and that bench
 doesn't exist yet (the biggest IOU).
 
-**Closing the pointer loop (v0.29.0 — bareloop LC-1/LC-2).** Slice 8 gave hits a `chunk` pointer and
+**Closing the pointer loop (v0.29.1 — bareloop LC-1/LC-2).** Slice 8 gave hits a `chunk` pointer and
 slice 9 gave `get(id)` a whole-file body; nothing let a caller *redeem* the pointer. A consumer whose
 worker had no ranged read therefore swallowed whole files: it read a 117 KB source file **nine times**
 to reach a 7-line function recall had already located. `get(path, {startLine, endLine})` closes it —
