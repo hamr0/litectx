@@ -124,7 +124,12 @@ const SCHEMA = [
   // (file-granularity) — these line-ranged nodes carry file-level git metadata (slice 4) and
   // anchor call edges (slice 5). `symbol` is nullable (anonymous arrows, preambles); rows are
   // owned by `path`.
-  "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, format TEXT NOT NULL, symbol TEXT, node_type TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, body TEXT NOT NULL)",
+  // `stamp` is the index-format hash ({@link indexStamp}) of the litectx that WROTE each chunk. A
+  // writer that predates this column (an old global CLI) uses a named INSERT that omits it, so its
+  // rows fall back to the DEFAULT 0 — self-identifying as stale (0 is the reserved "rebuild me"
+  // sentinel). This catches a FOREIGN writer poisoning a subset of files, which the whole-index
+  // `PRAGMA user_version` stamp structurally cannot (a foreign writer never touches user_version).
+  "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, format TEXT NOT NULL, symbol TEXT, node_type TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, body TEXT NOT NULL, stamp INTEGER NOT NULL DEFAULT 0)",
   "CREATE INDEX IF NOT EXISTS nodes_path ON nodes(path)",
   // directed graph edges (slice 4): `type` discriminates 'import' (recall spreading, shipped
   // now) from 'call' (impact view, slice 5) so both ride one table. File-granularity src→dst;
@@ -329,6 +334,11 @@ export class Store {
       // (undated, sort last under DESC), exactly like the doc axis. Facts order by it; episodes by occurred_at.
       const msCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(mem_scope)"));
       if (!msCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE mem_scope ADD COLUMN created_at INTEGER");
+      // per-node index-format stamp (version-skew self-heal): column-additive ALTER. Pre-existing rows
+      // (written by any litectx before this column) backfill DEFAULT 0 — the "rebuild me" sentinel — so
+      // the first index() pass after upgrade re-chunks every file once, then they carry a live stamp.
+      const nodeCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(nodes)"));
+      if (!nodeCols.some((c) => c.name === "stamp")) this.db.exec("ALTER TABLE nodes ADD COLUMN stamp INTEGER NOT NULL DEFAULT 0");
       this.migrateOwnerKeyedMem();
     }
   }
@@ -425,8 +435,11 @@ export class Store {
    * @param {number} indexedAt  epoch millis to stamp on touched rows
    * @param {boolean} [recordEdits=false]  log per-chunk body changes to `chunk_edits` (slice 5a). Off
    *   for a cold/`force` build (mass insert isn't editing); on for incremental passes — see index().
+   * @param {number} [stamp=0]  index-format stamp ({@link indexStamp}) written on every inserted node,
+   *   so a later pass can tell which chunks a DIFFERENT-version writer produced. 0 = the reserved
+   *   "rebuild me" sentinel; a real pass always passes a live stamp.
    */
-  applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false) {
+  applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false, stamp = 0) {
     const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ?");
     const delIdx = this.db.prepare("DELETE FROM file_index WHERE path = ?");
     // indexed files are always source='file' with no provenance/occurred_at (those are write-path
@@ -442,8 +455,8 @@ export class Store {
     const touchIdx = this.db.prepare("UPDATE file_index SET mtime = @mtime WHERE path = @path");
     const delNodes = this.db.prepare("DELETE FROM nodes WHERE path = ?");
     const insNode = this.db.prepare(
-      "INSERT INTO nodes(path, kind, format, symbol, node_type, start_line, end_line, body) " +
-        "VALUES (@path, @kind, @format, @symbol, @node_type, @start_line, @end_line, @body)"
+      "INSERT INTO nodes(path, kind, format, symbol, node_type, start_line, end_line, body, stamp) " +
+        "VALUES (@path, @kind, @format, @symbol, @node_type, @start_line, @end_line, @body, @stamp)"
     );
     // slice 5a: a chunk is "edited" when its (symbol, body) is not among the file's prior nodes —
     // covers both a modified body and a newly-added chunk. `prevNodes` is read BEFORE delNodes drops
@@ -494,7 +507,7 @@ export class Store {
         insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
         upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
         for (const c of u.nodes ?? []) {
-          insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text });
+          insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text, stamp });
           // slice 5a: a chunk whose (symbol, body) wasn't in the prior set is new or modified — record it.
           if (prevKeys && !prevKeys.has(chunkKey(c.symbol, c.text))) {
             insEdit.run({ path: u.path, symbol: c.symbol, kind: u.kind, ts: indexedAt });
@@ -1369,6 +1382,51 @@ export class Store {
    */
   setStoredStamp(stamp) {
     this.db.pragma(`user_version = ${stamp | 0}`); // interpolated: PRAGMA takes no bound params; coerced to i32
+  }
+
+  /**
+   * Indexed files carrying at least one node whose per-row `stamp` differs from the current library
+   * stamp — i.e. chunks written by a DIFFERENT-version writer (an old global CLI, a stale node_modules
+   * copy). These must be re-chunked even when their content is byte-identical, because the boundaries,
+   * not the bytes, are stale. Complements {@link storedStamp}: that catches a version bump of the
+   * repo-local litectx (whole-index rebuild); this catches a foreign writer poisoning a subset.
+   * @param {number} stamp  the current {@link indexStamp}
+   * @returns {string[]}  distinct file paths needing a re-chunk
+   */
+  staleStampedFiles(stamp) {
+    return /** @type {{ path: string }[]} */ (
+      this.db.prepare("SELECT DISTINCT path FROM nodes WHERE stamp != ?").all(stamp | 0)
+    ).map((r) => r.path);
+  }
+
+  /**
+   * Indexed files that have NO stored vector — a file indexed while embeddings were off (the library
+   * default) has none, and a later embeddings-on pass skips it as "content unchanged", leaving semantic
+   * recall silently dead on it. The index() embeddings tier reads these back and backfills them.
+   * @returns {string[]}  distinct file paths lacking a `file_embeddings` row
+   */
+  vectorlessFiles() {
+    return /** @type {{ path: string }[]} */ (
+      this.db
+        .prepare("SELECT fi.path FROM file_index fi LEFT JOIN file_embeddings fe ON fe.path = fi.path WHERE fe.path IS NULL")
+        .all()
+    ).map((r) => r.path);
+  }
+
+  /**
+   * Write (or replace) one file's embedding vector, WITHOUT re-chunking — the bytes and boundaries are
+   * already current, only the vector was missing. Used by the embeddings backfill; the normal path
+   * writes vectors through {@link applyChanges}.
+   * @param {string} path
+   * @param {Float32Array} vec
+   */
+  putEmbedding(path, vec) {
+    this.db
+      .prepare(
+        "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
+          "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
+      )
+      .run({ path, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
   }
 
   /**

@@ -72,6 +72,33 @@ test("embeddings on stores one vector per file (BLOB round-trips to a Float32Arr
   });
 });
 
+// The library defaults embeddings OFF but the CLI/hook defaults them ON, so the common lifecycle is:
+// `ctx.index()` (off) writes chunks with no vectors, then a later warm-index pass turns the tier ON over
+// UNCHANGED files. The content diff correctly fast-skips them — so without a backfill they'd stay
+// vectorless forever and semantic recall would be silently dead. The backfill embeds any indexed file
+// that has no vector, without re-chunking. Two ctx over one persistent db mirror the two real processes.
+test("embeddings backfill: a file indexed with the tier OFF gets a vector on a later ON pass, idempotently", async () => {
+  const root = fixture();
+  const dbPath = join(root, "idx.db");
+
+  const off = new LiteCtx({ root, dbPath, embeddings: false });
+  await off.index();
+  assert.equal(off.store.embeddingCount(), 0, "the off pass stores no vectors (the library default)");
+  off.close();
+
+  const stub = markerStub();
+  const on = new LiteCtx({ root, dbPath, embeddings: true, embedder: stub });
+  const r = await on.index();
+  assert.equal(r.unchanged, 3, "the files ARE content-unchanged — the diff correctly fast-skips them");
+  assert.equal(stub.calls, 3, "yet all three are embedded: the backfill, not the diff, did it");
+  assert.equal(on.store.embeddingCount(), 3, "every previously-vectorless file now carries a vector");
+
+  await on.index();
+  assert.equal(stub.calls, 3, "a warm re-index backfills NOTHING — idempotent, no per-pass re-embed tax");
+  on.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("indexing embeds only CHANGED files (incremental — reuses stored vectors)", async () => {
   const stub = markerStub();
   await withCtx({ embeddings: true, embedder: stub }, async (ctx, root) => {

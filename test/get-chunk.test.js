@@ -252,6 +252,39 @@ test("a scoped pass on a stale-stamped index re-chunks its scope WITHOUT deletin
   assert.equal(ctx.store.storedStamp(), indexStamp());
 });
 
+// ---- the PER-NODE stamp: a foreign writer poisoning a SUBSET, which the whole-index stamp can't see ----
+
+// The whole-index `user_version` stamp above only catches a version bump of the repo-LOCAL litectx. It
+// is blind to a DIFFERENT writer — an old global CLI, a stale node_modules copy — that re-chunks some
+// files with its own chunker: that writer never touches `user_version`, so the db-level stamp still
+// reads "current" while the poisoned files carry wrong boundaries. Each node carrying the stamp of the
+// litectx that WROTE it is what makes such a file self-identify. Poisoning is simulated here by stamping
+// ONE file's nodes stale while `user_version` stays current — the exact fingerprint a foreign writer
+// leaves. The sibling file (current stamp, same pass) is the built-in control: same everything but the
+// stamp, opposite outcome, so it is the stamp — not the mtime/size diff — that drives the re-chunk.
+test("a file whose chunks carry a stale per-node stamp is re-chunked on an unforced pass; a current-stamped sibling is not", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-nodestamp-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(join(root, "src", "a.js"), SRC);
+  writeFileSync(join(root, "src", "b.js"), "export function untouched() { return 2; }\n");
+  const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings: false });
+  await ctx.index();
+  assert.equal(ctx.store.storedStamp(), indexStamp(), "the db-level stamp is current — no version bump happened");
+
+  // a foreign writer's fingerprint: a.js's nodes re-chunked under a different stamp; user_version intact.
+  ctx.store.db.prepare("UPDATE nodes SET stamp = 424242 WHERE path = 'src/a.js'").run();
+  assert.equal(ctx.store.storedStamp(), indexStamp(), "the whole-index gate STILL reads current — it cannot see a per-file poisoning");
+
+  const r = await ctx.index();
+  assert.equal(r.updated, 1, "the stale-stamped file is re-chunked even though the db stamp matches and its bytes are unchanged");
+  assert.equal(r.unchanged, 1, "the current-stamped sibling is left alone — the stamp, not the bytes, decided");
+  assert.deepEqual(
+    ctx.store.db.prepare("SELECT DISTINCT stamp FROM nodes WHERE path = 'src/a.js'").all(),
+    [{ stamp: indexStamp() }],
+    "the healed file's nodes now carry the live stamp"
+  );
+});
+
 // Regression (code-review F2): the drift guard must hold on EVERY path that serves a stored chunk
 // body, not just get(). recall({body:true}) reads the same nodes.body table; without the gate it hands
 // an editing caller back its own pre-edit code, silently — the exact bug the chunk fetch exists to kill.

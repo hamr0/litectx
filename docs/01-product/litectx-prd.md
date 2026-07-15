@@ -674,6 +674,18 @@ Two design results worth carrying, both POC-falsified before the build:
   chunker defect that had in fact been fixed a month earlier. `index()` now stamps the index with a
   hash of litectx's own source and re-chunks on mismatch. **Over-rebuild is safe; under-rebuild serves
   wrong boundaries indefinitely** — the same asymmetry §7 applies to impact.
+  - **A per-node stamp catches a *foreign* writer, which the whole-index one can't (0.30.0).** The
+    `PRAGMA user_version` stamp only sees a version bump of the repo-local litectx. A *different* writer
+    — an old global CLI, a stale `node_modules` copy — re-chunks some files with its own chunker and
+    never touches `user_version`, so the db-level stamp still reads "current" over poisoned files. Each
+    node now carries the stamp of the litectx that wrote it (additive `nodes.stamp`, `DEFAULT 0` =
+    "rebuild me"); such a file self-identifies and is re-chunked on the next unforced pass, even when its
+    bytes are unchanged. A `paths`-scoped consumer heals file-by-file but its db-level stamp stays stale
+    until one full `index()` — the documented, over-rebuild-safe direction.
+  - **Embeddings backfill on an off→on transition (0.30.0).** The library defaults the tier off, the
+    CLI/MCP default it on. A file first indexed off has no vector, and the content diff fast-skips it as
+    "unchanged" on the later on pass — leaving semantic recall silently dead on it. `index()` now embeds
+    any indexed-but-vectorless file (read + embed only, no re-chunk), idempotently.
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by

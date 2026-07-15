@@ -4,6 +4,31 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.30.0] — 2026-07-15
+
+### Added
+- **The MCP server warms its index on boot.** An MCP-only host has no SessionStart hook to build the
+  index, so the model could recall against an empty or stale one. The server now kicks a **background**
+  `index()` right after the `initialize` handshake — fire-and-forget, so the handshake never waits on it
+  and a rejection is logged to stderr (never the JSON-RPC stdout stream). A cold first build is one-time
+  per repo; warm boots are a ~ms no-op. Set `LITECTX_NO_WARM_INDEX` to opt out and manage indexing
+  yourself.
+
+### Fixed
+- **A foreign-version writer poisoning a *subset* of files is now healed.** The whole-index
+  `PRAGMA user_version` stamp (0.29.0) catches a version bump of the repo-local litectx, but is blind to
+  a *different* writer — an old global CLI, a stale `node_modules` copy — that re-chunks some files with
+  its own chunker without ever touching `user_version`. Each node now carries the index-format stamp of
+  the litectx that wrote it (additive `nodes.stamp` column, `DEFAULT 0` = the reserved "rebuild me"
+  sentinel), so such a file self-identifies and is re-chunked on the next unforced pass — even when its
+  bytes are unchanged, because the *boundaries*, not the bytes, are stale. Existing indexes migrate on
+  open and re-chunk once.
+- **A file indexed while embeddings were OFF now gets its vector on a later ON pass.** The library
+  defaults the tier off; the CLI/MCP default it on. A file first indexed off has no vector, and the
+  content diff correctly fast-skips it as "unchanged" on the later on pass — so without a backfill,
+  semantic recall stayed silently dead on it. `index()` now embeds any indexed-but-vectorless file
+  (read + embed only, no re-chunk), idempotently: a warm index backfills nothing.
+
 ## [0.29.1] — 2026-07-14
 
 ### Fixed
