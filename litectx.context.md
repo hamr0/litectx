@@ -1243,6 +1243,12 @@ for malformed JSON-RPC. **No `log: false` is exposed over MCP** — an MCP clien
 agent, which is precisely the demand the audit log exists to capture; non-demand consumers
 belong on the lib or the CLI's `--no-log`.
 
+**Warm-on-boot.** An MCP-only host has no SessionStart hook to build the index, so right after
+answering the `initialize` handshake the server kicks a **background** `ctx.index()` — fire-and-forget,
+the handshake never waits on it, and a rejection is logged to stderr (never the JSON-RPC stdout stream).
+A cold first build is one-time per repo; warm boots are a ~ms no-op. Set `LITECTX_NO_WARM_INDEX` to opt
+out and manage indexing yourself.
+
 **The surfaces expose the core options, not every lib option — deliberately.** Lib-only
 (use `import { LiteCtx }` if you need them): pathspec-scoped indexing (`index({ paths })`),
 multi-kind recall arrays (`kind: ["code", "doc"]`), `remember`'s `format` override and
