@@ -32,6 +32,7 @@ const flagValue = (flag) => {
 };
 const root = flagValue("--root") ?? process.cwd();
 const ctx = new LiteCtx({ root, embeddings: !process.argv.includes("--no-embeddings") });
+let warmed = false; // one-shot guard for the background warm-index kicked on `initialize`
 
 // The public operations, verbatim — the MCP surface IS the library surface (parity).
 const TOOLS = [
@@ -181,7 +182,7 @@ const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 async function handle(req) {
   const { id, method, params } = req;
   if (method === "initialize") {
-    return send({
+    send({
       jsonrpc: "2.0", id,
       result: {
         protocolVersion: params?.protocolVersion ?? "2025-03-26",
@@ -189,6 +190,15 @@ async function handle(req) {
         serverInfo: { name: "litectx", version: pkg.version },
       },
     });
+    // Warm the index in the BACKGROUND, right after answering the handshake. An MCP-only host has no
+    // session hook to build it, so the model would otherwise recall against an empty or stale index.
+    // Fire-and-forget: the handshake response above never waits on this — a cold first build is one-time
+    // per repo (warm boots are ~ms). Opt out with LITECTX_NO_WARM_INDEX to manage indexing yourself.
+    if (!warmed && !process.env.LITECTX_NO_WARM_INDEX) {
+      warmed = true;
+      ctx.index().catch((e) => console.error("litectx-mcp warm-index:", e instanceof Error ? e.message : e));
+    }
+    return;
   }
   if (method.startsWith("notifications/")) return; // notifications never get a response
   if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });

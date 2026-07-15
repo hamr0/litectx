@@ -370,9 +370,19 @@ export class LiteCtx {
         if (was) prev.set(p, { hash: "", mtime: -1, size: -1 });
       }
     }
+    const current = new Set(files);
+    // per-node stamp heal (version skew): files whose stored chunks were written by a DIFFERENT-version
+    // writer (an old global CLI, a stale node_modules copy) carry a per-row stamp that no longer matches.
+    // Their boundaries are stale even when their bytes are not, so force a re-chunk via the same
+    // invalidation trick. The whole-index `stale` flag above cannot see this — a foreign writer never
+    // touches `user_version`. Skipped after a rebuild (which re-chunks every file regardless).
+    if (!rebuild) {
+      for (const p of this.store.staleStampedFiles(stamp)) {
+        if (current.has(p) && prev.has(p)) prev.set(p, { hash: "", mtime: -1, size: -1 });
+      }
+    }
 
     const { upserts, touch, unchanged } = diffFiles(this.root, files, prev);
-    const current = new Set(files);
     const deletes = opts.paths ? [] : [...prev.keys()].filter((p) => !current.has(p));
 
     // chunk each changed file into symbol/section nodes + collect its import specifiers, in one
@@ -410,8 +420,29 @@ export class LiteCtx {
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
     // first build or a rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
     // empty in both those cases (a rebuild clears it above), so its size is the cold-build test.
-    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0);
+    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp);
     if (!partial) this.store.setStoredStamp(stamp); // only a pass over the WHOLE index can vouch for it
+
+    // embeddings backfill: a file indexed while embeddings were OFF (the library default) has no vector,
+    // and the diff above skips it as "content unchanged" — so a later embeddings-on pass would leave
+    // semantic recall silently dead on it. Embed those now: read + embed only, no re-chunk (bytes and
+    // boundaries are current; only the vector was missing). Runs AFTER applyChanges so this pass's own
+    // upserts already carry their vectors and aren't revisited. Scoped to the files this pass looked at
+    // (all files on a full pass; the scoped set on a partial). Idempotent — a warm index backfills none.
+    if (this.embeddings) {
+      for (const p of this.store.vectorlessFiles()) {
+        if (!current.has(p)) continue;
+        let body;
+        try {
+          body = readFileSync(join(this.root, p), "utf8");
+        } catch {
+          continue; // vanished/unreadable since the pass began
+        }
+        const v = await this._embedSafe(body);
+        if (v === null) break; // tier went unavailable — stop attempting
+        this.store.putEmbedding(p, v);
+      }
+    }
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
     return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged };
