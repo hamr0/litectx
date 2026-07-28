@@ -209,6 +209,60 @@ test("a global-tier remember() whose id equals a file path does NOT clobber the 
   });
 });
 
+// #3 — the RESIDUAL the table-split left for `doc`, the one recall kind spanning BOTH vector tables.
+// `getEmbeddings('doc')` reads file_embeddings THEN mem_embeddings into one PATH-keyed map, so when a
+// written doc's id equals an indexed `.md` path (both embedded), the mem vector silently overwrote the
+// file vector at cosine time. docCandidateVectors routes each candidate by its OWN `source` and returns
+// vectors POSITIONALLY, so a file-doc and a written-doc sharing a path each keep their own vector.
+test("docCandidateVectors routes each doc candidate to its source's table — no cross-table clobber on a shared path", async () => {
+  await withCtx({ embeddings: true, embedder: markerStub() }, async (ctx) => {
+    const P = "README.md";
+    const buf = (/** @type {Float32Array} */ v) => Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+    ctx.store.db.prepare("INSERT INTO file_embeddings(path,dim,vec) VALUES (?,2,?)").run(P, buf(Float32Array.from([1, 0])));
+    ctx.store.db.prepare("INSERT INTO mem_embeddings(path,dim,vec) VALUES (?,2,?)").run(P, buf(Float32Array.from([0, 1])));
+    // two candidates share the path but differ in source — each must resolve to its OWN table's vector
+    const out = ctx.store.docCandidateVectors([{ path: P, source: "file" }, { path: P, source: "direct" }]);
+    assert.deepEqual(Array.from(out[0] ?? []), [1, 0], "the file-doc candidate reads file_embeddings");
+    assert.deepEqual(Array.from(out[1] ?? []), [0, 1], "the written-doc candidate reads mem_embeddings — NOT clobbered by the file row");
+  });
+});
+
+// End-to-end through recall: a file-doc must be re-ranked on its OWN vector even when a written doc shares
+// its path. The fixture is built so cosine is the SOLE tiebreaker — `answer.md` and `decoy.md` match the
+// query's one FTS term ("widget") identically, so BM25 ties; only the vectors differ. `answer`'s file
+// vector ALIGNS with the query (cosine +1) while `decoy` is orthogonal (0) — so with the fix `answer` is
+// #1. The colliding written doc's vector OPPOSES the query (cosine −1): if it clobbers `answer`'s file
+// vector (the bug), `answer` drops below `decoy` and the test flips. Mutation-verified both directions.
+// A synonym stub keeps the vector markers OUT of the FTS-matched terms (else they'd perturb BM25).
+function synVecStub() {
+  const map = { QQUERY: [1, 0], AFILE: [1, 0], AWRIT: [-1, 0] }; // QQUERY≈AFILE (query/file synonyms); AWRIT opposes
+  return {
+    /** @param {string} t */
+    async embed(t) {
+      for (const k in map) if (t.includes(k)) return Float32Array.from(map[k]);
+      return Float32Array.from([0, 0]);
+    },
+  };
+}
+test("doc recall re-ranks a file-doc on its file vector, not a same-path written doc's vector", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-doc3-"));
+  writeFileSync(join(root, "answer.md"), "widget AFILE\n"); // file vec [1,0]; matches query on "widget"
+  writeFileSync(join(root, "decoy.md"), "widget ADECOY\n"); // vec [0,0]; identical FTS profile → BM25 ties
+  try {
+    const ctx = new LiteCtx({ root, dbPath: join(root, "db.sqlite"), embeddings: true, embedder: synVecStub(), include: [".md"] });
+    await ctx.index();
+    // a written doc whose id EQUALS the indexed file path, with an OPPOSING vector (AWRIT → [-1,0]). "AWRIT"
+    // shares no term with the query, so the written doc is not itself a candidate — it exists only to collide.
+    await ctx.remember("answer.md", "AWRIT", { kind: "doc" });
+    const hits = await ctx.recall("widget QQUERY", { kind: "doc", n: 5 });
+    assert.equal(hits[0]?.path, "answer.md", "the file-doc ranks #1 on its own file vector; the same-path written doc must not clobber it");
+    assert.equal("source" in hits[0], false, "the internal routing field never surfaces on a public hit");
+    ctx.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Upgrade path: a db written by an older litectx has its written-memory vectors in the shared
 // file_embeddings table. Opening it with the split-table code must MOVE those (and only those) into
 // mem_embeddings — a file's own vector stays put. Simulated by planting the old layout via raw SQL.

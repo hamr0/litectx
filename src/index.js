@@ -65,6 +65,17 @@ function minmax(a) {
   return a.map((x) => (hi > lo ? (x - lo) / (hi - lo) : 1));
 }
 
+/**
+ * Strip the internal `source` field the docs `search` attaches (so `_rankKind` can route a doc candidate
+ * to the right vector table — file vs mem). It exists only for that routing and must never surface on a
+ * public recall hit, so `_rankKind` drops it on every path before returning.
+ * @param {{ path: string, source?: string }[]} hits
+ * @returns {void}
+ */
+function dropSource(hits) {
+  for (const h of hits) delete h.source;
+}
+
 // v1 default ranking = BM25 + 1-hop import-spreading (additive boost; see store.search). Weight
 // settled on a 4-repo bench (aurora py, gitdone+multis js, aurora-mixed): additive@0.3 is the only
 // setting positive on ALL FOUR (worst-case +0.008) with the fewest regressions. It is NOT the
@@ -331,7 +342,9 @@ export class LiteCtx {
    *
    * By default only files whose content changed are re-read, and files that disappeared are
    * dropped. Pass `force` for a full rebuild, or `paths` (git pathspecs) to scope the pass —
-   * a scoped pass never deletes files outside its scope.
+   * a scoped pass never deletes files outside its scope. The two compose: `force` with `paths`
+   * re-chunks the scoped files (ignoring their hashes) while leaving the rest of the index
+   * untouched — it does NOT wipe the whole index.
    *
    * **Self-healing on upgrade.** An index also goes stale when *litectx itself* changes: the chunker
    * decides where a chunk starts, and mtime/size cannot see that a new chunker would have drawn the
@@ -368,16 +381,23 @@ export class LiteCtx {
     const stamp = indexStamp();
     const stale = this.store.storedStamp() !== stamp;
     const rebuild = opts.force === true || (stale && !partial);
-    // A rebuild's destructive clear is DEFERRED into applyChanges' transaction (clearFile below), not run
-    // here — so the old complete index stays queryable through the seconds-long chunk loop and a concurrent
-    // reader (e.g. the MCP warm-index) never sees an empty index mid-rebuild. `prev` is empty either way, so
-    // every file re-chunks exactly as before; only the moment the physical delete lands moves (into the swap).
-    const prev = rebuild ? new Map() : this.store.loadIndex();
-    // stale stamp + scoped pass: re-chunk what IS in scope, delete nothing. Invalidate rather than
-    // delete the prior entry — `diffFiles` fast-skips on (mtime, size) and only *touches* when the hash
-    // still matches, so a sentinel that can match neither forces a real re-read and re-chunk, while
-    // `prev.has(path)` stays true so the file is still counted as `updated` and not falsely as `added`.
-    if (stale && partial && !rebuild) {
+    // Whether to physically WIPE the whole file index first. Diverges from `rebuild` on exactly one case —
+    // `force` + `paths` (a scoped force pass): that re-chunks the scoped files (rebuild) but must NOT clear
+    // the whole index, because deleting rows outside the caller's scope is the one thing a scoped pass
+    // promises never to do (see docstring). A whole-index rebuild still clears everything.
+    const clearAll = rebuild && !partial;
+    // `prev` is emptied ONLY when the whole index is physically wiped (clearAll) — then the old rows really
+    // are gone. That destructive clear is DEFERRED into applyChanges' transaction (clearFile below), not run
+    // here, so the old complete index stays queryable through the seconds-long chunk loop and a concurrent
+    // reader (e.g. the MCP warm-index) never sees an empty index mid-rebuild. A scoped force pass does NOT
+    // wipe, so it loads `prev` and invalidates just its in-scope entries below (like the stale-stamp path).
+    const prev = clearAll ? new Map() : this.store.loadIndex();
+    // A scoped pass that must re-chunk its files — an explicit `force`, or a stale stamp — can't empty
+    // `prev` (that would drop out-of-scope files). Invalidate the in-scope entries instead: a sentinel
+    // (hash "", mtime/size -1) matches neither `diffFiles`' (mtime, size) fast-skip nor the hash, forcing a
+    // real re-read and re-chunk, while `prev.has(path)` stays true so the file counts as `updated` and not
+    // falsely as `added`.
+    if (partial && (opts.force === true || stale)) {
       for (const p of files) {
         const was = prev.get(p);
         if (was) prev.set(p, { hash: "", mtime: -1, size: -1 });
@@ -435,9 +455,9 @@ export class LiteCtx {
     }
 
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
-    // first build or a rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
-    // empty in both those cases (a rebuild clears it above), so its size is the cold-build test.
-    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp, rebuild);
+    // first build or a whole rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
+    // empty exactly when the index was physically wiped (clearAll), so its size is the cold-build test.
+    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp, clearAll);
     if (!partial) this.store.setStoredStamp(stamp); // only a pass over the WHOLE index can vouch for it
 
     // embeddings backfill: a file indexed while embeddings were OFF (the library default) has no vector,
@@ -794,18 +814,32 @@ export class LiteCtx {
    * @returns {import("./store.js").Hit[]}
    */
   _rankKind(match, kind, n, qvec, filter = {}) {
-    if (!qvec) return match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path — BM25-only, no `cosine` field (a hit has no query vector to compare against)
+    if (!qvec) {
+      const hits = match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path — BM25-only, no `cosine` field (a hit has no query vector to compare against)
+      dropSource(hits); // `source` is an internal routing field; never surface it
+      return hits;
+    }
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
     const cand = pool.concat(knn);
     if (!cand.length) return cand;
-    const vecs = this.store.getEmbeddings(cand.map((h) => h.path), kind); // kind selects the vector table (file vs mem)
     // The raw query↔hit cosine — computed ONCE, both surfaced on the hit (Feature A) and fused below.
     // `cosine` here is the UNBLESSED semantic similarity in [-1,1]: separable in aggregate but NOT a
     // per-query threshold (R-S8 — no usable cut), so it is surfaced as a raw signal, never a label; the
     // consumer owns any threshold. `score` (blended BM25 + spreading) is untouched. 0 for an un-embedded
     // row (a fact written before the tier was on) — `cosine()` guards a missing vector, never throws.
-    const raw = cand.map((h) => cosine(qvec, vecs.get(h.path)));
+    // `doc` is the one recall kind whose rows span BOTH vector tables — a file `.md` (file_embeddings) and
+    // a written doc (mem_embeddings) can even share a path — so route each candidate to the table its own
+    // `source` names (positional), or a written-doc vector silently overwrites a file-doc's (and vice versa).
+    // Every other kind lives in exactly one table, so a path-keyed map is exact.
+    let raw;
+    if (kind === "doc") {
+      raw = this.store.docCandidateVectors(cand).map((v) => cosine(qvec, v));
+    } else {
+      const vecs = this.store.getEmbeddings(cand.map((h) => h.path), kind); // kind selects the vector table (file vs mem)
+      raw = cand.map((h) => cosine(qvec, vecs.get(h.path)));
+    }
+    dropSource(cand); // `source` was needed only for the doc vector routing above — never surface it
     // Surface the cosine on the MEMORY axis only (fact/episode — PRD M13). code/doc use the same cosine
     // to re-rank internally (below), but the doctrine gates it there (a code query shares identifiers with
     // its answer, so cosine is a weaker, gated signal), so it is not surfaced as a per-hit score.
