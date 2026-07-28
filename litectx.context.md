@@ -191,7 +191,8 @@ Builds or **incrementally refreshes** the index over `root`.
 
 - `opts.force?: boolean` — full rebuild (drop + reindex everything).
 - `opts.paths?: string[]` — git pathspecs scoping this pass. A scoped pass
-  **never deletes** files outside its scope.
+  **never deletes** files outside its scope — including when combined with
+  `force`, which re-chunks the scoped files in place without touching the rest.
 - `opts.yield?: boolean` (default `false`) — **cooperatively release the event
   loop** between per-file parses. `index()` is async but its work is synchronous
   CPU (tree-sitter chunking, SQLite upserts), so a large or `force` pass otherwise
@@ -1259,7 +1260,8 @@ A cold first build is one-time per repo; warm boots are a ~ms no-op. Set `LITECT
 out and manage indexing yourself. The background rebuild is **atomic** — its destructive clear runs inside
 the same transaction that re-populates the index, so a `recall`/`get` arriving mid-rebuild sees the old
 complete index or the new one, never an empty window. (A failed warm-index is retried on the next
-`initialize`.)
+`initialize`, bounded to a few attempts so a persistently-failing index — read-only or full disk, a
+corrupt db — can't thrash a full rebuild on every reconnect.)
 
 **The surfaces expose the core options, not every lib option — deliberately.** Lib-only
 (use `import { LiteCtx }` if you need them): pathspec-scoped indexing (`index({ paths })`),
