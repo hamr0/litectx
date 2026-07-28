@@ -1686,7 +1686,7 @@ export class Store {
     const rows = /** @type {Hit[]} */ (
       this.db
         .prepare(
-          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, -bm25(docs) AS score " +
+          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, docs.source AS source, -bm25(docs) AS score " +
             "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
             "WHERE docs MATCH :match AND docs.kind = :kind " +
             // tri-state fence (multis M3 fail-closed): seeAll=1 → every row; else global rows always,
@@ -1893,14 +1893,47 @@ export class Store {
       : MEM_KINDS.has(kind) ? ["mem_embeddings"]
       : kind === "doc" ? ["file_embeddings", "mem_embeddings"]
       : ["file_embeddings"];
-    const ph = paths.map(() => "?").join(",");
-    for (const t of tables) {
-      const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
-        this.db.prepare(`SELECT path, vec FROM ${t} WHERE path IN (${ph})`).all(...paths)
-      );
-      for (const r of rows) m.set(r.path, blobToVec(r.vec));
-    }
+    for (const t of tables) this._readVecs(t, paths, m);
     return m;
+  }
+
+  /**
+   * Read `(path, vec)` rows from ONE embeddings table into `m` (keyed by path). `table` is ALWAYS a
+   * hardcoded whitelist literal chosen by the callers here (`file_embeddings`/`mem_embeddings`), never
+   * caller input, so the `${table}` interpolation is injection-safe.
+   * @param {string} table @param {string[]} paths @param {Map<string, Float32Array>} m
+   * @returns {void}
+   */
+  _readVecs(table, paths, m) {
+    if (!paths.length) return;
+    const ph = paths.map(() => "?").join(",");
+    const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
+      this.db.prepare(`SELECT path, vec FROM ${table} WHERE path IN (${ph})`).all(...paths)
+    );
+    for (const r of rows) m.set(r.path, blobToVec(r.vec));
+  }
+
+  /**
+   * Per-candidate vectors for DOC recall, resolving the file/written-doc table split. `doc` is the one
+   * recall kind whose rows live in BOTH vector tables — a file `.md` in `file_embeddings`, a written doc
+   * in `mem_embeddings` — and the two CAN share a path (a `remember(kind:'doc')` whose id equals an
+   * indexed `.md`). A path-keyed read of both tables (as {@link getEmbeddings} does for a null kind) then
+   * lets one table's vector silently overwrite the other's. Here each candidate is routed to the table its
+   * OWN `source` names ('file' → file vectors, 'direct' → mem vectors), and vectors are returned
+   * POSITIONALLY (aligned to `cands`) so a file-doc and a written-doc that share a path each keep their
+   * own vector. A missing vector (or a candidate lacking `source`, which a docs-sourced hit never is)
+   * yields `undefined` at that position — `cosine()` treats it as 0.
+   * @param {{ path: string, source?: string }[]} cands
+   * @returns {(Float32Array | undefined)[]}
+   */
+  docCandidateVectors(cands) {
+    /** @type {Map<string, Float32Array>} */
+    const file = new Map();
+    /** @type {Map<string, Float32Array>} */
+    const mem = new Map();
+    this._readVecs("file_embeddings", cands.filter((c) => c.source !== "direct").map((c) => c.path), file);
+    this._readVecs("mem_embeddings", cands.filter((c) => c.source === "direct").map((c) => c.path), mem);
+    return cands.map((c) => (c.source === "direct" ? mem : file).get(c.path));
   }
 
   /** @returns {number} number of stored file embeddings (slice 6 — for tests/introspection) */

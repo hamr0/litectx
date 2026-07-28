@@ -4,6 +4,27 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.1] — 2026-07-28
+
+### Fixed
+- **A scoped `force` pass (`index({ force: true, paths: […] })`) no longer wipes the whole index.** It
+  cleared every file-sourced row while re-inserting only the scoped subset — deleting files outside the
+  caller's scope, the one thing a scoped pass promises never to do. The destructive whole-index clear now
+  fires only on a whole-index rebuild; a scoped force pass re-chunks its files **in place** (reported as
+  `updated`, not `added`) and leaves everything else untouched. Not reachable via the CLI/MCP (neither
+  combines `force` with `paths`) — a latent footgun on the library API.
+- **Doc recall no longer re-ranks a file `.md` on the wrong vector.** `doc` is the one recall kind whose
+  rows span both vector tables (an indexed `.md` in `file_embeddings`, a written doc in `mem_embeddings`),
+  and the two can share a path — a `remember(kind:'doc')` whose id equals an indexed `.md`. The semantic
+  re-rank read both tables into one path-keyed map, so the written doc's vector silently overwrote the
+  file's at cosine time. Each doc candidate is now routed to the vector table its own source names, so a
+  file-doc and a same-path written doc each keep their own vector. Completes the 0.31.0 vector-table split
+  for the one kind that spans both tables.
+- **MCP: a persistently-failing warm-index no longer thrashes.** 0.31.0 made a failed warm-index retry on
+  every `initialize`, so a client reconnect loop against a durably-broken index (read-only/full disk,
+  corrupt db) drove a full re-chunk on every handshake. The retry is now **bounded** (3 attempts) before
+  the server gives up until restart — a transient failure still recovers, a permanent one stops thrashing.
+
 ## [0.31.0] — 2026-07-28
 
 ### Added

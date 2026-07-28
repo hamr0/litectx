@@ -33,6 +33,8 @@ const flagValue = (flag) => {
 const root = flagValue("--root") ?? process.cwd();
 const ctx = new LiteCtx({ root, embeddings: !process.argv.includes("--no-embeddings") });
 let warmed = false; // one-shot guard for the background warm-index kicked on `initialize`
+let warmFails = 0; // consecutive warm-index failures — bounds retry so a persistent failure can't thrash
+const WARM_MAX_ATTEMPTS = 3; // total warm-index tries before giving up until the process restarts
 
 // The public operations, verbatim — the MCP surface IS the library surface (parity).
 const TOOLS = [
@@ -197,11 +199,15 @@ async function handle(req) {
     if (!warmed && !process.env.LITECTX_NO_WARM_INDEX) {
       warmed = true; // set before firing so a concurrent re-initialize can't start a second pass
       ctx.index().catch((e) => {
-        // a warm-index that REJECTS must stay retryable: leave `warmed` true and a client reconnect
-        // (fresh `initialize`) would never rebuild, recalling against the empty/stale index this exists
-        // to prevent. Reset it so exactly one retry can fire next handshake.
-        warmed = false;
-        console.error("litectx-mcp warm-index:", e instanceof Error ? e.message : e);
+        // A warm-index that REJECTS should stay retryable across a client reconnect — recalling against the
+        // empty/stale index this exists to prevent is the failure mode. But an index that fails for a DURABLE
+        // reason (read-only/full disk, corrupt db) would otherwise rebuild on EVERY `initialize`, so a client
+        // reconnect loop drives repeated full re-chunks (the ~74% chunk-loop cost runs before the write that
+        // fails). Bound it: re-arm for a retry only until WARM_MAX_ATTEMPTS consecutive failures, then give up
+        // (leave `warmed` true) until the process restarts. A later success never re-fires, so no reset needed.
+        warmFails += 1;
+        if (warmFails < WARM_MAX_ATTEMPTS) warmed = false;
+        console.error(`litectx-mcp warm-index (attempt ${warmFails}/${WARM_MAX_ATTEMPTS}):`, e instanceof Error ? e.message : e);
       });
     }
     return;

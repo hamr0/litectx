@@ -252,6 +252,43 @@ test("a scoped pass on a stale-stamped index re-chunks its scope WITHOUT deletin
   assert.equal(ctx.store.storedStamp(), indexStamp());
 });
 
+// The FORCE sibling of the test above. `force` sets rebuild=true even on a scoped pass — but rebuild
+// ("re-chunk the files in scope") and the destructive whole-index clear are DIFFERENT concerns and must
+// stay decoupled: a scoped force pass re-chunks its scope yet MUST NOT delete out-of-scope files, the same
+// contract the stale-stamp case upholds. Regression for the scoped-force clear footgun.
+test("a FORCE pass scoped by paths re-chunks its scope WITHOUT deleting out-of-scope files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-scoped-force-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  for (const f of ["alpha", "beta", "gamma"]) {
+    writeFileSync(join(root, "src", `${f}.js`), `export function ${f}Handler() { return 1; }\n`);
+  }
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "t@t"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "t"], { cwd: root });
+  execFileSync("git", ["add", "-A"], { cwd: root });
+  execFileSync("git", ["commit", "-qm", "init"], { cwd: root });
+
+  const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings: false });
+  await ctx.index();
+  assert.equal(ctx.store.count(), 3);
+
+  const r = await ctx.index({ force: true, paths: ["src/alpha.js"] });
+  assert.equal(ctx.store.count(), 3, "a scoped force pass must NOT wipe beta.js and gamma.js — they are outside its scope");
+  assert.equal(r.files, 3, "the whole index survives; only alpha.js was re-read");
+  assert.equal(r.updated, 1, "the scoped file is force-re-chunked IN PLACE — a replace, so it counts as updated, not a new add");
+  assert.equal(r.added, 0, "the row already existed; a force re-chunk is not an add (parity with the stale-stamp scoped path)");
+  assert.equal(r.removed, 0, "nothing outside scope is deleted");
+
+  // the out-of-scope files remain queryable — the footgun deleted them pre-fix
+  assert.equal((await ctx.recall("betaHandler", { kind: "code", n: 3 }))[0]?.path, "src/beta.js");
+  assert.equal((await ctx.recall("gammaHandler", { kind: "code", n: 3 }))[0]?.path, "src/gamma.js");
+  // and the scoped file is itself still present and re-chunked
+  assert.equal((await ctx.recall("alphaHandler", { kind: "code", n: 3 }))[0]?.path, "src/alpha.js");
+
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 // ---- the PER-NODE stamp: a foreign writer poisoning a SUBSET, which the whole-index stamp can't see ----
 
 // The whole-index `user_version` stamp above only catches a version bump of the repo-LOCAL litectx. It

@@ -698,9 +698,24 @@ Two design results worth carrying, both POC-falsified before the build:
     `file_embeddings` keyed by id — which in the single-tenant (global) tier is the bare id, indistinct
     from a file path. A `remember()` whose id equalled an indexed file's path clobbered that file's vector
     on the one shared row (and a `forget` deleted it). Written vectors now live in `mem_embeddings`; recall
-    reads the table matching the kind (`code`→file, `fact`/`episode`→mem, `doc`→both). Existing indexes
-    migrate their written vectors over on first open. This is the real form of the owner-column alternative
-    §3.2 weighed and set aside — a physical keyspace split, not a per-table owner column.
+    reads the table matching the kind (`code`→file, `fact`/`episode`→mem, `doc`→per-candidate source).
+    Existing indexes migrate their written vectors over on first open. This is the real form of the
+    owner-column alternative §3.2 weighed and set aside — a physical keyspace split, not a per-table owner
+    column.
+  - **Doc recall routes each candidate to its own vector table (0.31.1).** `doc` is the one recall kind
+    whose rows live in *both* tables — an indexed `.md` in `file_embeddings`, a written doc in
+    `mem_embeddings` — and the two can share a path (a `remember(kind:'doc')` whose id equals an indexed
+    `.md`). Reading both tables into one path-keyed map let the written doc's vector silently overwrite the
+    file's at cosine time. `search()` now carries each doc row's `source`, and the re-rank routes each
+    candidate to the table its source names (positional, so a file-doc and a same-path written doc each
+    keep their own vector); the `source` field is internal and stripped before recall returns. Completes
+    the table split for the one kind that spans both.
+  - **A scoped `force` pass never wipes outside its scope (0.31.1).** `index({ force: true, paths })` set
+    `rebuild=true`, whose destructive clear (folded into `applyChanges` above) wiped every file-sourced row
+    while re-inserting only the scoped subset — deleting files the caller never named. The whole-index wipe
+    is now gated on a *whole-index* rebuild (`clearAll = rebuild && !partial`); a scoped force pass
+    re-chunks its files in place (reported `updated`, not `added`) and touches nothing else. Not reachable
+    via CLI/MCP (neither combines `force` with `paths`); a latent library-API footgun.
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by
