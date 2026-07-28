@@ -4,7 +4,7 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.31.0] — 2026-07-28
 
 ### Added
 - **`index({ yield: true })` — cooperative event-loop yielding.** `index()` is async but its work
