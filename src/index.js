@@ -10,6 +10,7 @@
 import { join, dirname } from "node:path";
 import { mkdirSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { Store, MEM_KINDS, memId } from "./store.js";
 import { collectFiles, diffFiles, indexStamp } from "./indexer.js";
 import { chunkAndImports } from "./chunker.js";
@@ -339,7 +340,16 @@ export class LiteCtx {
    * boundaries its old self wrote — silently, forever. The rebuild clears file-sourced rows only;
    * written memory survives it (§3.2).
    *
-   * @param {{ paths?: string[], force?: boolean }} [opts]
+   * **Cooperative yielding.** `index()` is `async`, but its work (tree-sitter chunking, SQLite
+   * upserts) is synchronous CPU — so on a large or `force` pass it can hold the host event loop for
+   * seconds, during which a co-hosted timer/socket cannot fire. Pass `yield: true` to release the
+   * loop between per-file parses (via `setImmediate`), so the host breathes. It does NOT parallelise
+   * or change the stored index — only *when* the CPU runs — so the result is byte-identical to the
+   * default pass; a single file's parse and the one atomic `applyChanges` transaction remain
+   * uninterrupted (their duration is the residual floor). Default `false` keeps today's behaviour.
+   * A caller needing full isolation should run the instance in its own worker thread instead.
+   *
+   * @param {{ paths?: string[], force?: boolean, yield?: boolean }} [opts]
    * @returns {Promise<IndexResult>}
    */
   async index(opts = {}) {
@@ -358,7 +368,10 @@ export class LiteCtx {
     const stamp = indexStamp();
     const stale = this.store.storedStamp() !== stamp;
     const rebuild = opts.force === true || (stale && !partial);
-    if (rebuild) this.store.clearIndexed();
+    // A rebuild's destructive clear is DEFERRED into applyChanges' transaction (clearFile below), not run
+    // here — so the old complete index stays queryable through the seconds-long chunk loop and a concurrent
+    // reader (e.g. the MCP warm-index) never sees an empty index mid-rebuild. `prev` is empty either way, so
+    // every file re-chunks exactly as before; only the moment the physical delete lands moves (into the swap).
     const prev = rebuild ? new Map() : this.store.loadIndex();
     // stale stamp + scoped pass: re-chunk what IS in scope, delete nothing. Invalidate rather than
     // delete the prior entry — `diffFiles` fast-skips on (mtime, size) and only *touches* when the hash
@@ -391,6 +404,10 @@ export class LiteCtx {
       const r = await chunkAndImports(u.path, u.body);
       u.nodes = r.chunks;
       u.imports = r.imports;
+      // opt-in cooperative yield (LC-3): parsing is the bulk of the sync block (~74% on a force
+      // pass), and it's the one place with a per-item boundary to release the loop at. Yields the
+      // macrotask queue so a co-hosted timer/socket can fire between files.
+      if (opts.yield) await yieldToLoop();
     }
 
     // resolve each changed file's imports to intra-repo edges (slice 4). The resolver indexes
@@ -420,7 +437,7 @@ export class LiteCtx {
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
     // first build or a rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
     // empty in both those cases (a rebuild clears it above), so its size is the cold-build test.
-    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp);
+    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp, rebuild);
     if (!partial) this.store.setStoredStamp(stamp); // only a pass over the WHOLE index can vouch for it
 
     // embeddings backfill: a file indexed while embeddings were OFF (the library default) has no vector,
@@ -430,6 +447,8 @@ export class LiteCtx {
     // upserts already carry their vectors and aren't revisited. Scoped to the files this pass looked at
     // (all files on a full pass; the scoped set on a partial). Idempotent — a warm index backfills none.
     if (this.embeddings) {
+      /** @type {[string, Float32Array][]} */
+      const backfilled = [];
       for (const p of this.store.vectorlessFiles()) {
         if (!current.has(p)) continue;
         let body;
@@ -438,10 +457,16 @@ export class LiteCtx {
         } catch {
           continue; // vanished/unreadable since the pass began
         }
+        // drift guard: only embed if the disk bytes STILL match what was indexed. If the file changed
+        // since this pass's diffFiles snapshot (a concurrent external write), its stored chunk bodies are
+        // the OLD content — embedding the new bytes would pair a vector with a mismatched body. Skip it;
+        // the next index() catches the hash change as an upsert and re-chunks + re-embeds it consistently.
+        if (this.store.fileHash(p) !== sha256(body)) continue;
         const v = await this._embedSafe(body);
         if (v === null) break; // tier went unavailable — stop attempting
-        this.store.putEmbedding(p, v);
+        backfilled.push([p, v]);
       }
+      this.store.putEmbeddings(backfilled); // one transaction (no-op when empty)
     }
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
@@ -774,7 +799,7 @@ export class LiteCtx {
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
     const cand = pool.concat(knn);
     if (!cand.length) return cand;
-    const vecs = this.store.getEmbeddings(cand.map((h) => h.path));
+    const vecs = this.store.getEmbeddings(cand.map((h) => h.path), kind); // kind selects the vector table (file vs mem)
     // The raw query↔hit cosine — computed ONCE, both surfaced on the hit (Feature A) and fused below.
     // `cosine` here is the UNBLESSED semantic similarity in [-1,1]: separable in aggregate but NOT a
     // per-query threshold (R-S8 — no usable cut), so it is surfaced as a raw signal, never a label; the

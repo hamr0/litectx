@@ -148,9 +148,9 @@ test("written memory survives index({ force: true }) — force rebuilds files, n
   // 2 = the pre-force row SURVIVED plus the post-force recall above (post-force alone would be 1)
   assert.equal(ctx.store.recallCount("fact:survivor"), 2, "the demand history survived (append-only)");
   const vecs = /** @type {{ n: number }} */ (
-    ctx.store.db.prepare("SELECT count(*) AS n FROM file_embeddings WHERE path = 'fact:survivor'").get()
+    ctx.store.db.prepare("SELECT count(*) AS n FROM mem_embeddings WHERE path = 'fact:survivor'").get()
   );
-  assert.equal(vecs.n, 1, "the written row's embedding survived (clear is scoped to file_index keys)");
+  assert.equal(vecs.n, 1, "the written row's embedding survived (written vectors live in mem_embeddings, never cleared by a file rebuild)");
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
@@ -215,7 +215,7 @@ test("embeddings-on remember stores a vector and recall runs the tri-hybrid path
   // shared FTS term "widget" so both pool; markers steer the semantic vector.
   await ctx.remember("fact:a", "widget alpha alpha", { kind: "fact" });
   await ctx.remember("fact:b", "widget beta beta", { kind: "fact" });
-  assert.equal(ctx.store.db.prepare("SELECT count(*) AS n FROM file_embeddings").get().n, 2, "each remember embedded + stored a vector");
+  assert.equal(ctx.store.db.prepare("SELECT count(*) AS n FROM mem_embeddings").get().n, 2, "each remember embedded + stored a vector");
   const callsAfterWrites = stub.calls;
   const hits = await ctx.recall("widget alpha", { kind: "fact", n: 2 });
   assert.equal(callsAfterWrites, 2, "remember embedded on write (not lazily at recall)");
@@ -248,11 +248,11 @@ test("forget cleans the row's embedding and recall-log alongside the doc row", a
   await ctx.remember("fact:gone", "widget alpha", { kind: "fact" });
   await ctx.recall("widget alpha", { kind: "fact" }); // appends a recall-log row for fact:gone
   const n = (t) => /** @type {{ n: number }} */ (ctx.store.db.prepare(`SELECT count(*) AS n FROM ${t} WHERE path = 'fact:gone'`).get()).n;
-  assert.equal(n("file_embeddings"), 1, "precondition: vector present");
+  assert.equal(n("mem_embeddings"), 1, "precondition: vector present");
   assert.ok(ctx.store.recallCount("fact:gone") >= 1, "precondition: a hit was logged");
   ctx.forget("fact:gone");
   assert.equal(n("docs"), 0, "doc row removed");
-  assert.equal(n("file_embeddings"), 0, "embedding removed (no orphan vector)");
+  assert.equal(n("mem_embeddings"), 0, "embedding removed (no orphan vector)");
   assert.equal(ctx.store.recallCount("fact:gone"), 0, "recall-log rows removed (no orphan audit trail)");
   ctx.close();
   rmSync(root, { recursive: true, force: true });

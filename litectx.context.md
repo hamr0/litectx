@@ -192,6 +192,15 @@ Builds or **incrementally refreshes** the index over `root`.
 - `opts.force?: boolean` — full rebuild (drop + reindex everything).
 - `opts.paths?: string[]` — git pathspecs scoping this pass. A scoped pass
   **never deletes** files outside its scope.
+- `opts.yield?: boolean` (default `false`) — **cooperatively release the event
+  loop** between per-file parses. `index()` is async but its work is synchronous
+  CPU (tree-sitter chunking, SQLite upserts), so a large or `force` pass otherwise
+  holds the host loop for its full duration — a co-hosted timer/socket cannot fire.
+  With `yield: true` the host **breathes between files** (via `setImmediate`); the
+  stored index is **byte-identical** (only *when* the CPU runs changes). It does not
+  parallelise: a single file's parse and the one atomic `applyChanges` transaction
+  stay uninterrupted, so a sub-second residual block remains. For **full** isolation,
+  run the instance in your own worker thread instead.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 
@@ -1247,7 +1256,10 @@ belong on the lib or the CLI's `--no-log`.
 answering the `initialize` handshake the server kicks a **background** `ctx.index()` — fire-and-forget,
 the handshake never waits on it, and a rejection is logged to stderr (never the JSON-RPC stdout stream).
 A cold first build is one-time per repo; warm boots are a ~ms no-op. Set `LITECTX_NO_WARM_INDEX` to opt
-out and manage indexing yourself.
+out and manage indexing yourself. The background rebuild is **atomic** — its destructive clear runs inside
+the same transaction that re-populates the index, so a `recall`/`get` arriving mid-rebuild sees the old
+complete index or the new one, never an empty window. (A failed warm-index is retried on the next
+`initialize`.)
 
 **The surfaces expose the core options, not every lib option — deliberately.** Lib-only
 (use `import { LiteCtx }` if you need them): pathspec-scoped indexing (`index({ paths })`),

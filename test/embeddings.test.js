@@ -179,3 +179,65 @@ test("the real Embedder fails loudly when the optional peer dep is absent", asyn
     "a missing model dependency is a clear, actionable error"
   );
 });
+
+// The vector-table split (mem_embeddings vs file_embeddings). Written-memory vectors used to share
+// file_embeddings keyed by memKey — which in the global tier is the BARE id, indistinguishable from a
+// file path. A remember() whose id equalled an indexed file's path then CLOBBERED that file's vector on
+// the one shared row (and a forget deleted it). This pins that a colliding id keeps the two vectors
+// independent and that recall reads the right table per kind. Written to fail on the shared-table bug.
+test("a global-tier remember() whose id equals a file path does NOT clobber the file's vector", async () => {
+  const stub = markerStub();
+  await withCtx({ embeddings: true, embedder: stub }, async (ctx) => {
+    await ctx.index(); // two.js carries the "alpha" marker → file vector ~[1,0]
+    const fileVec = Array.from(ctx.store.getEmbeddings(["two.js"], "code").get("two.js") ?? []);
+    assert.deepEqual(fileVec, [1, 0], "precondition: the file's vector is the alpha marker");
+
+    // a fact whose id COLLIDES with the file path, unrelated semantics (beta marker → ~[0,1])
+    await ctx.remember("two.js", "beta beta", { kind: "fact" });
+
+    // the file's vector is untouched; the fact's lives in its own keyspace
+    assert.deepEqual(Array.from(ctx.store.getEmbeddings(["two.js"], "code").get("two.js") ?? []), [1, 0], "file (code) vector survived the colliding write");
+    assert.deepEqual(Array.from(ctx.store.getEmbeddings(["two.js"], "fact").get("two.js") ?? []), [0, 1], "fact vector reads from mem_embeddings, not the file's row");
+    // both rows coexist physically — one per table, no shared PK
+    assert.equal(ctx.store.db.prepare("SELECT COUNT(*) c FROM file_embeddings WHERE path='two.js'").get().c, 1, "file vector row present");
+    assert.equal(ctx.store.db.prepare("SELECT COUNT(*) c FROM mem_embeddings WHERE path='two.js'").get().c, 1, "mem vector row present");
+
+    // and a forget of the colliding fact leaves the file's vector intact (forget touches mem_embeddings only)
+    ctx.forget("two.js");
+    assert.deepEqual(Array.from(ctx.store.getEmbeddings(["two.js"], "code").get("two.js") ?? []), [1, 0], "forget did not delete the file's vector");
+    assert.equal(ctx.store.db.prepare("SELECT COUNT(*) c FROM mem_embeddings WHERE path='two.js'").get().c, 0, "the fact's vector is gone");
+  });
+});
+
+// Upgrade path: a db written by an older litectx has its written-memory vectors in the shared
+// file_embeddings table. Opening it with the split-table code must MOVE those (and only those) into
+// mem_embeddings — a file's own vector stays put. Simulated by planting the old layout via raw SQL.
+test("migration moves written vectors out of the shared file_embeddings, leaving file vectors alone", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-emb-mig-"));
+  writeFileSync(join(root, "two.js"), "export function two() { return widget; } // alpha\n");
+  const dbPath = join(root, "idx.db");
+  try {
+    // build the "old" layout: a file vector + a written-memory vector BOTH in file_embeddings
+    const a = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
+    await a.index();                                        // file vector → file_embeddings['two.js']
+    await a.remember("fact:note", "beta", { kind: "fact" }); // written vector → mem_embeddings['fact:note']
+    // regress it to the pre-split shape: move the mem vector back into file_embeddings
+    a.store.db.exec("INSERT INTO file_embeddings SELECT * FROM mem_embeddings WHERE path='fact:note'");
+    a.store.db.exec("DELETE FROM mem_embeddings");
+    a.close();
+    assert.ok(true);
+
+    // reopen → the constructor migration runs
+    const b = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
+    const cnt = (/** @type {string} */ t, /** @type {string} */ p) => b.store.db.prepare(`SELECT COUNT(*) c FROM ${t} WHERE path=?`).get(p).c;
+    assert.equal(cnt("mem_embeddings", "fact:note"), 1, "the written vector was migrated into mem_embeddings");
+    assert.equal(cnt("file_embeddings", "fact:note"), 0, "…and removed from the shared table");
+    assert.equal(cnt("file_embeddings", "two.js"), 1, "the FILE's own vector was left untouched");
+    assert.equal(cnt("mem_embeddings", "two.js"), 0, "…and not dragged into mem_embeddings");
+    // the migrated vector is still usable by fact recall
+    assert.deepEqual(Array.from(b.store.getEmbeddings(["fact:note"], "fact").get("fact:note") ?? []), [0, 1], "migrated vector reads back correctly");
+    b.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
