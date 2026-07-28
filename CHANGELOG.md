@@ -4,6 +4,40 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.31.0] — 2026-07-28
+
+### Added
+- **`index({ yield: true })` — cooperative event-loop yielding.** `index()` is async but its work
+  (tree-sitter chunking, SQLite upserts) is synchronous CPU, so a large or `force` pass held the host
+  event loop for its full duration — a co-hosted timer/socket could not fire (on a ~155-file force pass,
+  a 100ms host interval fired ~4% of its due ticks). Passing `yield: true` releases the loop between
+  per-file parses (via `setImmediate`), so the host breathes: measured ~63% liveness with no single
+  block over ~370ms, versus ~4% before. It changes only *when* the CPU runs — the stored index is
+  **byte-identical** to the default pass, atomicity of the single `applyChanges` transaction is
+  preserved, and a single file's parse plus that transaction remain the (sub-second) residual floor.
+  Default `false` keeps today's behaviour exactly. A caller needing full isolation should run the
+  instance in its own worker thread. (Resolves bareloop upstream ask **LC-3**.)
+
+### Fixed
+- **A `force`/self-heal rebuild is now atomic — a concurrent reader never sees an empty index.** The
+  rebuild used to clear the index up front, then sit empty through the whole (seconds-long) chunk loop
+  before re-populating. A recall landing there — e.g. the background warm-index (v0.30.0) firing while
+  the model queries — returned **zero hits**. The clear is folded into the `applyChanges` transaction, so
+  a reader sees the old complete index or the new one, never the gap (and a mid-rebuild crash now rolls
+  back to the old index instead of leaving it empty).
+- **Written-memory vectors no longer collide with file vectors.** Fact/episode/written-doc embeddings
+  shared the `file_embeddings` table keyed by id, which in the single-tenant (global) tier is the bare
+  id — indistinguishable from a file path. A `remember()` whose id equalled an indexed file's path
+  **overwrote that file's vector** (and a `forget` deleted it), corrupting semantic recall for both.
+  Written vectors now live in a separate `mem_embeddings` table; recall reads the table matching the
+  kind. Existing indexes migrate their written vectors over automatically on first open.
+- **The embeddings backfill skips a file that drifted on disk mid-pass**, rather than pairing a fresh
+  vector with the older stored chunk body; the next `index()` re-chunks and re-embeds it consistently.
+  Backfilled vectors are now written in a single transaction instead of one autocommit write per file.
+- **MCP: a warm-index that fails is retried on the next `initialize`.** The `warmed` flag was set before
+  the background pass settled, so a rejected warm-index stranded an empty/stale index until an explicit
+  `index` call; it is now reset on failure so exactly one retry fires on reconnect.
+
 ## [0.30.0] — 2026-07-15
 
 ### Added

@@ -685,7 +685,22 @@ Two design results worth carrying, both POC-falsified before the build:
   - **Embeddings backfill on an off→on transition (0.30.0).** The library defaults the tier off, the
     CLI/MCP default it on. A file first indexed off has no vector, and the content diff fast-skips it as
     "unchanged" on the later on pass — leaving semantic recall silently dead on it. `index()` now embeds
-    any indexed-but-vectorless file (read + embed only, no re-chunk), idempotently.
+    any indexed-but-vectorless file (read + embed only, no re-chunk), idempotently. **A drift guard
+    (0.31.0)** skips a file whose disk bytes no longer match its stored hash — a concurrent mid-pass edit
+    would otherwise pair a fresh vector with the old chunk body; the next `index()` re-chunks it cleanly.
+  - **The rebuild is atomic (0.31.0).** A force/self-heal rebuild used to `clearIndexed()` up front, then
+    sit on an *empty* index through the whole (seconds-long) chunk loop before re-populating. With the
+    background warm-index (0.30.0) firing while the model recalls, a reader landed in that window and got
+    zero hits. The destructive clear now runs *inside* `applyChanges`' transaction, so a concurrent
+    `recall`/`get` sees the old complete index or the new one, never the gap (and a mid-rebuild crash rolls
+    back instead of leaving it empty).
+  - **Written-memory vectors have their own table (0.31.0).** Fact/episode/written-doc embeddings shared
+    `file_embeddings` keyed by id — which in the single-tenant (global) tier is the bare id, indistinct
+    from a file path. A `remember()` whose id equalled an indexed file's path clobbered that file's vector
+    on the one shared row (and a `forget` deleted it). Written vectors now live in `mem_embeddings`; recall
+    reads the table matching the kind (`code`→file, `fact`/`episode`→mem, `doc`→both). Existing indexes
+    migrate their written vectors over on first open. This is the real form of the owner-column alternative
+    §3.2 weighed and set aside — a physical keyspace split, not a per-table owner column.
 
 **Closed 2026-06-10 (discussion w/ user):**
 - **No facts-only embedding default.** "Facts embedded by default" would mean the embedder runs by

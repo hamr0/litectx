@@ -146,6 +146,13 @@ const SCHEMA = [
   // pool, never the corpus; brute-force is sub-ms regardless of repo size, POC-validated). Only
   // populated when the embeddings tier is on; 1:1 with `path`, refreshed/dropped with the file.
   "CREATE TABLE IF NOT EXISTS file_embeddings(path TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL)",
+  // written-memory embeddings — the SAME shape as file_embeddings but a SEPARATE keyspace. `file_embeddings`
+  // is keyed by repo file path; a written vector is keyed by memKey(owner,id) (fact/episode) or a direct-doc
+  // id. In the global tier memKey is the BARE id, indistinguishable from a file path — so sharing one table
+  // let a `remember()` whose id equals a source path clobber that file's vector (and a `forget` delete the
+  // file's vector). Splitting the tables makes the collision structurally impossible: file recall reads only
+  // file_embeddings, fact/episode recall only mem_embeddings (doc spans both — file .md + written docs).
+  "CREATE TABLE IF NOT EXISTS mem_embeddings(path TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL)",
   // recall audit log (slice 7): one row per recall hit — the genuine access log §4's base-level
   // tier will later score (written memory produces real access events, not git's proxy). v1 records
   // it but does not rank on it. Also feeds HITL promotion (§3.2): an agent fact whose hit count
@@ -339,8 +346,39 @@ export class Store {
       // the first index() pass after upgrade re-chunks every file once, then they carry a live stamp.
       const nodeCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(nodes)"));
       if (!nodeCols.some((c) => c.name === "stamp")) this.db.exec("ALTER TABLE nodes ADD COLUMN stamp INTEGER NOT NULL DEFAULT 0");
+      this.migrateMemEmbeddings(); // move written vectors out of the shared file_embeddings table (before re-keying)
       this.migrateOwnerKeyedMem();
     }
+  }
+
+  /**
+   * One-time migration: written-memory vectors used to share `file_embeddings`, keyed by memKey / direct-doc
+   * id — which in the global tier collides with a same-named file path. Move any such legacy row into the
+   * dedicated `mem_embeddings` table. A row is written-memory iff its key names a `mem` row or a direct
+   * `docs` row (file rows live in `file_index`, never `mem`/direct-`docs`). Runs BEFORE migrateOwnerKeyedMem
+   * so the re-key then finds the vectors in their new home. Idempotent (a re-run finds nothing to move) and a
+   * no-op on a fresh db. An already-collided legacy row (id == file path) resolves toward the mem side; the
+   * now-vectorless file re-embeds on the next embeddings-on index() (the backfill, no longer maskable).
+   * @returns {void}
+   */
+  migrateMemEmbeddings() {
+    const rows = /** @type {{ path: string, dim: number, vec: Buffer }[]} */ (
+      this.db
+        .prepare(
+          "SELECT path, dim, vec FROM file_embeddings WHERE path IN (SELECT path FROM mem) " +
+            "OR path IN (SELECT path FROM docs WHERE source = 'direct')"
+        )
+        .all()
+    );
+    if (!rows.length) return;
+    const ins = this.db.prepare(
+      "INSERT INTO mem_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
+    );
+    const del = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+    const tx = this.db.transaction(() => {
+      for (const r of rows) (ins.run(r), del.run(r.path));
+    });
+    tx();
   }
 
   /**
@@ -360,12 +398,11 @@ export class Store {
       this.db.prepare("SELECT path, owner FROM mem_scope WHERE owner IS NOT NULL AND instr(path, char(31)) = 0").all()
     );
     if (!legacy.length) return;
-    // mem/mem_text/mem_meta/mem_scope hold ONLY fact/episode rows, so a path match is unambiguous.
-    // file_embeddings + recall_log are SHARED with code/doc rows: a fact id that coincidentally equals a
-    // file path / doc id must not drag the wrong row along. file_embeddings has a single PK row per path
-    // (a fact id == file path would already have collided pre-W4, so it can't happen), but recall_log is
-    // append-only and CAN hold same-string rows of another kind → scope its re-key to the mem kinds.
-    const memTables = ["mem", "mem_text", "mem_meta", "file_embeddings", "mem_scope"]; // mem_scope last (we iterate it)
+    // mem/mem_text/mem_meta/mem_scope/mem_embeddings hold ONLY written-memory rows, so a path match is
+    // unambiguous. recall_log is SHARED with code/doc rows: a fact id that coincidentally equals a file
+    // path / doc id must not drag the wrong row along, so its re-key is scoped to the mem kinds. (mem
+    // vectors now live in their OWN mem_embeddings table — the former file_embeddings sharing is gone.)
+    const memTables = ["mem", "mem_text", "mem_meta", "mem_embeddings", "mem_scope"]; // mem_scope last (we iterate it)
     const tx = this.db.transaction(() => {
       for (const { path, owner } of legacy) {
         const newKey = memKey(owner, path);
@@ -387,15 +424,25 @@ export class Store {
    * subquery scopes the delete to `file_index` keys — written rows are never in `file_index`.
    */
   clearIndexed() {
-    const tx = this.db.transaction(() => {
-      this.db.exec("DELETE FROM file_embeddings WHERE path IN (SELECT path FROM file_index)"); // before file_index is cleared
-      this.db.exec("DELETE FROM docs WHERE source = 'file'");
-      this.db.exec("DELETE FROM file_index");
-      this.db.exec("DELETE FROM nodes");
-      this.db.exec("DELETE FROM edges");
-      this.db.exec("DELETE FROM git_sig");
-    });
+    const tx = this.db.transaction(() => this._clearIndexedRows());
     tx();
+  }
+
+  /**
+   * The destructive file-row clear WITHOUT its own transaction, so it can run INSIDE another one. A
+   * force/self-heal rebuild folds this into {@link applyChanges}'s transaction (`clearFile: true`) so the
+   * index is cleared and re-populated atomically — a concurrent reader (e.g. an MCP warm-index firing in
+   * the background) sees the old complete index or the new one, never the empty window between them. File
+   * rows only: written memory (`mem*`, direct `docs`, `mem_embeddings`) is never re-derivable and survives.
+   * @returns {void}
+   */
+  _clearIndexedRows() {
+    this.db.exec("DELETE FROM file_embeddings WHERE path IN (SELECT path FROM file_index)"); // before file_index is cleared
+    this.db.exec("DELETE FROM docs WHERE source = 'file'");
+    this.db.exec("DELETE FROM file_index");
+    this.db.exec("DELETE FROM nodes");
+    this.db.exec("DELETE FROM edges");
+    this.db.exec("DELETE FROM git_sig");
   }
 
   /** Drop and recreate everything (the ≤0.1.0 self-heal rebuild — such a db predates the write path, so nothing unrecoverable exists). */
@@ -406,6 +453,7 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS edges");
     this.db.exec("DROP TABLE IF EXISTS git_sig");
     this.db.exec("DROP TABLE IF EXISTS file_embeddings");
+    this.db.exec("DROP TABLE IF EXISTS mem_embeddings");
     this.db.exec("DROP TABLE IF EXISTS recall_log");
     this.db.exec("DROP TABLE IF EXISTS mem");
     this.db.exec("DROP TABLE IF EXISTS mem_text");
@@ -438,8 +486,12 @@ export class Store {
    * @param {number} [stamp=0]  index-format stamp ({@link indexStamp}) written on every inserted node,
    *   so a later pass can tell which chunks a DIFFERENT-version writer produced. 0 = the reserved
    *   "rebuild me" sentinel; a real pass always passes a live stamp.
+   * @param {boolean} [clearFile=false]  clear ALL prior file rows as the first step of THIS transaction
+   *   (the force/self-heal rebuild). Folding the clear in here — rather than a separate `clearIndexed()`
+   *   before the seconds-long chunk loop — makes the rebuild atomic: a concurrent reader never sees the
+   *   empty index between the clear and the re-population (the warm-index-vs-recall race).
    */
-  applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false, stamp = 0) {
+  applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false, stamp = 0, clearFile = false) {
     const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ?");
     const delIdx = this.db.prepare("DELETE FROM file_index WHERE path = ?");
     // indexed files are always source='file' with no provenance/occurred_at (those are write-path
@@ -481,6 +533,10 @@ export class Store {
     );
 
     const tx = this.db.transaction(() => {
+      // force/self-heal rebuild: clear every prior file row FIRST, atomically with the re-insert below,
+      // so a concurrent reader never observes the empty index (the per-path deletes in the upsert loop
+      // then re-clear each touched path, harmlessly). `upserts` already holds every current file here.
+      if (clearFile) this._clearIndexedRows();
       for (const p of deletes) {
         delDoc.run(p);
         delIdx.run(p);
@@ -612,10 +668,10 @@ export class Store {
       }
       if (m.embedding) {
         this.db
-          .prepare("INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
+          .prepare("INSERT INTO mem_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec")
           .run({ path: key, dim: m.embedding.length, vec: Buffer.from(m.embedding.buffer, m.embedding.byteOffset, m.embedding.byteLength) });
       } else {
-        this.db.prepare("DELETE FROM file_embeddings WHERE path = ?").run(key);
+        this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?").run(key);
       }
     });
     tx();
@@ -800,7 +856,7 @@ export class Store {
       const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
       const delDocScope = this.db.prepare("DELETE FROM doc_scope WHERE path = ?"); // R2/R5 sidecar
       const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?"); // R3 bytes (forget reclaims them)
-      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delDocScope.run(p), delBlob.run(p), delEmb.run(p), delLog.run(p));
       return removed;
@@ -867,7 +923,7 @@ export class Store {
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
-      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       let removed = 0;
       for (const p of paths) ((removed += del.run(p).changes), delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
@@ -898,7 +954,7 @@ export class Store {
       const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?");
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
-      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       for (const p of dead) (delDoc.run(p), delDocScope.run(p), delBlob.run(p), delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
       return dead.length;
@@ -1080,7 +1136,7 @@ export class Store {
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
-      const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
+      const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       for (const p of paths) (delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
       return removed;
@@ -1414,19 +1470,24 @@ export class Store {
   }
 
   /**
-   * Write (or replace) one file's embedding vector, WITHOUT re-chunking — the bytes and boundaries are
-   * already current, only the vector was missing. Used by the embeddings backfill; the normal path
-   * writes vectors through {@link applyChanges}.
-   * @param {string} path
-   * @param {Float32Array} vec
+   * Write (or replace) file embedding vectors, WITHOUT re-chunking — the bytes and boundaries are already
+   * current, only the vector was missing. Used by the embeddings backfill; the normal path writes vectors
+   * through {@link applyChanges}. All rows land in ONE transaction (the backfill would otherwise issue N
+   * autocommit writes). File vectors only → `file_embeddings`.
+   * @param {[string, Float32Array][]} pairs  (path, vec) tuples
+   * @returns {void}
    */
-  putEmbedding(path, vec) {
-    this.db
-      .prepare(
-        "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
-          "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
-      )
-      .run({ path, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
+  putEmbeddings(pairs) {
+    if (!pairs.length) return;
+    const up = this.db.prepare(
+      "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
+        "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
+    );
+    const tx = this.db.transaction(() => {
+      for (const [path, vec] of pairs)
+        up.run({ path, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
+    });
+    tx();
   }
 
   /**
@@ -1813,18 +1874,32 @@ export class Store {
    * Stored embedding vectors for the given paths (slice 6). Reads only the requested rows — at
    * search time that's the BM25-gated pool, never the whole corpus — so cosine stays O(pool).
    * Reconstructs each BLOB into its own Float32Array (copied, so it never aliases SQLite's buffer).
+   *
+   * **Kind-scoped since the vector-table split:** file vectors live in `file_embeddings`, written-memory
+   * vectors in `mem_embeddings`. A single `_rankKind` call ranks ONE kind, so its candidate paths are all
+   * one kind. `code` reads only file vectors, `fact`/`episode` only mem vectors — so a global-tier mem key
+   * that equals a file path can no longer return the wrong kind's vector. `doc` spans both (file `.md` +
+   * written docs). A missing `kind` reads both (legacy/introspection callers).
    * @param {string[]} paths
+   * @param {string} [kind]  the recall kind these paths belong to — selects the vector table(s)
    * @returns {Map<string, Float32Array>}
    */
-  getEmbeddings(paths) {
+  getEmbeddings(paths, kind) {
     /** @type {Map<string, Float32Array>} */
     const m = new Map();
     if (!paths.length) return m;
+    const tables =
+      kind == null ? ["file_embeddings", "mem_embeddings"]
+      : MEM_KINDS.has(kind) ? ["mem_embeddings"]
+      : kind === "doc" ? ["file_embeddings", "mem_embeddings"]
+      : ["file_embeddings"];
     const ph = paths.map(() => "?").join(",");
-    const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
-      this.db.prepare(`SELECT path, vec FROM file_embeddings WHERE path IN (${ph})`).all(...paths)
-    );
-    for (const r of rows) m.set(r.path, blobToVec(r.vec));
+    for (const t of tables) {
+      const rows = /** @type {{ path: string, vec: Buffer }[]} */ (
+        this.db.prepare(`SELECT path, vec FROM ${t} WHERE path IN (${ph})`).all(...paths)
+      );
+      for (const r of rows) m.set(r.path, blobToVec(r.vec));
+    }
     return m;
   }
 
@@ -1862,7 +1937,7 @@ export class Store {
     const rows = /** @type {{ path: string, kind: string, format: string, vec: Buffer }[]} */ (
       this.db
         .prepare(
-          "SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN file_embeddings e ON e.path = m.path " +
+          "SELECT m.path, m.kind, m.format, e.vec FROM mem m JOIN mem_embeddings e ON e.path = m.path " +
             "LEFT JOIN mem_scope s ON s.path = m.path WHERE m.kind = :kind " +
             "AND (:memSeeAll = 1 OR s.owner IS NULL OR (:memOwner IS NOT NULL AND s.owner = :memOwner)) " +
             "AND (:sid IS NULL OR s.session IS NULL OR s.session = :sid)"

@@ -195,8 +195,14 @@ async function handle(req) {
     // Fire-and-forget: the handshake response above never waits on this — a cold first build is one-time
     // per repo (warm boots are ~ms). Opt out with LITECTX_NO_WARM_INDEX to manage indexing yourself.
     if (!warmed && !process.env.LITECTX_NO_WARM_INDEX) {
-      warmed = true;
-      ctx.index().catch((e) => console.error("litectx-mcp warm-index:", e instanceof Error ? e.message : e));
+      warmed = true; // set before firing so a concurrent re-initialize can't start a second pass
+      ctx.index().catch((e) => {
+        // a warm-index that REJECTS must stay retryable: leave `warmed` true and a client reconnect
+        // (fresh `initialize`) would never rebuild, recalling against the empty/stale index this exists
+        // to prevent. Reset it so exactly one retry can fire next handshake.
+        warmed = false;
+        console.error("litectx-mcp warm-index:", e instanceof Error ? e.message : e);
+      });
     }
     return;
   }
