@@ -16,6 +16,65 @@ import { langForExt } from "./langdef.js";
 import { analyzeBody, callSitesOf, reExportsOf, importBindingsOf } from "./chunker.js";
 import { loadTsPaths, specResolvesTo } from "./tsalias.js";
 
+/**
+ * Thrown when `impact()` cannot run its caller sweep because `ripgrep` (`rg`) is not on PATH.
+ *
+ * This is deliberately loud rather than a `0-caller` result. The whole view is built on the §7.2
+ * asymmetry — over-count safe, under-count dangerous — and a missing `rg` produces the *maximal*
+ * under-count: `mentions` and `confirmed` both collapse to 0, `refCount` to 0, `risk` to "low". A
+ * silent empty sweep is therefore indistinguishable from a genuine isolation, i.e. the one dangerous
+ * error the view exists to prevent. Like {@link import("./index.js").StalePointerError}, we refuse
+ * rather than return a confident-looking wrong answer. Fully recoverable: install ripgrep (`rg`).
+ */
+export class RipgrepMissingError extends Error {
+  constructor() {
+    super(
+      "impact() needs ripgrep (rg) on PATH: the caller sweep can't run, so a 0-caller result would " +
+        "be a false isolation — the one dangerous error (§7.2). Install ripgrep (rg) and retry.",
+    );
+    this.name = "RipgrepMissingError";
+    /** @type {string} */
+    this.code = "RIPGREP_MISSING";
+  }
+}
+
+/**
+ * Did `rg` fail to SPAWN (never ran), as opposed to running and exiting/crashing? A spawn failure —
+ * rg missing (`ENOENT`), not executable (`EACCES`), a broken PATH component (`ENOTDIR`), or blocked
+ * by a sandbox (`EPERM`) — is the §7.2-dangerous silent zero and must throw. Node marks EVERY such
+ * failure with a `spawnSync` syscall and NO exit signal (the process was never created), which is
+ * the robust signal — not an errno whitelist, which misses the rarer never-ran codes. Deliberately
+ * excluded (rg DID run → stay a valid-empty / salvage result, never a false "rg is missing"):
+ * exit 1 "no matches" and exit 2 crash carry no syscall; an output-overflow kill (`ENOBUFS`) carries
+ * a `SIGTERM` signal and partial stdout. (Error shapes verified against `execFileSync`, 2026-07-31.)
+ * @param {any} e
+ * @returns {boolean}
+ */
+export function rgSpawnFailed(e) {
+  return !!e && typeof e.syscall === "string" && e.syscall.startsWith("spawnSync") && e.signal == null;
+}
+
+/**
+ * Run `rg` and return its stdout. Both impact sweeps route through here so the ENOENT signal cannot
+ * be true of one call site and false of the other: a spawn failure throws {@link RipgrepMissingError}
+ * (never a silent `[]`), while rg's own exit 1 ("no matches") and a crash-with-partial-stdout stay
+ * valid-empty — the throw fires ONLY when rg never ran.
+ * @param {string[]} args
+ * @param {number} maxBuffer
+ * @returns {string} rg's stdout (possibly empty)
+ */
+function runRg(args, maxBuffer) {
+  try {
+    return execFileSync("rg", args, { encoding: "utf8", maxBuffer });
+  } catch (/** @type {any} */ e) {
+    if (rgSpawnFailed(e)) throw new RipgrepMissingError();
+    // rg exits 1 on "no matches" (a valid empty) and may leave partial JSON on other non-zero exits;
+    // use that stdout if present, else treat as an empty result.
+    if (e && typeof e.stdout === "string" && e.stdout) return e.stdout;
+    return "";
+  }
+}
+
 // callee names that are ubiquitous noise even when they happen to collide with an indexed symbol —
 // kept SMALL because callees are already filtered to intra-repo definitions (§7.2 over-count safe).
 const SKIP_CALLEES = new Set(["constructor", "toString", "valueOf", "__init__", "__call__", "self", "super"]);
@@ -66,6 +125,8 @@ export function riskBucket(n) {
  * @param {string[]} include indexed file extensions (e.g. [".py", ".js"])
  * @param {string} symbol
  * @returns {Promise<Impact|null>}
+ * @throws {RipgrepMissingError} when `rg` is not on PATH — the caller sweep can't run, and a silent
+ *   0-caller result would be a §7.2 false isolation (the one dangerous error), so we refuse.
  */
 export async function computeImpact(store, root, include, symbol) {
   const defs = store.symbolDefs(symbol);
@@ -177,18 +238,7 @@ export async function computeImpact(store, root, include, symbol) {
  */
 function rgWordMatches(name, root, include) {
   const globs = include.flatMap((e) => ["-g", `*${e}`]);
-  let out = "";
-  try {
-    out = execFileSync("rg", ["--json", "-F", "-w", ...globs, "--", name, root], {
-      encoding: "utf8",
-      maxBuffer: 128 * 1024 * 1024,
-    });
-  } catch (/** @type {any} */ e) {
-    // rg exits 1 on "no matches" — a valid empty result, not a failure. stdout may still carry
-    // partial JSON on other non-zero exits; use it if present, else treat as empty.
-    if (e && typeof e.stdout === "string" && e.stdout) out = e.stdout;
-    else return [];
-  }
+  const out = runRg(["--json", "-F", "-w", ...globs, "--", name, root], 128 * 1024 * 1024);
   /** @type {{ rel: string, abs: string, line: number, count: number }[]} */
   const res = [];
   for (const line of out.split("\n")) {
@@ -307,13 +357,7 @@ function fmtOf(relPath) {
  */
 function rgListFiles(text, root, include) {
   const globs = include.flatMap((e) => ["-g", `*${e}`]);
-  let out = "";
-  try {
-    out = execFileSync("rg", ["-l", "-F", ...globs, "--", text, root], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  } catch (/** @type {any} */ e) {
-    if (e && typeof e.stdout === "string" && e.stdout) out = e.stdout;
-    else return [];
-  }
+  const out = runRg(["-l", "-F", ...globs, "--", text, root], 64 * 1024 * 1024);
   return out.split("\n").filter(Boolean).map((p) => relative(root, p));
 }
 

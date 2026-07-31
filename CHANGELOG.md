@@ -4,6 +4,22 @@ All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.32.0] — 2026-07-31
+
+### Fixed
+- **A missing `ripgrep` no longer reads as "0 callers, risk low".** `impact()`'s caller sweep shells
+  out to `rg`; when `rg` was absent from `PATH`, the spawn failure was swallowed into the same empty
+  result as a genuine "no matches", so a symbol with real callers reported **`refCount 0 / risk low`** —
+  the §7.2 false isolation the view's own contract names as the *one dangerous error*, documented but
+  never detected. `impact()` now **throws `RipgrepMissingError`** (`.code = "RIPGREP_MISSING"`, a new
+  export) rather than under-count silently. Both sweeps route through one guard that distinguishes *rg
+  never ran* (a spawn failure — missing / not-executable / broken-`PATH` / sandbox-blocked, keyed off
+  Node's `spawnSync` error marker, not a narrow errno list) from rg **running** and exiting 1 ("no
+  matches"), crashing, or being killed for output overflow — those stay valid-empty/salvage results, so
+  a genuinely-isolated symbol still returns its hedged low-risk verdict, byte-identically. The CLI prints
+  the recovery message; the MCP tool returns it as an `isError` result. `recall()`/`index()`/`get()`
+  never use `rg` and are unaffected. (Resolves bareloop upstream ask **LC-5**.)
+
 ## [0.31.1] — 2026-07-28
 
 ### Fixed

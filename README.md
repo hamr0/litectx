@@ -109,7 +109,7 @@ Every claim below is a committed benchmark; the core ones run in CI on every pus
 
 ## Under the hood
 
-If you want the mechanism: storage is `better-sqlite3` + FTS5 in a single file; code structure comes from tree-sitter; `impact`'s caller sweep shells out to `ripgrep` (no LSP — so `impact` needs `rg` on `PATH`, or a symbol reads as zero callers); ranking and decay use ACT-R-style activation. Semantic recall is an optional local embeddings model (ONNX, no API, ~23 MB downloaded once) — without it, recall falls back to keyword search.
+If you want the mechanism: storage is `better-sqlite3` + FTS5 in a single file; code structure comes from tree-sitter; `impact`'s caller sweep shells out to `ripgrep` (no LSP — so `impact` needs `rg` on `PATH`, and throws `RipgrepMissingError` rather than let a symbol read as zero callers when it's absent); ranking and decay use ACT-R-style activation. Semantic recall is an optional local embeddings model (ONNX, no API, ~23 MB downloaded once) — without it, recall falls back to keyword search.
 
 ## Where litectx fits
 
