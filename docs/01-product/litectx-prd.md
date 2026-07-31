@@ -992,6 +992,15 @@ Grounding: `MEM_INDEXING.md`.
 > alias → consumers that actually import that alias *from the barrel* (path-alias-scoped, so an
 > unrelated same-named symbol is never miscredited) → confirmed call sites, tagged with the alias.
 > Gated by a committed TS fixture (`poc/fixtures/ts-barrel`) + `impact-ts` dataset (§11.3).
+>
+> **Status (v0.32.0, shipped 2026-07-31):** the §7.2 false-isolation from a **missing `rg`** is now
+> *detected*, not just documented. A spawn failure (rg absent / not-executable / broken `PATH`) was
+> swallowed into the same empty result as a genuine "no matches", so `impact()` read `refCount 0 /
+> risk low` for a symbol with real callers — the maximal under-count wearing the normal hedged coat.
+> `impact()` now **throws `RipgrepMissingError`** (`.code = "RIPGREP_MISSING"`, exported); both sweeps
+> route through one guard that keys off Node's `spawnSync` error marker to separate *rg never ran*
+> from rg running and exiting 1 / crashing / overflow-killed (which stay valid-empty). Resolves
+> bareloop upstream ask **LC-5**.
 
 The decision is final: **there is no language-server tier.** The one and only edge resolver =
 **tree-sitter queries + `ripgrep -w`** (word-boundary). Zero external binaries; ~2ms/symbol;

@@ -547,6 +547,10 @@ The **impact** view (§7): *if I change this symbol, what's the blast radius and
 **Computed on demand, not persisted** — callees by a tree-sitter walk of the symbol's body,
 callers by an `rg -w` sweep confirmed with tree-sitter. No LSP, ever. Returns `null` when the
 symbol isn't defined in the index (impact answers for *your* symbols). Async (it shells `rg`).
+**Throws `RipgrepMissingError` (`.code = "RIPGREP_MISSING"`, exported) when `rg` is not on `PATH`** —
+the caller sweep can't run, and a silent 0-caller result would be a §7.2 false isolation (the one
+dangerous error), so `impact()` refuses rather than under-count. `recall()`/`index()`/`get()` don't
+use `rg` and are unaffected.
 
 ```ts
 Impact = {
@@ -1176,6 +1180,8 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
   (the `{ type: "memory.write", … }` action shape); `WriteAudit` → standalone JSONL audit sink (ships no
   secret patterns; takes a host `redact`); `WriteDeniedError` → thrown when a wired `writeGate` denies a
   write (carries `.id` + `.decision`). See the `writeGate` config + `remember` write-gate note above (§10.1).
+- `RipgrepMissingError` (`.code = "RIPGREP_MISSING"`) → thrown by `impact()` when `rg` is not on `PATH`
+  (the caller sweep can't run; refusing beats a §7.2 false 0-caller reading). See the `impact()` note above.
 - `observe(ctx)` → wrap a `LiteCtx` so every CE verb call is recorded into `ctx.trace` (the **contextgraph**
   pipeline view); `ctx.tap(verb, fn)` folds in free-function verbs; or just set `trace: true` on the config.
   `ContextGraph` → the recorder (`.json()` + agent-readable `.mermaid()`); `PRIMITIVES`/`VERBS_BY_PRIMITIVE`/
@@ -1404,11 +1410,12 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   `ALTER`, preserving data. You never need to delete `.litectx/` by hand.
 - **`close()` matters for file DBs.** The store uses WAL; close to flush cleanly.
 - **`impact()` requires `ripgrep` (`rg`) on `PATH`.** The caller sweep shells out to
-  `rg -w`; it is **not** bundled. If `rg` is missing the sweep returns nothing and
-  `impact()` reports **0 callers** — i.e. a symbol can read as isolated purely because
-  the tool is absent (a §7.2 false-isolation, the one dangerous error). Install
-  ripgrep on any host (CI, container, dev box) that calls `impact()`. `recall()` and
-  `index()` do **not** need it.
+  `rg -w`; it is **not** bundled. If `rg` is missing, `impact()` **throws
+  `RipgrepMissingError`** (`.code = "RIPGREP_MISSING"`, exported) rather than let the
+  empty sweep read as **0 callers** — that silent under-count is a §7.2 false-isolation,
+  the one dangerous error, so it refuses loudly instead. Install ripgrep on any host (CI,
+  container, dev box) that calls `impact()`; catch the error by `.code` if you'd rather
+  degrade than fail. `recall()` and `index()` do **not** need it.
 
 ## Constraints
 
