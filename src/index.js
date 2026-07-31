@@ -863,8 +863,13 @@ export class LiteCtx {
    * under-count dangerous): connectivity may be overstated, but "isolated / low-risk" only ever
    * ships **hedged**. Returns `null` when the symbol isn't defined in the index.
    *
+   * Requires `rg` (ripgrep) on PATH: without it the caller sweep can't run and a silent 0-caller
+   * result would be a §7.2 false isolation, so this **throws** {@link RipgrepMissingError} rather
+   * than under-count silently. (`recall()`/`index()`/`get()` don't use `rg` and are unaffected.)
+   *
    * @param {string} symbol  the symbol name to assess
    * @returns {Promise<import("./impact.js").Impact | null>}
+   * @throws {RipgrepMissingError} when ripgrep (`rg`) is not on PATH
    */
   async impact(symbol) {
     return computeImpact(this.store, this.root, this.include, symbol);
@@ -1562,6 +1567,7 @@ export class ScopedView {
   }
 }
 
+export { RipgrepMissingError } from "./impact.js";
 export { Store } from "./store.js";
 export { splitIdent, keywords, ftsMatch } from "./tokenize.js";
 export { Embedder, cosine } from "./embedder.js";

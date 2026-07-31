@@ -9,7 +9,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiteCtx } from "../src/index.js";
-import { riskBucket } from "../src/impact.js";
+import { riskBucket, rgSpawnFailed, RipgrepMissingError } from "../src/impact.js";
 
 // A small non-git fixture (indexed via the filesystem-walk fallback). `helper` is called 3× from
 // app.js; `caller1/2` are exported leaves; `caller3` is a private leaf; `ghost` is only named in a
@@ -189,4 +189,65 @@ test("a bare `@decorator` is a CONFIRMED caller, not just a mention", async () =
   assert.equal(r.confirmed, 2, "both @handle_errors decorations are confirmed call sites");
   assert.ok(r.callers.some((c) => c.path === "deco.py"), "the decorating file is a caller");
   assert.equal(r.risk, "low", "2 refs → low, but never isolated");
+});
+
+// ---- LC-5: a missing `rg` must NOT read as "0 callers, risk low" (§7.2 false isolation) ----
+
+// Run `fn` with `rg` unreachable: PATH points at an empty dir, so `execFileSync("rg", …)` → ENOENT.
+// Restores PATH unconditionally. (index() ran already in withCtx and needs no rg; only impact does.)
+async function withoutRg(fn) {
+  const empty = mkdtempSync(join(tmpdir(), "litectx-norg-"));
+  const savedPath = process.env.PATH;
+  process.env.PATH = empty;
+  try {
+    await fn();
+  } finally {
+    process.env.PATH = savedPath;
+    rmSync(empty, { recursive: true, force: true });
+  }
+}
+
+test("impact() REFUSES loudly when rg is absent — never a silent false isolation (LC-5, §7.2)", async () => {
+  await withCtx(async (ctx) => {
+    // `helper` has 3 real callers. With rg gone the sweep can find nothing; the dangerous outcome is
+    // to return that as refCount 0 / risk low (indistinguishable from genuine isolation). It must
+    // throw instead — a machine-distinguishable signal (`.code`) the readout's consumer can catch.
+    await withoutRg(async () => {
+      await assert.rejects(
+        () => ctx.impact("helper"),
+        (/** @type {any} */ e) =>
+          e instanceof RipgrepMissingError &&
+          e.code === "RIPGREP_MISSING" &&
+          /ripgrep|\brg\b/.test(e.message),
+        "a symbol with real callers must not read as isolated just because rg is missing"
+      );
+    });
+  });
+});
+
+test("with rg present, genuine 'no matches' stays a valid empty — no new failure mode (LC-5 crit 2)", async () => {
+  await withCtx(async (ctx) => {
+    // `lonely` is genuinely unreferenced. rg runs and exits 1 (no matches) — that path must remain
+    // byte-identical to today: a returned, hedged, low-risk verdict, NOT a throw.
+    const r = await ctx.impact("lonely");
+    assert.ok(r, "isolated symbol still returns (rg ran, found nothing)");
+    assert.equal(r.refCount, 0);
+    assert.equal(r.risk, "low");
+    assert.ok(r.hedges.some((h) => /review candidate|external consumers/.test(h)), "still hedged, not a throw");
+  });
+});
+
+test("rgSpawnFailed fires ONLY when rg never ran — not exit 1, a crash, or an output overflow (LC-5 crit 4)", () => {
+  // The gate the throw hangs on. A genuine spawn failure carries a `spawnSync` syscall and no exit
+  // signal (the process was never created); rg RUNNING then exiting/crashing/overflowing does not.
+  // Both impact sweeps route through this one predicate, so the two call sites can't diverge. Error
+  // shapes are the real ones execFileSync produces (verified 2026-07-31), not invented.
+  assert.equal(rgSpawnFailed({ syscall: "spawnSync rg", code: "ENOENT", signal: null }), true, "missing binary → never ran");
+  assert.equal(rgSpawnFailed({ syscall: "spawnSync rg", code: "EACCES", signal: null }), true, "not executable → never ran");
+  assert.equal(rgSpawnFailed({ syscall: "spawnSync rg", code: "ENOTDIR", signal: null }), true, "broken PATH component → never ran (an errno whitelist would miss this)");
+  assert.equal(rgSpawnFailed({ status: 1 }), false, "exit 1 (no matches) → ran, a valid empty");
+  assert.equal(rgSpawnFailed({ status: 2, stdout: "partial" }), false, "crash with stdout → salvage, not a throw");
+  assert.equal(rgSpawnFailed({ syscall: "spawnSync sh", code: "ENOBUFS", signal: "SIGTERM", stdout: "huge" }), false, "output overflow → rg RAN; salvage the (large) count, never a false 'rg missing'");
+  assert.equal(rgSpawnFailed({ signal: "SIGKILL" }), false, "ran then killed by signal → not a spawn failure");
+  assert.equal(rgSpawnFailed(undefined), false, "no error object → not a spawn failure");
 });
