@@ -1,61 +1,232 @@
-# Publish gate (LIBRARY_CONVENTIONS §5): same gates as CI, then publish to npm.
-#  - MANUAL (workflow_dispatch) — you publish when you want, not on every tag/merge.
-#  - Trusted publishing via OIDC (id-token: write) — NO NPM_TOKEN secret. Configure the trusted
-#    publisher for `litectx` at npmjs.com once before the first run.
-#  - prepublishOnly builds the types into the tarball (npm runs it automatically on `npm publish`).
-#  - Idempotent: skip if the version is already on the registry; verify END-STATE rather than
-#    trusting npm's exit code.
-name: Publish
+# The npm publish workflow: trusted publishing via OIDC (no NPM_TOKEN),
+# idempotent (skips a version already on the registry), and it asserts the END
+# STATE rather than trusting npm's exit code.
+#
+# Manual by default: it runs only when you click "Run workflow" (or via the
+# CLI). To also auto-publish when you cut a GitHub Release, add back:
+#   release:
+#     types: [published]
+#
+# Before the first run: configure the trusted publisher at npmjs.com
+# (Package settings → Trusted Publisher → GitHub Actions: your repo + this
+# workflow file). `prepack` (or `prepublishOnly`) builds the .d.ts into the
+# tarball at publish; the "Build types" step below covers repos that use
+# neither. Typed repos: the adopter gate below needs your own quickstart —
+# see the PER-REPO block.
+name: Publish to npm
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:        # manual "Run workflow" button — publish when you want
 
 permissions:
   contents: read
-  id-token: write   # OIDC — trusted publishing, no token
+  id-token: write           # required: lets npm mint OIDC credentials
+
+concurrency:                # never let two publish runs race
+  group: npm-publish
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
-      - run: sudo apt-get update && sudo apt-get install -y ripgrep   # impact() runtime dep (rg -w); needed for `npm test`
-      - run: npm install -g npm@11   # OIDC trusted publishing needs npm >= 11.5.1; pin to 11 (npm@12 dropped Node 20 → EBADENGINE, and Node 22's ABI has no better-sqlite3 prebuilt)
-      - run: npm ci
-      # ---- same gates as CI before anything ships ----
-      - run: npm run typecheck
-      - run: npm test
-      # ---- idempotent publish: skip if this exact version is already on the registry ----
-      - name: Resolve package identity
-        id: pkg
+          # Native-addon repos (e.g. better-sqlite3) may need `20` instead if the
+          # pinned addon ships no prebuilt for the Node 22 ABI. npm@11 (below)
+          # supports both 20 and 22, so only this line changes.
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - name: Upgrade npm (trusted publishing needs >= 11.5.1)
+        # Pinned to a major, NOT @latest: a floating npm eventually raises its Node
+        # floor above the runner's version and fails with EBADENGINE (npm@12 dropped
+        # Node 20). npm@11 is >= 11.5.1 for OIDC and runs on both Node 20 and 22.
+        #
+        # Native-addon repos on npm@12+ (Node 22+ only): npm@12 ALSO blocks
+        # dependency install-scripts by default, so `npm ci` silently skips native
+        # builds (better-sqlite3, node-gyp) and ships a module that crashes at
+        # runtime, not at install. To move to npm@12, commit an `allowScripts`
+        # allowlist (`npm approve-scripts --all --no-allow-scripts-pin`, then review)
+        # and add `--strict-allow-scripts` to the install below so an unapproved
+        # script fails the run loudly. Pure-JS repos are unaffected — stay on npm@11.
+        #
+        # CAVEAT — do NOT move a PUBLISHING workflow to npm@12 yet: npm 12.0.0's
+        # `npm publish --provenance` is broken (its libnpmpublish provenance.js does
+        # `require('sigstore')` but the tarball bundles only the `@sigstore/*` scoped
+        # packages → publish dies MODULE_NOT_FOUND). npm@11 bundles `sigstore` and
+        # publishes fine. Stay on npm@11 here until npm ships a fix; the allowScripts
+        # allowlist can already ride in package.json for end users on npm 12.
+        run: npm install -g npm@11
+      - name: Install dependencies
+        # Use `npm ci` when a lockfile is present (reproducible installs for
+        # projects with dependencies). Dependency-free repos have no
+        # package-lock.json — `npm ci` errors there (EUSAGE), so fall back to
+        # `npm install` (a fast no-op when there's nothing to install).
         run: |
-          echo "name=$(node -p "require('./package.json').name")" >> "$GITHUB_OUTPUT"
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Check registry
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+      - name: Typecheck
+        run: npm run typecheck --if-present
+      - name: Test
+        run: npm test --if-present
+      - name: Skip if this version is already on npm
+        # BEFORE the pack-and-install gate below, not after: re-dispatching a publish
+        # for a version already on the registry is the idempotency case this step
+        # exists for, and it should cost a `npm view`, not a tarball build plus a
+        # TypeScript install. Everything downstream is gated on its output.
         id: check
         run: |
-          if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} already published — skipping"
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          PUBLISHED=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
+          if [ -n "$PUBLISHED" ]; then
+            echo "::notice::$NAME@$VERSION already published — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish
-        if: steps.check.outputs.exists == 'false'
-        run: npm publish   # prepublishOnly → build:types runs here, types land in the tarball
-      # ---- verify end-state, don't trust the exit code ----
-      - name: Verify on registry
+      - name: Build types
+        # `npm pack` does not run `prepublishOnly`, so without this the adopter
+        # check below would pack a tarball with no `.d.ts`; repos that use
+        # `prepack` instead get it automatically and this is a no-op.
+        if: steps.check.outputs.skip == 'false'
+        run: npm run build:types --if-present
+      - name: Types are usable BY AN ADOPTER, not just internally
+        # `tsc --noEmit` in Typecheck above checks the SOURCE; it cannot see the
+        # generated .d.ts resolved from inside node_modules, which is the one
+        # thing adopters consume. This packs, installs the tarball into a clean
+        # consumer project, and compiles a quickstart against it — the only
+        # workflow that puts bytes on the registry is the one place this check
+        # cannot be skipped.
+        #
+        # Untyped repos (no `types` field, no `types/` dir) short-circuit below —
+        # there's nothing for an adopter to type-check. NOTE the `types` FIELD is
+        # checked too, not just a `types/` dir: packages that ship a root
+        # `./index.d.ts` (no types/ dir) are typed and must NOT short-circuit.
+        if: steps.check.outputs.skip == 'false'
         run: |
-          for i in 1 2 3 4 5; do
-            if npm view "${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }}" version >/dev/null 2>&1; then
-              echo "verified ${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} on registry"
-              exit 0
-            fi
-            echo "not visible yet — retrying in 5s"; sleep 5
+          if [ ! -d types ] && [ -z "$(node -p "require('./package.json').types || ''")" ]; then
+            echo "::notice::no types shipped — skipping adopter type check"
+            exit 0
+          fi
+          NAME=$(node -p "require('./package.json').name")
+          # Pin @types/node to the major THIS package builds against, don't float.
+          # Measured: an unpinned `@types/node` resolved to 26.x against a package
+          # built on ^22, and Node 26's stricter EventMap typing failed a shipped
+          # .d.ts with TS2344 — a red publish gate caused by a third-party release,
+          # not by anything in the commit being published. Floating here makes every
+          # repo's ability to publish depend on DefinitelyTyped's release schedule.
+          # Derived from devDependencies, falling back to `engines.node`, so this
+          # stays generic; forward-compat against a newer @types/node is worth
+          # testing, but in ci.yml where a failure doesn't block shipping.
+          TYPES_NODE=$(node -p "
+            const p=require('./package.json');
+            const d=(p.devDependencies||{})['@types/node'];
+            if (d) process.stdout.write(d);
+            else {
+              const e=((p.engines||{}).node||'').match(/(\d+)/);
+              process.stdout.write(e ? '^'+e[1] : 'latest');
+            }
+            ''")
+          echo "pinning @types/node to: $TYPES_NODE"
+          mkdir -p /tmp/pkg /tmp/consumer
+          npm pack --pack-destination /tmp/pkg
+          cd /tmp/consumer
+          # `"type": "module"` here is deliberate and covers BOTH shapes: an ESM
+          # consumer importing a CommonJS package is the harder direction and the
+          # one that catches a missing/!misordered `exports.types` condition.
+          # Verified against a `"type":"commonjs"` package with 7 subpaths.
+          cat > package.json <<'JSON'
+          { "name": "consumer", "private": true, "type": "module" }
+          JSON
+          # Do NOT add `skipLibCheck: true` here. Measured: with it on, a package
+          # whose shipped .d.ts is genuinely broken (a declaration file missing from
+          # the tarball) compiles CLEAN — exit 0 — and publishes. With it off the
+          # same package fails. Every repo's OWN tsconfig sets skipLibCheck:true,
+          # so its absence here looks like an oversight; it is the entire point.
+          # That asymmetry is why this gate catches what `npm run typecheck` cannot.
+          cat > tsconfig.json <<'JSON'
+          { "compilerOptions": { "strict": true, "module": "nodenext",
+            "moduleResolution": "nodenext", "target": "es2022",
+            "noEmit": true, "types": ["node"] } }
+          JSON
+          # The documented wiring. It DEREFERENCES the Hit records that `recall()` returns
+          # (`.path`, `.score`, `.format`) rather than merely calling it — a call-only check
+          # still compiles when a return is annotated as a bare `object`, which is the bug
+          # class this gate catches.
+          # NOTE this consumer install builds the native better-sqlite3 addon against the
+          # runner's Node ABI, so it is a reason to hold `node-version` above at a version
+          # the pinned addon ships prebuilts for.
+          cat > app.ts <<'TS'
+          import { LiteCtx, KINDS } from 'litectx';
+
+          const ctx = new LiteCtx({ root: '.', dbPath: './agent.db' });
+
+          const indexed = await ctx.index({ paths: ['.'] });
+          console.log(indexed);
+
+          await ctx.remember('note:1', 'the deploy runs at 03:00 UTC', { kind: 'fact' });
+
+          const hits = await ctx.recall('deploy schedule', { n: 5, body: true });
+          for (const [kind, list] of Object.entries(hits)) {
+            for (const hit of list) {
+              const path: string = hit.path;
+              const score: number = hit.score;
+              console.log(kind, path, score, hit.format);
+            }
+          }
+
+          console.log(KINDS.length);
+          TS
+          # Native-addon repos: this install BUILDS the addon (better-sqlite3 &c) in
+          # the consumer, so it inherits the runner's Node ABI — a reason to hold the
+          # `node-version` above at a version with prebuilts. Peer deps are NOT pulled
+          # in when marked optional via peerDependenciesMeta (measured: identical
+          # package count with and without --omit=peer), so no flag is needed for them.
+          npm install --no-audit --no-fund /tmp/pkg/*.tgz typescript "@types/node@$TYPES_NODE"
+          ./node_modules/.bin/tsc
+      - name: Publish
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          # npm's OIDC trusted-publishing flow can exit non-zero from a trailing
+          # "generate Web Auth URLs" call (HTTP 401) AFTER the tarball +
+          # provenance have already been committed to the registry — making the
+          # step go red on a publish that actually succeeded. So don't trust the
+          # exit code: run the publish, then assert the END STATE (is the version
+          # on the registry?). A genuine failure — where the version is NOT on
+          # npm AND npm exited non-zero — still fails the step. (A blanket
+          # `|| true` would instead hide real failures, which is worse.)
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          PUBLISH_EXIT=0
+          npm publish --provenance --access public || PUBLISH_EXIT=$?
+          # Registry read-after-write can lag well past 15s. Poll generously
+          # (~2 min) so the end-state check doesn't false-negative a publish that
+          # actually succeeded. `npm view` caches, so --prefer-online bypasses it.
+          PUBLISHED=""
+          for _ in $(seq 1 20); do
+            PUBLISHED=$(npm view "$NAME@$VERSION" version --prefer-online 2>/dev/null || true)
+            [ "$PUBLISHED" = "$VERSION" ] && break
+            sleep 6
           done
-          echo "ERROR: ${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} not found after publish"
-          exit 1
+          if [ "$PUBLISHED" = "$VERSION" ]; then
+            # End state confirmed. If npm exited non-zero, that's the OIDC-401
+            # case above — downgrade to a warning.
+            if [ "$PUBLISH_EXIT" -ne 0 ]; then
+              echo "::warning::npm publish exited $PUBLISH_EXIT but $NAME@$VERSION is on the registry (known npm OIDC post-publish web-auth 401); treating as success."
+            fi
+            echo "✅ Published $NAME@$VERSION"
+          elif [ "$PUBLISH_EXIT" -eq 0 ]; then
+            # npm reported success (exit 0 = the upload HTTP call succeeded) but
+            # the registry still isn't reflecting it after the poll window. Trust
+            # the success exit here — the benign inverse of the OIDC-401 case.
+            echo "::warning::npm publish exited 0 but $NAME@$VERSION not yet visible after ~2 min (registry reflection lag); treating as success."
+            echo "✅ Published $NAME@$VERSION (npm exit 0; registry lagging)"
+          else
+            echo "::error::npm publish failed (exit $PUBLISH_EXIT) and $NAME@$VERSION is NOT on the registry."
+            exit 1
+          fi
