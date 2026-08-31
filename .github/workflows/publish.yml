@@ -71,6 +71,12 @@ jobs:
           fi
       - name: Typecheck
         run: npm run typecheck --if-present
+      - name: Install ripgrep
+        # impact() shells out to ripgrep (`rg -w`) — a RUNTIME dependency, not
+        # bundled — so `npm test` below fails without it. ci.yml installs it too;
+        # this workflow needs its own copy because it runs the same suite before
+        # putting bytes on the registry.
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Test
         run: npm test --if-present
       - name: Skip if this version is already on npm
@@ -187,7 +193,7 @@ jobs:
           # `node-version` above at a version with prebuilts. Peer deps are NOT pulled
           # in when marked optional via peerDependenciesMeta (measured: identical
           # package count with and without --omit=peer), so no flag is needed for them.
-          npm install --no-audit --no-fund /tmp/pkg/*.tgz typescript "@types/node@$TYPES_NODE"
+          npm install --no-audit --no-fund --ignore-scripts /tmp/pkg/*.tgz typescript@5 "@types/node@$TYPES_NODE"
           ./node_modules/.bin/tsc
       - name: Publish
         if: steps.check.outputs.skip == 'false'
