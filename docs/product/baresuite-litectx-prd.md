@@ -13,7 +13,7 @@
 >
 > **Grounded against live source 2026-06-12** (HEAD `9ac64c8`, `litectx@0.8.0`): the litectx facade,
 > `../bareagent/types/index.d.ts`, `../bareguard/src/gate.js`. **Sources of truth (litectx side):**
-> [`litectx-prd.md`](../01-product/litectx-prd.md) Part 2 §10 (the lift), §8/§8.1 (the surface + build
+> [`litectx-prd.md`](litectx-prd.md) Part 2 §10 (the lift), §8/§8.1 (the surface + build
 > order); Part 1 §3 (the API).
 >
 > > **Stable anchors — do not renumber.** §4.1 and §4.4 are cited cross-repo (bareagent
@@ -265,7 +265,7 @@ necessary, trip-wired deferrals (R-S6 data-blocked, RT-2/RT-5). The canonical cr
 > A design round (no code) that (a) killed proactive SELECT on POC + first-principles, (b) ran every CE
 > primitive through one lens — *does it serve the agent on request, or push work it didn't ask for?* —
 > and (c) settled the **Isolate scope model** the §2④ stub was waiting on. Grounded against the two CE
-> docs ([`litectx-prd.md` Appendix CE-T §3.4](../01-product/litectx-prd.md), [`build-studies.md` Part E](build-studies.md)) and
+> docs ([`litectx-prd.md` Appendix CE-T §3.4](litectx-prd.md), [`build-studies.md` Part E](build-studies.md)) and
 > a 3-stream web research pass on the field's leaders (§4.4.8).
 
 ### 4.0 Summary — what this round settled

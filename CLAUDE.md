@@ -21,9 +21,9 @@ anything here disagrees with them, **they win**.
    ESM JS + JSDoc → generated `.d.ts` (no drift), library shape, `<lib>.context.md`,
    the doc set, CI shape (trusted-publishing OIDC, manual publish).
 
-Design rationale lives in **`docs/01-product/litectx-prd.md`** (the single PRD — Part 1 memory
+Design rationale lives in **`docs/product/litectx-prd.md`** (the single PRD — Part 1 memory
 engine, Part 2 CE primitives; merged from the former memory/CE PRDs 2026-06-23). Validation evidence
-in **`docs/01-product/benches-prd.md`**. Session history in **`.claude/stash/`**.
+in **`docs/product/benches-prd.md`**. Session history in **`.claude/stash/`**.
 
 ## Dev Rules (from AGENT_RULES.md — mandatory)
 
@@ -80,6 +80,10 @@ JS test runner: Vitest.
 <!-- AGENT_RULES:START -->
 Consult when building something new or adding a feature — a standards guide, not hot
 context like MEMORY.md above:
-@.claude/remember/AGENT_RULES.md
+.claude/remember/AGENT_RULES.md
 <!-- AGENT_RULES:END -->
 
+<!-- DOCS_INDEX:START -->
+Docs map: `docs/index.md` — every doc in this project, with line counts.
+Search this corpus instead of reading it whole: `/docs-builder search <query words>`
+<!-- DOCS_INDEX:END -->

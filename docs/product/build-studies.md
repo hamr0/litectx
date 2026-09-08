@@ -827,11 +827,11 @@ same discipline the memory POC learned the hard way (borrow-ledger preamble).
 > **What this is.** The **obvious home for recommended flows** — how the platforms that lead
 > CE actually move work through context, with **every behavior mapped onto the four primitives
 > (Write / Select / Compress / Isolate)**. Companion to the mental-model tree
-> (the CE tree — [`litectx-prd.md` Appendix CE-T](../01-product/litectx-prd.md)); both derive from the leaders, not guesses (goal #5).
+> (the CE tree — [`litectx-prd.md` Appendix CE-T](litectx-prd.md)); both derive from the leaders, not guesses (goal #5).
 >
 > **Source flows kept intact** in **Part E** (the transcript). The flows
 > there — the methodology and the turn pipeline — are mirrored and grounded here so they live
-> somewhere obvious. Inline tags (`[Manus]`, `[ADK]`, …) resolve in [`litectx-prd.md` Appendix CE-T §8](../01-product/litectx-prd.md).
+> somewhere obvious. Inline tags (`[Manus]`, `[ADK]`, …) resolve in [`litectx-prd.md` Appendix CE-T §8](litectx-prd.md).
 >
 > **Marks** (same legend as the tree): 🧩 litectx CORE · 🔧 litectx BUILD · ⊘ CEDE (harness).
 

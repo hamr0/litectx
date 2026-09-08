@@ -6,20 +6,20 @@ leaders in CE, not guessed** — every claim traces to a primary source (Anthrop
 Manus, Google ADK, Slack, OpenAI, Drew Breunig, Chroma, HumanLayer, the arXiv papers).
 
 > **Consolidated 2026-06-13, then PRDs merged 2026-06-23.** The former standalone CE docs were folded
-> into two homes: the **mental-model tree** → [`litectx-prd.md` **Appendix CE-T**](../01-product/litectx-prd.md)
+> into two homes: the **mental-model tree** → [`litectx-prd.md` **Appendix CE-T**](../product/litectx-prd.md)
 > (Part 2); the **source transcript, recommended flows, and build studies** →
-> [`02-engineering/build-studies.md` **Parts A–E**](../02-engineering/build-studies.md). The memory and
-> CE PRDs were then merged into the single **[`litectx-prd.md`](../01-product/litectx-prd.md)** (Part 1
+> [`02-engineering/build-studies.md` **Parts A–E**](../product/build-studies.md). The memory and
+> CE PRDs were then merged into the single **[`litectx-prd.md`](../product/litectx-prd.md)** (Part 1
 > memory engine · Part 2 CE primitives). This page is the map into them.
 
 ## The CE doc set (read in this order)
 
 | # | Where it now lives | What it is |
 |---|---|---|
-| 0 | [`build-studies.md` Part E](../02-engineering/build-studies.md) | **Source transcript** — Marina Wyss, *Context Engineering in 29 Minutes*. Kept intact; the raw material everything is grounded against. |
-| 1 | [`litectx-prd.md` Appendix CE-T](../01-product/litectx-prd.md) (Part 2) | **The mental model + build map.** What CE *is*, organized with the four primitives (Write / Select / Compress / Isolate) as the trunk; every leaf marked for litectx. The whole story at a glance. |
-| 2 | [`build-studies.md` Part D](../02-engineering/build-studies.md) | **The recommended flows.** How the leaders flow work (Claude Code · Manus · ADK · Slack · OpenAI) + the turn pipeline + frequent-intentional-compaction, each behavior mapped to the four primitives. |
-| 3 | [`litectx-prd.md` Part 2](../01-product/litectx-prd.md) | **The CE part of the PRD** — requirements derived from the build-map marks (Appendix CE-T), with the bareagent/bareguard hand-off contracts. (Part 1 is the memory engine.) |
+| 0 | [`build-studies.md` Part E](../product/build-studies.md) | **Source transcript** — Marina Wyss, *Context Engineering in 29 Minutes*. Kept intact; the raw material everything is grounded against. |
+| 1 | [`litectx-prd.md` Appendix CE-T](../product/litectx-prd.md) (Part 2) | **The mental model + build map.** What CE *is*, organized with the four primitives (Write / Select / Compress / Isolate) as the trunk; every leaf marked for litectx. The whole story at a glance. |
+| 2 | [`build-studies.md` Part D](../product/build-studies.md) | **The recommended flows.** How the leaders flow work (Claude Code · Manus · ADK · Slack · OpenAI) + the turn pipeline + frequent-intentional-compaction, each behavior mapped to the four primitives. |
+| 3 | [`litectx-prd.md` Part 2](../product/litectx-prd.md) | **The CE part of the PRD** — requirements derived from the build-map marks (Appendix CE-T), with the bareagent/bareguard hand-off contracts. (Part 1 is the memory engine.) |
 
 ## The pipeline
 
@@ -46,7 +46,7 @@ bareagent/bareguard hand-offs.
 ## Related (not part of this set)
 
 **Engineering companions (the requirements' evidence base) — now folded into
-[`../02-engineering/build-studies.md`](../02-engineering/build-studies.md):**
+[`../02-engineering/build-studies.md`](../product/build-studies.md):**
 - **Part A — Aurora Borrow Ledger** — validated signal formulas/constants to borrow from aurora
   (BM25, ACT-R, edges, impact), **plus the SOAR/CE-primitive borrows (§13)**: rank-tiered render,
   retrieval-quality, usefulness-feedback, with carry-vs-correct verdicts at file:line.
@@ -57,12 +57,12 @@ bareagent/bareguard hand-offs.
   contract (the hold-or-beat gate).
 
 **PRDs & contracts:**
-- [`../01-product/litectx-prd.md`](../01-product/litectx-prd.md) — **the single PRD** (Part 1 memory
+- [`../01-product/litectx-prd.md`](../product/litectx-prd.md) — **the single PRD** (Part 1 memory
   engine: recall + impact + graph + ACT-R + indexing; Part 2 CE primitives + the bareagent/bareguard
   hand-off contracts).
-- [`../01-product/benches-prd.md`](../01-product/benches-prd.md) — the validation companion (the
+- [`../01-product/benches-prd.md`](../product/benches-prd.md) — the validation companion (the
   ON-vs-OFF A/B bench suite + findings; the parked factory spike).
-- [`../02-engineering/baresuite-litectx-prd.md`](../02-engineering/baresuite-litectx-prd.md) — the
+- [`../02-engineering/baresuite-litectx-prd.md`](../product/baresuite-litectx-prd.md) — the
   litectx↔baresuite integration contract (what bareagent/bareguard build vs. what stays litectx's).
 - [`../archive/barecontext-prd.md`](../archive/barecontext-prd.md) — the earlier SEED for this axis;
   **superseded** by `litectx-prd.md` (both parts); banner at its top.

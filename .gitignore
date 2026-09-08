@@ -28,3 +28,6 @@ poc/.barebrowse/
 
 # generated example data (regenerate: node poc/graph-substrate-poc.mjs)
 examples/graph-view/graph.json
+
+# docs-builder machine state (regenerated every run; per-clone ledger)
+docs/.docs-builder/

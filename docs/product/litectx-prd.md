@@ -33,9 +33,9 @@
 > | Doc | Role |
 > |---|---|
 > | **`litectx-prd.md`** (this) | the authority — both parts: decisions, scope, build order, module map (Part 1 §2.1) |
-> | `docs/02-engineering/build-studies.md` | calibration + pattern **appendix** — **Part A** aurora borrow ledger (exact constants + aurora `file:line`), **Part B** copy-pattern studies, **Parts D/E** CE flows; referenced, not duplicated |
-> | `docs/01-product/benches-prd.md` | the **validation** companion — the ON-vs-OFF A/B bench suite + findings, and the parked factory spike |
-> | `docs/02-engineering/baresuite-litectx-prd.md` | the **integration contract** — the consumer-side RT seam shapes; litectx's own obligations live here (Part 2 §8.2) |
+> | `docs/product/build-studies.md` | calibration + pattern **appendix** — **Part A** aurora borrow ledger (exact constants + aurora `file:line`), **Part B** copy-pattern studies, **Parts D/E** CE flows; referenced, not duplicated |
+> | `docs/product/benches-prd.md` | the **validation** companion — the ON-vs-OFF A/B bench suite + findings, and the parked factory spike |
+> | `docs/product/baresuite-litectx-prd.md` | the **integration contract** — the consumer-side RT seam shapes; litectx's own obligations live here (Part 2 §8.2) |
 > | `barecontext-prd.md` (archived) | **superseded** — its memory axis folded into Part 1, its primitives into Part 2 |
 > | `.claude/stash/*`, `CLAUDE.md` | session history / doctrine — never source of truth |
 >
@@ -126,7 +126,7 @@ Over that one graph, v1 ships **two views**:
 **Why this framing is load-bearing:** the graph is exposed as first-class public API, so
 `codegraph`/`contextgraph` are *additional views over the same data*, not re-extractions —
 **`contextgraph` now ships** (the `observe()`/`trace` CE-pipeline view; `codegraph`'s content
-view rides `getNode`/`related`/`impact`). See `docs/03-usage/graphs.md`. Build "a search
+view rides `getNode`/`related`/`impact`). See `docs/product/graphs.md`. Build "a search
 function" instead and you pay for the graph twice.
 
 ### 2.1 Module architecture (the memory engine) — one substrate, scorers, views
@@ -225,7 +225,7 @@ surface is small enough to live here rather than earn its own doc — eight knob
 (No activation preset/weights knob — base-level activation as a ranking signal was POC-falsified and
 dropped; the edit signal lives in `recentActivity`, never in config.) The operator-facing subset is
 mirrored as CLI flags and MCP args: see the **CLI / MCP reference**
-(`docs/03-usage/mcp-cli-reference.md`) and the optional **Claude Code integration** — the LSP-free
+(`docs/product/mcp-cli-reference.md`) and the optional **Claude Code integration** — the LSP-free
 pre-edit `impact()` hook + SessionStart index-warmer (`integrations/claude/README.md`).
 
 ### 3.1 Node kinds (memory types) — first-class from day one (DECIDED)
@@ -796,7 +796,7 @@ Two design results worth carrying, both POC-falsified before the build:
 > the access log exists; code is just v1's content.
 
 ACT-R total activation, reimplemented in JS (grounding: aurora `activation/*`,
-`docs/02-engineering/build-studies.md` Part A):
+`docs/product/build-studies.md` Part A):
 
 ```
 A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
@@ -823,7 +823,7 @@ A = BLA + Σ_j (W_j · F^hop_ij) + ContextBoost − Decay
 
 Ship AURORA's 5 presets as config presets. All formulas are pure functions → near-verbatim
 JS port, unit-testable. **Every constant above is source-verified in
-`docs/02-engineering/build-studies.md` Part A (aurora `@ 750a39d`)** — that ledger, not this
+`docs/product/build-studies.md` Part A (aurora `@ 750a39d`)** — that ledger, not this
 summary, is the calibration source of truth; start at aurora's tested defaults, re-validate any
 change on both repos before it earns weight. **Scope note (POC-corrected):** of these, only
 **spreading** ships as a v1 *ranking* term (slice 4, over edges). The base-level terms (BLA,
@@ -1623,7 +1623,7 @@ package** (§7).
 
 > **The actual tuned constants** (formulas + every coefficient, with aurora `file:line`
 > provenance, mapped to the slice that consumes them) live in
-> **`docs/02-engineering/build-studies.md` Part A** (the aurora borrow ledger) — the written borrow contract for slices 3–6.
+> **`docs/product/build-studies.md` Part A** (the aurora borrow ledger) — the written borrow contract for slices 3–6.
 > Source-verified; re-verify if aurora moves off `750a39d`.
 
 ---
@@ -2087,7 +2087,7 @@ on a consumer. The highest-leverage next move is adoption, not more speculative 
 > **What Part 2 specifies:** the requirement list for litectx as the **comprehensive
 > context-engineering library** — the four CE primitives built **on top of** Part 1's graph. It is
 > *derived* from the build-map marks in **Appendix CE-T** (the CE tree, at the end of this part) and
-> [`build-studies.md` Part D](../02-engineering/build-studies.md) (the recommended flows), themselves
+> [`build-studies.md` Part D](build-studies.md) (the recommended flows), themselves
 > grounded in the CE leaders (Anthropic, LangChain, Manus, Google ADK, Slack, OpenAI, Drew Breunig,
 > Chroma, HumanLayer, arXiv). **Specs derived from leaders, not guessed.**
 >
@@ -2102,9 +2102,9 @@ on a consumer. The highest-leverage next move is adoption, not more speculative 
 > (copy-pattern-studies).
 >
 > **Method reminder:** requirements point at their source of truth — where litectx already has a
-> validated mechanism, the [aurora borrow ledger](../02-engineering/build-studies.md) (build-studies
+> validated mechanism, the [aurora borrow ledger](build-studies.md) (build-studies
 > **Part A**; borrow the calibration, don't reinvent — [[borrow-aurora-dont-restart]]); for net-new
-> patterns adapted from CE leaders, the [copy-pattern studies](../02-engineering/build-studies.md)
+> patterns adapted from CE leaders, the [copy-pattern studies](build-studies.md)
 > (build-studies **Part B** — real API surface + the litectx adaptation delta). Within Part 2, a bare
 > "§N" means Part 2 §N.
 
@@ -2151,7 +2151,7 @@ to requirement, unified with the existing code+context graph (Part 1 §2–3).
 
 | ID | What | Surface | Det. | Precedent | Delta |
 |---|---|---|---|---|---|
-| **R-G1 Node** ✅ **SHIPPED** | typed unit of context (`kind`: code · doc · **fact** · **episode**) | `getNode(id)` | 🟢 | ledger §10 (`chunk_types`) | **BUILT 2026-06-12** — kind-agnostic structure accessor (`chunks` + exact import-edge counts); written memory = zero-chunk/zero-edge node. Path-keyed (file-granular). `test/graph.test.js`; design `docs/plans/2026-06-12-graph-substrate-design.md` |
+| **R-G1 Node** ✅ **SHIPPED** | typed unit of context (`kind`: code · doc · **fact** · **episode**) | `getNode(id)` | 🟢 | ledger §10 (`chunk_types`) | **BUILT 2026-06-12** — kind-agnostic structure accessor (`chunks` + exact import-edge counts); written memory = zero-chunk/zero-edge node. Path-keyed (file-granular). `test/graph.test.js`; design `docs/product/2026-06-12-graph-substrate-design.md` |
 | **R-G2 Edge** ✅ **SHIPPED (import)** | typed relation: `imports` (persisted) · `calls` (impact, on-demand) + reserved **`supersedes`·`derived_from`·`references`·`belongs_to`** | `related(id,{edge,dir,hops})` | 🟢 | ledger §4 (spreading) | **BUILT 2026-06-12** — BFS over persisted `import` edges, `dir` out/in/both, hops capped at 3, deduped. `edge` is a **generic type** so the reserved non-code edges slot in with no migration once a producer emits them (NOT built — no producer yet; would be speculative). `calls` stays impact()'s job (over-counts by design — kept off the exact graph) |
 | **R-G3 Provenance** | every node knows its source (tool · doc · sub-agent · session) + a trust label | `node.source`, `node.trust?` | 🟢 / ⊘ content-verdict | label = litectx; shape-gate = **bareguard** (§10.1) | new |
 | **R-G4 Salience** | relevance-to-intent score driving assembly (ACT-R activation generalized beyond code) | internal; surfaced in `recall().signals` | 🟢 | ledger §2–6 (ACT-R) | generalize activation to all kinds |
@@ -2207,9 +2207,9 @@ succeeded (R-W7 input) → harness/bareagent.
 | **R-C1 Chunk + rerank** | coherent chunks; surface only the best (before-context) | aurora; LangChain [LC] | internal to recall | 🟢 | 🧩 have (ledger §1/§7) |
 | **R-C2 Token-budgeted assembly** | given a token budget, return the highest-salience subset — *the* lite-Compress primitive | survey; ADK budget | `assemble({budget})` (= R-G6) | 🟢 | **net-new, flagship** |
 | **R-C3 Tool-result clearing** | drop raw payloads already acted on, keep a 1-line stub | Anthropic context-editing [A] | `clear(nodeId)` / auto-policy | 🟢 | net-new |
-| **R-C4 Restorable compression** | drop a payload but keep a cheap handle (URL/path/id) to restore on demand | Manus file-system-as-context [Manus] | `stash(id,text)` + `peek(id)` + `get(id)` + `evict(...)` | 🟢 | ✅ **SHIPPED v0.6.0** — dedicated non-fts5 `stash` table (never indexed → recall-invisible, never pruned → restore always works). **API-only by §10.5** (orchestration mechanic, not a model-reasoning verb → no CLI/MCP). Deletion is **`evict`** (R-G7), the stash-only deleter — `forget` is memory-only and never reaches the stash table. (Manus pattern, done right; [study §3, Part B](../02-engineering/build-studies.md)) |
+| **R-C4 Restorable compression** | drop a payload but keep a cheap handle (URL/path/id) to restore on demand | Manus file-system-as-context [Manus] | `stash(id,text)` + `peek(id)` + `get(id)` + `evict(...)` | 🟢 | ✅ **SHIPPED v0.6.0** — dedicated non-fts5 `stash` table (never indexed → recall-invisible, never pruned → restore always works). **API-only by §10.5** (orchestration mechanic, not a model-reasoning verb → no CLI/MCP). Deletion is **`evict`** (R-G7), the stash-only deleter — `forget` is memory-only and never reaches the stash table. (Manus pattern, done right; [study §3, Part B](build-studies.md)) |
 | **R-C5 Trim / prune (heuristic)** | recency/size heuristics to drop old turns | LangChain trim [LC]; Provence | `trim(units, policy)` → `{units, dropped, harvest}` | 🟢 | ✅ **SHIPPED (2026-06-14)** — the transcript-truncation seam (RT-2 interlock). A **thin verb** (the `summaryWindow` pattern): **SIZE** (`maxTokens`) delegates wholesale to `assemble`'s fit (POC C1: `===` unit-for-unit — reused, not reimplemented); **COUNT** (`keepLastN`) is the net-new turn-granular policy (POC C2a: no token budget reproduces "keep last N turns" when sizes vary); both preserve `pinned`/`atomic`. Net-new value = COUNT + the **eviction contract** `harvest` (the dropped units, content intact) = the harvest-before-evict worklist. **API-only** (§10.5). POC `poc/rc5-trim-poc.mjs`; `test/trim.test.js` (9). |
-| **R-C6 Running-summary scaffold** | "last-N verbatim + rolling summary of older" — litectx decides *what/when*; LLM does the prose | LlamaIndex buffer [LC]; ADK compaction | `summaryWindow(n)` + hook | 🟡 scaffold 🟢 / ⊘ LLM step | net-new ([study §1, Part B](../02-engineering/build-studies.md) — keep handles to summarized turns) |
+| **R-C6 Running-summary scaffold** | "last-N verbatim + rolling summary of older" — litectx decides *what/when*; LLM does the prose | LlamaIndex buffer [LC]; ADK compaction | `summaryWindow(n)` + hook | 🟡 scaffold 🟢 / ⊘ LLM step | net-new ([study §1, Part B](build-studies.md) — keep handles to summarized turns) |
 | **R-C7 Rank-tiered render** | compact code **by rank**: top-N **verbatim code** · next tier **signature+docstring** · **drop** past a cap (aurora `CHUNK_LIMITS` (top-N, max) per complexity). The docstring render is the unit; R-C2 budget picks the tier | aurora `decompose.py:243-310` ✅ confirmed — *inlined in `_build_context_summary`, reimplement not extract* (ledger §13); Arize "LLM-summary failed" [Arize] | `compress(node,{level})`; `assemble()` tiers by rank | 🟢 | ✅ **SHIPPED 2026-06-12** — `compress(node,{level})` → `verbatim` \| `signature` (header + doc, body elided) \| `drop`; tree-sitter signature extraction (+ method-chunk wrapping), saves **~82% bytes with the doc kept** on 627 real symbols. Pure library export (no DB/ranking), like `stash`/`peek`. De-risks `assemble()` (the render half it composes). 16 tests. (extraction's chunker dependency in Part 1 §2; pairs with R-C2) |
 
 **Ceded (⊘):** the LLM that writes the summary (auto-compaction prose); perplexity/LLM token
@@ -2223,7 +2223,7 @@ compression (LLMLingua) — opt-in tier behind the embeddings line.
 |---|---|---|---|---|---|
 | **R-I1 Namespacing / scope** | a scope key (agent/session/user) + filtered queries so contexts don't bleed | Memary/Letta (survey); ADK scope-by-default [ADK] | `owner`/`session` on `LiteCtx` (kind-aware) | ✅ **SHIPPED** (§4.4; gate #1) | net-new; **built** |
 | **R-I2 State partitioning** | expose one field of state to the LLM, isolate the rest | LangChain state [LC] | `state.view(fields)` | 🟢 | follows R-W3 |
-| **R-I3 Handle / lazy-load** | return a lightweight handle; fetch raw only on explicit request, then offload | ADK handle pattern [ADK]; Manus | `peek(id)` (`{id,bytes,head,tail,createdAt,truncated}`) vs `get(id)` (= load) | 🟢 | ✅ **SHIPPED** (stash-only) — `peek` previews **head+tail** via SQL first-N/last-N `substr` + octet `length`; `load`==`get` already. **Win = bounded RESULT** (only ~head+tail bytes reach the caller → payload stays out of the context/token budget), **NOT** bounded compute — grounding measured peek wall-time *scales* with payload (≈`get`, slower past a few MB; SQLite reads the column to slice it). An O(1) peek would need byte-size stored at write (deferred column). **Head+tail, not head-only**: the conclusion (exit code, failing frame, closing structure) lives at the END — borrows SmartCrusher's start+end split (Part B study §4, R-C7 prior), but *only* the cheap structural slice, NOT the anomaly-keep (full-scan → stays in R-C7). **POC-validated** (`poc/ri3-handle-poc.mjs`, 17 assertions): byte-length via `CAST(text AS BLOB)` not `length(text)`; tail via negative `substr`. `summary`/`scope` columns stay **deferred** — head+tail covers logs/traces/text/code; opaque blobs would need a caller-supplied summary, added only when a real caller passes one. (pairs with R-C4; [study §2, Part B](../02-engineering/build-studies.md)) |
+| **R-I3 Handle / lazy-load** | return a lightweight handle; fetch raw only on explicit request, then offload | ADK handle pattern [ADK]; Manus | `peek(id)` (`{id,bytes,head,tail,createdAt,truncated}`) vs `get(id)` (= load) | 🟢 | ✅ **SHIPPED** (stash-only) — `peek` previews **head+tail** via SQL first-N/last-N `substr` + octet `length`; `load`==`get` already. **Win = bounded RESULT** (only ~head+tail bytes reach the caller → payload stays out of the context/token budget), **NOT** bounded compute — grounding measured peek wall-time *scales* with payload (≈`get`, slower past a few MB; SQLite reads the column to slice it). An O(1) peek would need byte-size stored at write (deferred column). **Head+tail, not head-only**: the conclusion (exit code, failing frame, closing structure) lives at the END — borrows SmartCrusher's start+end split (Part B study §4, R-C7 prior), but *only* the cheap structural slice, NOT the anomaly-keep (full-scan → stays in R-C7). **POC-validated** (`poc/ri3-handle-poc.mjs`, 17 assertions): byte-length via `CAST(text AS BLOB)` not `length(text)`; tail via negative `substr`. `summary`/`scope` columns stay **deferred** — head+tail covers logs/traces/text/code; opaque blobs would need a caller-supplied summary, added only when a real caller passes one. (pairs with R-C4; [study §2, Part B](build-studies.md)) |
 
 **Ceded (⊘):** sub-agent **orchestration** (fork/lifecycle) and **sandboxes** → **bareagent**
 owns spawning (`tools/spawn.js`); litectx supplies each child's scoped store (§10.2). Phase
@@ -2385,7 +2385,7 @@ seam, **what litectx must do on its side of each**. This is the adopter the §8.
 waiting on — it resolves `assemble`'s shape and surfaces two small build-now additions, while two
 items stay deferred *with crisp trip-wires* (the litectx discipline: a deferral names the exact
 condition that un-defers it). The seam shapes (the holes) are bareagent's and live in
-[`baresuite-litectx-prd.md`](../02-engineering/baresuite-litectx-prd.md) (the integration
+[`baresuite-litectx-prd.md`](baresuite-litectx-prd.md) (the integration
 contract; the former `litectx-for-baresuite.md` is folded in there as the orientation + §5–§9); the
 **litectx obligations**
 are here.
@@ -2422,11 +2422,11 @@ re-specs it; each part keeps its own non-goals (Part 1 §13 memory scope · Part
 2026-06-23 into this one authority; nothing was cut.)* **`barecontext-prd.md`** (archived) is
 **superseded by the two parts together**: its §4 primitives live in Part 2 §1–6, its §6 "bare test"
 became the lite line (§0), its §7 Aurora notes are subsumed by the
-[aurora borrow ledger](../02-engineering/build-studies.md) (build-studies Part A).
+[aurora borrow ledger](build-studies.md) (build-studies Part A).
 
 **Engineering companions (not PRDs, but where the requirements' evidence lives):**
-[build-studies **Part A**](../02-engineering/build-studies.md) (memory signals + SOAR/CE
-borrows, file:line) and [build-studies **Part B**](../02-engineering/build-studies.md)
+[build-studies **Part A**](build-studies.md) (memory signals + SOAR/CE
+borrows, file:line) and [build-studies **Part B**](build-studies.md)
 (LlamaIndex/ADK/Manus API surface + adaptation deltas); the
 [validation bench suite](benches-prd.md). Requirement rows link to the relevant §.
 
@@ -2490,7 +2490,7 @@ action-vs-content thesis both hold.
   optional guardrails-set `injectionRisk:"high"`; bareguard gates that flag **by structured field**, via
   a small generic `flags` field-value gate (reads `action.provenance`/`injectionRisk` directly, **not**
   `JSON.stringify` regex — the regex route would force litectx to encode its verdict as matchable text,
-  violating §8.2). Full spec + action-field contract: [baresuite-litectx-prd §5B](../02-engineering/baresuite-litectx-prd.md).
+  violating §8.2). Full spec + action-field contract: [baresuite-litectx-prd §5B](baresuite-litectx-prd.md).
   → R-G3 label = litectx · R-X2 shape-verdict + floor = bareguard (lift) · R-X2 content-verdict =
   litectx/guardrails tier (opt-in).
 
@@ -2532,7 +2532,7 @@ action-vs-content thesis both hold.
 These surfaced in the aurora SOAR survey ([SOAR.md], [SOAR_ARCHITECTURE.md]) and the Arize talk
 [Arize]. **None are litectx** — they're orchestration / budget enforcement. Parked here (not in
 litectx's build surface) so the seam is captured. **Confirmed at file:line in the
-[aurora borrow ledger, Part A](../02-engineering/build-studies.md) §13** — incl. the correction that
+[aurora borrow ledger, Part A](build-studies.md) §13** — incl. the correction that
 the cost-budget gate and the retrieval-quality signal were *design-only* in aurora, never built.
 
 **→ bareguard (budget *enforcement*):**
@@ -2616,18 +2616,18 @@ disabled, does. Build it when that caller is real, not before.
 > / `trace: true` records a live CE run into `ctx.trace`, and the coverage render lights the verbs used
 > against this exact Write/Select/Compress/Isolate map. The verb→primitive table ships as `PRIMITIVE` /
 > `VERBS_BY_PRIMITIVE` (data + agent-readable Mermaid in the lib; SVG + interactive viewer in
-> `examples/contextgraph`). Setup for both graphs: `docs/03-usage/graphs.md`.
+> `examples/contextgraph`). Setup for both graphs: `docs/product/graphs.md`.
 >
 > **Method (the whole point).** *Derive specs from the leaders in CE, not from guesses.*
 > Every claim is grounded in the primary sources the field's leaders published (Anthropic,
 > LangChain, Chroma, Drew Breunig, Manus, Google ADK, Slack, OpenAI, HumanLayer, the arXiv
 > papers). Where leaders **differ**, we show the breakdown **per author** rather than
-> collapsing to one. Where the source video ([`build-studies.md` Part E](../02-engineering/build-studies.md)) diverged from the
+> collapsing to one. Where the source video ([`build-studies.md` Part E](build-studies.md)) diverged from the
 > primary sources, the source wins and the gap is logged in §CE-T.7 below.
 >
-> **Companions:** [`build-studies.md` Part D](../02-engineering/build-studies.md) (the **recommended flows**: how the
+> **Companions:** [`build-studies.md` Part D](build-studies.md) (the **recommended flows**: how the
 > leaders flow work, every behavior mapped to the four primitives). **Source transcript:**
-> [`build-studies.md` Part E](../02-engineering/build-studies.md) (kept intact; its flows are mirrored into Part D).
+> [`build-studies.md` Part E](build-studies.md) (kept intact; its flows are mirrored into Part D).
 
 ---
 
@@ -2847,7 +2847,7 @@ utilization zone. Research → Plan → Execute, with `research.md` / `progress.
 sub-agent research (**Isolate**), context reset (**Compress**), human-review checkpoint.
 Result: ~35k lines of *changes* into a 300k-LOC Rust codebase in ~7h (2 PRs, 1 merged; §7).
 **litectx's role:** 🧩/🔧 store + serve the artifacts and rank what survives a reset; the
-*orchestration of phases* is ⊘ CEDE (harness). **Full flow lives in [`build-studies.md` Part D](../02-engineering/build-studies.md).**
+*orchestration of phases* is ⊘ CEDE (harness). **Full flow lives in [`build-studies.md` Part D](build-studies.md).**
 
 ---
 

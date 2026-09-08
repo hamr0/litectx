@@ -1,4 +1,4 @@
-// F5 — cross-session memory POC (EVIDENCE, not a gate; per docs/01-product/benches-prd.md §F5).
+// F5 — cross-session memory POC (EVIDENCE, not a gate; per docs/product/benches-prd.md §F5).
 //
 // THE QUESTION. On a FRESH session, does litectx recall the RIGHT prior decision by MEANING,
 // among many real decoys, where a lexical (OFF) arm structurally cannot? This is the one

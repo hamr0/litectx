@@ -3,7 +3,7 @@
 The complete adopter contract: every config option, the full public API, the
 scope boundaries, and the sharp edges. The README is the pitch; this is the file
 you point an integrating agent at. For the design rationale behind the refusals,
-the repo-only PRD (`docs/01-product/litectx-prd.md`) is the authority —
+the repo-only PRD (`docs/product/litectx-prd.md`) is the authority —
 but everything you need to *use* litectx is here.
 
 > **Status (important — read first).** litectx is in **active early build**. This
@@ -92,7 +92,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **`promotionCandidates()`** — episode promotion ladder: hot agent episodes → distil to facts; 30-day rolling window + auto-prune | ✅ shipped (slice 5b — access-log tier, view #4) |
 | **Scope model** (`owner`/`session` config) — `fact` owner-scoped, `episode` owner+session; recall filters BM25 + KNN; opt-in, host-threaded identity | ✅ shipped (Isolate §4.4 — gate #1: own-run episodes buried 5/6 BM25, 9/10 emb without it) |
 | **Write-gate emitter** (`writeGate`/`writeAudit` config; `toWriteAction`/`WriteAudit`/`WriteDeniedError` exports) — `remember()` emits a gate-able `memory.write` action + checks it before commit; deny blocks the write; `writeAudit` records a JSONL line per write **standalone (gate-independent)**; litectx states source + shape flag, never the content verdict | ✅ shipped (CE-PRD §10.1 — opt-in; POC 13/13 on the real bareguard `Gate`; gate demand-gated, no producer for `memory.inject`; audit usable now without a gate) |
-| **contextgraph** (`observe`/`ContextGraph` exports; `trace` config; `PRIMITIVE`/`VERBS_BY_PRIMITIVE` taxonomy) — wrap a `LiteCtx` and every CE verb call is recorded into `ctx.trace`: a pipeline graph (`.json()` + agent-readable `.mermaid()`). The CE-**pipeline** view over the same data — sibling to `codegraph`'s content view (`getNode`/`related`/`impact`) | ✅ shipped (observability primitive; SVG + interactive renders in `examples/contextgraph`; setup in `docs/03-usage/graphs.md`) |
+| **contextgraph** (`observe`/`ContextGraph` exports; `trace` config; `PRIMITIVE`/`VERBS_BY_PRIMITIVE` taxonomy) — wrap a `LiteCtx` and every CE verb call is recorded into `ctx.trace`: a pipeline graph (`.json()` + agent-readable `.mermaid()`). The CE-**pipeline** view over the same data — sibling to `codegraph`'s content view (`getNode`/`related`/`impact`) | ✅ shipped (observability primitive; SVG + interactive renders in `examples/contextgraph`; setup in `docs/product/graphs.md`) |
 | Base-level **activation** as a recall *re-rank* (edit→search score) | ⊘ dropped (POC-falsified repo-dependent — the edit signal lives in `recentActivity`, never in ranking) |
 | **Trust columns** on written-memory hits (`provenance`/`use`/`occurredAt`; surfaced, not scored) | ✅ shipped (slice 5c — access-log tier, view #2) |
 | Trust/stability as a recall *tie-breaker* (use/churn/provenance → search order) | ⊘ dropped (POC-falsified — no-ops on exact ties, pollutes on any band, and buries fresh/better matches; trust ships as columns, ranking stays pure relevance — slice 5c) |
@@ -153,7 +153,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `strictScope` | `boolean` | `false` | **Fail-closed multi-tenant mode for the per-upload axes.** Off (default) = legacy: a missing/`null` `scope` means "see everything" (right for single-tenant, a footgun on a shared store). On = a missing scope on `recall` (`doc` **or** `fact`/`episode`), `get`, `ingest`, `remember`, `forget`, `reviewCandidates`, or `promotionCandidates` **throws** instead of returning/writing/deleting every tenant's rows. The only ways to act become an explicit tenant `scope` (`scope ∪ global`) or **`GLOBAL`** (the shared tier). Covers the **doc/blob axis** (per-upload `scope`) **and the memory axis** (`fact`/`episode`, where `scope` → the per-call `mem_scope.owner`; multis M4) — only `code` (repo-global) is untouched. Pairs with `ctx.scoped(scope)` (below): the flag makes the base methods safe, the view makes the safe path the only path. |
 | `writeGate` | `{ check(action): Promise<{outcome,…}> }` | unset (no gate) | **Write-gate hook (§10.1).** When set, `remember()` emits a `memory.write` action and `await`s `writeGate.check(action)` **before** persisting; a `deny` outcome throws `WriteDeniedError` and the write does not commit (`allow`/`ask` proceed). Duck-typed — bareguard's `Gate` when embedded, any `.check`-shaped object standalone; litectx is not coupled to a gate version. Unset = byte-identical to a plain write. |
 | `writeAudit` | `WriteAudit` | unset | **Standalone audit sink** — records one JSONL decision line per `remember()`. Fires whether or not a `writeGate` is wired: with a gate it logs the gate's decision; **without one it logs a synthetic `allow` (`reason: "no-gate"`)**, so a sink alone gives a complete write paper-trail. The sink (`opts.sink`) defaults to an in-memory `this.lines` array — the host wires a file/db writer. Ships **no** secret patterns: a host-supplied `redact(action)` scrubs (the §6 line — secret patterns are content judgment, the host's to supply). |
-| `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/03-usage/graphs.md`. |
+| `trace` | `boolean` | `false` | **contextgraph (observability).** When true, the instance is returned wrapped in `observe()` — every CE verb call is recorded into `ctx.trace` (a `ContextGraph`; `.json()` / `.mermaid()`). `ctx.tap(verb, fn)` folds in free-function verbs (`assemble`/`compress`/`summaryWindow`). Off = the bare instance, no proxy, zero overhead. Setup: `docs/product/graphs.md`. |
 
 There is **one** config object and no global state. No environment variables, no
 config files — the adopter passes everything in.
@@ -1185,7 +1185,7 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 - `observe(ctx)` → wrap a `LiteCtx` so every CE verb call is recorded into `ctx.trace` (the **contextgraph**
   pipeline view); `ctx.tap(verb, fn)` folds in free-function verbs; or just set `trace: true` on the config.
   `ContextGraph` → the recorder (`.json()` + agent-readable `.mermaid()`); `PRIMITIVES`/`VERBS_BY_PRIMITIVE`/
-  `PRIMITIVE` → the Write/Select/Compress/Isolate verb taxonomy. Renders + full setup: `docs/03-usage/graphs.md`.
+  `PRIMITIVE` → the Write/Select/Compress/Isolate verb taxonomy. Renders + full setup: `docs/product/graphs.md`.
 - `KINDS: string[]` — the canonical memory-kind vocabulary a bare `recall(query)` groups
   over: `["code", "doc", "fact", "episode"]`. `code`/`doc` enter via `index()` (files,
   routed by extension); `fact`/`episode`/`doc` via `remember()` (direct writes).
