@@ -147,6 +147,7 @@ mix and match, each module works standalone.
 | | |
 |---|---|
 | **Integration Guide** (`litectx.context.md`) | The complete adopter contract — every option, the full API, the graph schema. Hand it to your AI assistant. Ships in the package. |
+| **Primitives manifest** (`primitives.json`) | Every verb — when to use it, its signature, and a runnable example — as machine-readable JSON. Browse it on unpkg before you install, or point a tool at it. Ships in the package, generated from the source so it never drifts. |
 | **[CHANGELOG](CHANGELOG.md)** | keep-a-changelog; an entry every release. |
 
 ## License

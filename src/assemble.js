@@ -77,6 +77,13 @@ const tokOf = (u) => {
  * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
  * @param {AssembleCtx} [ctx]
  * @returns {Promise<AssembleResult>}
+ * @category CE
+ * @when Fit a transcript to a token budget — keep pinned + newest, drop the oldest, rescuing droppable code/doc units as signatures first.
+ * @fails Never throws; with no budget it's identity (nothing dropped). Pinned units exceeding budget are kept best-effort, never a hard cap.
+ * @signature assemble(units: Unit[], ctx?: AssembleCtx) => Promise<AssembleResult>
+ * @example
+ * import { assemble } from 'litectx'
+ * const { units, dropped, tokens } = await assemble(transcript, { budget: 8000 })
  */
 export async function assemble(units, ctx = {}) {
   if (!Array.isArray(units)) throw new TypeError("assemble: units must be an array");
@@ -183,6 +190,13 @@ export async function assemble(units, ctx = {}) {
  * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
  * @param {SummaryWindowCtx} [ctx]
  * @returns {Promise<{ units: Unit[], dropped: {id: string, reason: "budget"|"summarized"}[], tokens: number }>}
+ * @category CE
+ * @when Keep the last-N turns verbatim under budget pressure and fold older ones into one rolling summary (the host supplies the summarizer).
+ * @fails Never throws; falls back to a plain `assemble` when unwired, when everything fits, or when there are < 2 older turns to fold — never worse than FIT.
+ * @signature summaryWindow(units: Unit[], ctx?: SummaryWindowCtx) => Promise<{ units, dropped, tokens }>
+ * @example
+ * import { summaryWindow } from 'litectx'
+ * const out = await summaryWindow(transcript, { budget: 8000, keepRecent: 6, summarize: async (t) => callModel(t) })
  */
 export async function summaryWindow(units, ctx = {}) {
   if (!Array.isArray(units)) throw new TypeError("summaryWindow: units must be an array");
@@ -267,6 +281,14 @@ export async function summaryWindow(units, ctx = {}) {
  * @param {Unit[]} units   the neutral transcript units, in conversation order (oldest → newest)
  * @param {TrimPolicy} [policy]
  * @returns {Promise<TrimResult>}
+ * @category CE
+ * @when Evict old turns from a running transcript (by size or count) and get back the dropped units with content, so you can harvest-before-evict.
+ * @fails Throws `TypeError` when `units` is not an array; with no policy set it's a no-op (keep all). Never splits an atomic group or drops a pinned unit.
+ * @signature trim(units: Unit[], policy?: TrimPolicy) => Promise<TrimResult>
+ * @example
+ * import { trim } from 'litectx'
+ * const { units, harvest } = await trim(transcript, { keepLastN: 20 })
+ * // persist `harvest` (e.g. remember) BEFORE discarding the old turns
  */
 export async function trim(units, policy = {}) {
   if (!Array.isArray(units)) throw new TypeError("trim: units must be an array");

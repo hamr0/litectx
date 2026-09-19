@@ -27,6 +27,13 @@ export const COMPRESS_LEVELS = ["verbatim", "signature", "drop"];
  * @param {CompressNode} node
  * @param {{ level?: "verbatim" | "signature" | "drop" }} [opts]
  * @returns {Promise<string>}
+ * @category CE
+ * @when Render a code/doc unit at a chosen fidelity (verbatim / signature-only / dropped) to fit a budget.
+ * @fails Never throws; an unparseable node (markdown, preamble, parse failure) falls back to verbatim rather than losing content.
+ * @signature compress(node: CompressNode, opts?: { level? }) => Promise<string>
+ * @example
+ * import { compress } from 'litectx'
+ * const sig = await compress({ text: fnSource, format: 'js', symbol: 'parseConfig' }, { level: 'signature' })
  */
 export async function compress(node, opts = {}) {
   const level = opts.level ?? "signature";

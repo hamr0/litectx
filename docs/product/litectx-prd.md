@@ -208,6 +208,20 @@ actually hurts), an edge-confidence field (ride along with a future schema-touch
 serves fact/episode, not code), and ergonomic graph accessors (wait for a real consumer to shape
 the query pattern) (litectx-prd.md:2048-2081).
 
+**Author-time discovery — `primitives.json` (shipped, v0.33.0).** A machine-readable manifest of
+every public primitive, generated from JSDoc (`@when`/`@fails`/`@example` hand-authored;
+`import`/`signature`/`category` derived) and shipped in the npm `files` whitelist for browsing on
+unpkg without installing. It is *not* the runtime tool surface (MCP is that) — the MCP-vs-code-only
+tier is encoded in each entry's `when` line, keeping a **uniform 7-field schema**
+(`{name, category, when, import, signature, fails, example}`) shared across the `bare*` kits. The
+generator was ported from bareagent and **extended for litectx's shape**: litectx's verbs are methods
+on `LiteCtx`/`ScopedView`, not top-level exports, so the symbol walker and the completeness test both
+enumerate documented class methods (`getOwnPropertyNames(Cls.prototype)`) — without that, manifesting
+the `LiteCtx` class alone would be a toothless guard. One canonical entry per verb (the `LiteCtx`
+method; the `ScopedView` mirror is noted in prose). Deliberately **version-less** (package.json beside
+it carries the version). A `check:primitives` staleness gate (CI + `npm test`) and a completeness test
+(a new public verb must be manifested or explicitly excluded, with a reason) keep it from drifting.
+
 ## Doc relationship, companions & build-order discipline
 
 litectx ships as one library documented by a single PRD in two parts: **Part 1** is the memory

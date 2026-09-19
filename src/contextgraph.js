@@ -142,6 +142,15 @@ export class ContextGraph {
  * the dynamic forwarding needs no cast or `@ts-ignore`.
  * @param {any} ctx  a LiteCtx instance (or any object whose CE verbs return accountable results)
  * @returns {any} the same object, proxied to record CE verb calls; `.trace` exposes the graph
+ * @category graph
+ * @when Record every CE verb call live into a context graph you can export as JSON or Mermaid — drop-in tracing for a run.
+ * @fails Does not throw; `instanceof LiteCtx` still holds on the returned proxy, and tracing is zero-overhead when unused.
+ * @signature observe(ctx: LiteCtx) => LiteCtx  // proxied; read `.trace`
+ * @example
+ * import { LiteCtx, observe } from 'litectx'
+ * const ctx = observe(new LiteCtx({ root: process.cwd() }))
+ * await ctx.recall('auth')
+ * console.log(ctx.trace.mermaid())
  */
 export function observe(ctx) {
   const graph = new ContextGraph();

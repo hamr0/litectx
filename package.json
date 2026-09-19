@@ -1,6 +1,6 @@
 {
   "name": "litectx",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "description": "Lite, local-first memory across kinds for AI agents: a code+context graph with ranked recall and impact (blast-radius) views, plus a write path for facts/episodes. SQLite + FTS5, tree-sitter + ripgrep edges, embeddings opt-in. CLI and stdio MCP server included.",
   "type": "module",
   "main": "./src/index.js",
@@ -22,12 +22,15 @@
     "integrations/",
     "README.md",
     "litectx.context.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "primitives.json"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build:types": "tsc",
-    "prepublishOnly": "npm run build:types",
+    "build:primitives": "node scripts/gen-primitives.mjs",
+    "check:primitives": "node scripts/gen-primitives.mjs --check",
+    "prepublishOnly": "npm run build:primitives && npm run build:types",
     "test": "node --test",
     "bench": "node poc/bench-lib.mjs",
     "bench:impact": "node poc/impact-bench.mjs",
