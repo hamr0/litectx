@@ -246,6 +246,19 @@ export class StalePointerError extends Error {
  * @property {number} unchanged  files skipped (mtime or content unchanged)
  */
 
+/**
+ * The store. One instance = one SQLite-backed code+context graph; every verb
+ * (recall/impact/get/remember/…) hangs off it. Local-first, single file.
+ * @param {LiteCtxConfig} config  requires `root`; `dbPath` defaults to `<root>/.litectx/index.db`.
+ * @category core
+ * @when You need a litectx store — the entry point for every other primitive.
+ * @fails Throws if `config.root` is missing.
+ * @example
+ * import { LiteCtx } from 'litectx'
+ * const ctx = new LiteCtx({ root: process.cwd() })
+ * await ctx.index()
+ * const hits = await ctx.recall('rate limiter', { kind: 'code' })
+ */
 export class LiteCtx {
   /** @param {LiteCtxConfig} config */
   constructor(config) {
@@ -364,6 +377,16 @@ export class LiteCtx {
    *
    * @param {{ paths?: string[], force?: boolean, yield?: boolean }} [opts]
    * @returns {Promise<IndexResult>}
+   * @category index
+   * @when Build or refresh the graph from source before recall/impact — call after files change.
+   * @fails Throws `RipgrepMissingError` only via later `impact()`, not here; a bad `root` throws at construction.
+   * @signature liteCtx.index(opts?: { paths?, force?, yield? }) => Promise<IndexResult>
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const { added, updated, unchanged } = await ctx.index()
+   * // incremental: only re-chunk two files
+   * await ctx.index({ paths: ['src/a.js', 'src/b.js'] })
    */
   async index(opts = {}) {
     const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs);
@@ -588,6 +611,16 @@ export class LiteCtx {
    * passed in their opts.
    * @param {string | symbol} scope  a tenant scope string, or {@link GLOBAL} for the shared tier
    * @returns {ScopedView}
+   * @category core
+   * @when Serve many tenants from one instance — bind a scope once and every verb on the view is fenced to it.
+   * @fails Throws at creation on a bad bind (null / omitted / non-string non-GLOBAL) — a scope-less scoped view is impossible.
+   * @signature liteCtx.scoped(scope: string | symbol) => ScopedView
+   * @example
+   * import { LiteCtx, GLOBAL } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const acme = ctx.scoped('tenant:acme')      // every verb fenced to acme
+   * await acme.remember('pref-1', 'prefers dark mode', { kind: 'fact' })
+   * const shared = ctx.scoped(GLOBAL)            // shared knowledge-base tier
    */
   scoped(scope) {
     if (scope !== GLOBAL && typeof scope !== "string") {
@@ -647,6 +680,16 @@ export class LiteCtx {
    * @param {string} query
    * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
+   * @category recall
+   * @when Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP.
+   * @fails Never throws on a miss — returns `[]` (or per-kind `{}`); a single stale chunk under `body:true` is nulled, not thrown; throws only under `strictScope` when a doc-kind query omits `scope`.
+   * @signature liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const hits = await ctx.recall('retry backoff', { kind: 'code', n: 5 })
+   * // omit kind → grouped by kind: { code: [...], doc: [...], fact: [...] }
+   * const grouped = await ctx.recall('rate limit')
    */
   async recall(query, opts = {}) {
     const match = ftsMatch(query);
@@ -870,6 +913,15 @@ export class LiteCtx {
    * @param {string} symbol  the symbol name to assess
    * @returns {Promise<import("./impact.js").Impact | null>}
    * @throws {RipgrepMissingError} when ripgrep (`rg`) is not on PATH
+   * @category impact
+   * @when Gauge the blast radius / change-risk of a symbol before editing it. The model calls this directly via MCP.
+   * @fails Throws `RipgrepMissingError` when `rg` is not on PATH (rather than silently under-counting to a false "isolated"); returns `null` when the symbol isn't in the index.
+   * @signature liteCtx.impact(symbol: string) => Promise<Impact | null>
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const view = await ctx.impact('parseConfig')
+   * if (view) console.log(view.risk, view.callers.length) // 'low' | 'med' | 'high'
    */
   async impact(symbol) {
     return computeImpact(this.store, this.root, this.include, symbol);
@@ -953,6 +1005,16 @@ export class LiteCtx {
    *   `startLine`/`endLine` (0-based, inclusive) — a recall hit's `chunk` range; both or neither
    * @returns {Item | null}
    * @throws {StalePointerError} when a chunk is requested from a file that changed since indexing
+   * @category recall
+   * @when Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range. The model calls this directly via MCP.
+   * @fails Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk.
+   * @signature liteCtx.get(id: string, opts?: { startLine?, endLine?, scope? }) => Item | null
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const [hit] = await ctx.recall('backoff', { kind: 'code' })
+   * // echo the hit's chunk range back as the address — nothing widens it
+   * const chunk = ctx.get(hit.path, hit.chunk)
    */
   get(id, opts = {}) {
     // strictScope: a bare get(id) throws (can't fence a guessable id without a scope). GLOBAL → shared
@@ -1019,6 +1081,15 @@ export class LiteCtx {
    *   instance `owner`; under `strictScope`, omitted THROWS). Prefer a bound {@link scoped} view so the
    *   scope can't be forgotten. Doc `scope` usually set via {@link ingest}, not here directly.
    * @returns {Promise<void>}
+   * @category memory
+   * @when Persist a fact/episode/doc so it survives across sessions and is recallable by meaning. The model calls this directly via MCP.
+   * @fails Throws when `kind` is not one of fact/episode/doc; under `strictScope`, throws when `scope` is omitted. Re-`remember`ing the same `(scope, id)` supersedes in place (no duplicate row).
+   * @signature liteCtx.remember(id: string, text: string, opts?: { kind?, by?, occurredAt?, scope? }) => Promise<void>
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * await ctx.remember('pref-theme', 'user prefers dark mode', { kind: 'fact', by: 'human' })
+   * await ctx.remember('ep-1', 'deploy failed on missing env var', { kind: 'episode' })
    */
   async remember(id, text, opts = {}) {
     const kind = opts.kind ?? "fact";
@@ -1091,6 +1162,16 @@ export class LiteCtx {
    *
    * @param {string | { kind?: string, by?: string, scope?: string | symbol, id?: string, idPrefix?: string }} sel
    * @returns {number}
+   * @category memory
+   * @when Delete written memory — by id, by kind, or tenant-fenced by scope (the correct compliance/erasure primitive: it deletes now). The model calls this directly via MCP.
+   * @fails Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Mem-axis only — never docs/blob/stash.
+   * @signature liteCtx.forget(sel: string | { id?, kind?, by?, scope?, idPrefix? }) => number
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * ctx.forget('pref-theme')                        // one id
+   * ctx.forget({ kind: 'episode' })                 // all episodes
+   * ctx.scoped('tenant:acme').forget({ scope: 'tenant:acme' }) // right-to-erasure for one tenant
    */
   forget(sel) {
     if (typeof sel === "string") return this.store.forgetMemory({ id: sel });
@@ -1164,6 +1245,16 @@ export class LiteCtx {
    *   global/forever); `meta` = opaque passthrough; `maxSize`/`maxPages`/`parseTimeoutMs` = the
    *   untrusted-input bounds (defaults 10 MB / 2000 / 30 s; `maxSize` also caps a blob).
    * @returns {Promise<{ id: string, kind: "doc", format: string, mode: "chunked" | "blob", chunks: number }>}
+   * @category ingest
+   * @when Store an uploaded document (pdf/docx/md/txt/csv → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.
+   * @fails Throws when a required optional peer dep is missing (pdf → `pdfjs-dist`, docx → `mammoth`) or input exceeds `maxSize`/`maxPages`; under `strictScope`, throws when `scope` is omitted.
+   * @signature liteCtx.ingest(buffer: Uint8Array, opts?: { filename?, format?, id?, scope?, expiresAt? }) => Promise<{ id, kind, format, mode, chunks }>
+   * @example
+   * import { readFileSync } from 'node:fs'
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const res = await ctx.ingest(readFileSync('spec.pdf'), { filename: 'spec.pdf', scope: 'project:x' })
+   * // res.mode === 'chunked', res.chunks > 0
    */
   async ingest(buffer, opts = {}) {
     if (!(buffer instanceof Uint8Array)) throw new Error("ingest: expected a Buffer/Uint8Array of file bytes");
@@ -1208,6 +1299,14 @@ export class LiteCtx {
    * this is a storage-reclamation pass, not a correctness gate. Returns the number of rows reclaimed.
    * @param {{ now?: number }} [opts]  `now` = the cutoff (epoch ms); rows with `expiresAt <= now` go
    * @returns {number}
+   * @category ingest
+   * @when Reclaim storage from expired doc/blob uploads — a scheduled retention sweep (recall already excludes expired rows live).
+   * @fails Does not throw; returns the count of rows reclaimed (0 when nothing has expired).
+   * @signature liteCtx.purge(opts?: { now?: number }) => number
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const reclaimed = ctx.purge() // rows whose expiresAt has passed
    */
   purge(opts = {}) {
     return this.store.purge(opts.now ?? Date.now());
@@ -1226,6 +1325,15 @@ export class LiteCtx {
    * @param {string} id    caller-chosen handle / identity
    * @param {string} text  the payload to park
    * @returns {void}
+   * @category CE
+   * @when Drop a large payload (tool result, page dump) from the context window, keeping only a cheap handle to rehydrate later. API-only — adopter code chooses this, never a model verb.
+   * @fails Does not throw; upserts by `id` (a re-stash replaces). A stash is never indexed or recalled — reachable only by exact `id` via `get`/`peek`/`evict`.
+   * @signature liteCtx.stash(id: string, text: string) => void
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * ctx.stash('stash:toolresult-42', hugeToolOutput)
+   * // later: const full = ctx.get('stash:toolresult-42')
    */
   stash(id, text) {
     this.store.writeStash({ id, text, createdAt: Date.now() });
@@ -1247,6 +1355,15 @@ export class LiteCtx {
    *
    * @param {string} id  a stashed payload's id (as passed to {@link stash})
    * @returns {{ id: string, bytes: number, head: string, tail: string, createdAt: number, truncated: boolean } | null}
+   * @category CE
+   * @when Preview a stashed payload's head+tail without paying its full tokens — decide whether to rehydrate. API-only.
+   * @fails Does not throw; returns `null` for an unknown id.
+   * @signature liteCtx.peek(id: string) => { id, bytes, head, tail, createdAt, truncated } | null
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const p = ctx.peek('stash:toolresult-42')
+   * if (p?.truncated) { const full = ctx.get('stash:toolresult-42') }
    */
   peek(id) {
     return this.store.peekStash(id);
@@ -1264,6 +1381,15 @@ export class LiteCtx {
    *
    * @param {string | { olderThan?: number, maxCount?: number }} sel
    * @returns {number}
+   * @category CE
+   * @when Drop parked stashes when done — one id, or a bulk age/size policy. API-only; stash-only (never reaches memory).
+   * @fails Does not throw; returns the count removed. Cannot touch a fact/episode by construction — only the stash table.
+   * @signature liteCtx.evict(sel: string | { olderThan?, maxCount? }) => number
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * ctx.evict('stash:toolresult-42')          // one payload
+   * ctx.evict({ maxCount: 100 })              // keep newest 100
    */
   evict(sel) {
     if (typeof sel === "string") return this.store.evictStash({ id: sel });
@@ -1290,6 +1416,16 @@ export class LiteCtx {
    * @param {number} [threshold=5]
    * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
+   * @category memory
+   * @when Surface agent-asserted facts that proved useful (recalled ≥ threshold) for a human to validate or discard.
+   * @fails Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]` when nothing crossed the threshold.
+   * @signature liteCtx.reviewCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * for (const c of ctx.reviewCandidates(5)) {
+   *   // show c.path to a human → validate (re-remember by:'human') or forget
+   * }
    */
   reviewCandidates(threshold = 5, opts = {}) {
     const ms = this._resolveMemReadScope(opts.scope, "reviewCandidates");
@@ -1320,6 +1456,17 @@ export class LiteCtx {
    * @param {number} [threshold=10]
    * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
+   * @category memory
+   * @when Find episodes recalled often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.
+   * @fails Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).
+   * @signature liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * for (const c of ctx.promotionCandidates(10)) {
+   *   const ep = ctx.get(c.path)      // read it, distil, then:
+   *   // await ctx.remember(factId, distilled, { kind: 'fact', by: 'agent' })
+   * }
    */
   promotionCandidates(threshold = EPISODE_PROMOTE_THRESHOLD, opts = {}) {
     const ms = this._resolveMemReadScope(opts.scope, "promotionCandidates");
@@ -1343,6 +1490,14 @@ export class LiteCtx {
    *   `id` is the chunk's file path (feed it to `get`); `symbol` localizes within the file (null for a
    *   file's anonymous chunks, collapsed to one row); `edits` is how many index passes (sessions)
    *   changed it in the window; sorted by `lastEditedAt` desc.
+   * @category memory
+   * @when Answer "what was I working on" — the code/doc chunks litectx witnessed edited most recently.
+   * @fails Does not throw; empty until real edits are observed (a cold/`force` first build logs none — loading isn't editing).
+   * @signature liteCtx.recentActivity(opts?: { days?, since?, limit? }) => { id, symbol, kind, lastEditedAt, edits }[]
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const recent = ctx.recentActivity({ days: 3 }) // newest edits first
    */
   recentActivity(opts = {}) {
     const since = opts.since ?? Date.now() - (opts.days ?? 7) * 86_400_000;
@@ -1382,6 +1537,14 @@ export class LiteCtx {
    *
    * @param {{ scope?: string | symbol, kind?: string | string[], n?: number, body?: boolean }} [opts]
    * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null, occurredAt?: number|null })[]}
+   * @category memory
+   * @when Ground on the latest written memory when a query has no rankable term (all-stopword "what did I say") and `recall` returns `[]`. Exposed to the model via MCP.
+   * @fails Under `strictScope`, throws when `scope` is omitted; throws if one call mixes the doc axis with fact/episode (distinct scope stores). Logs no recall (recency is not demand).
+   * @signature liteCtx.recentMemory(opts?: { kind?, scope?, n?, body? }) => (Hit & { createdAt, occurredAt? })[]
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const latest = ctx.recentMemory({ kind: 'episode', n: 5, body: true })
    */
   recentMemory(opts = {}) {
     const kinds = Array.isArray(opts.kind) ? opts.kind : [opts.kind ?? "doc"];
@@ -1434,6 +1597,15 @@ export class LiteCtx {
    *
    * @param {{ kind: 'fact'|'episode', scope?: string | symbol, offset?: number, limit?: number, body?: boolean }} opts
    * @returns {Promise<{ items: EnumItem[], total: number, offset: number, nextOffset: number | null }>}
+   * @category memory
+   * @when Read ALL memory of one kind, gapless + paginated, for "count / all of them" questions recall can't answer (it's ranked + capped). API-only.
+   * @fails Throws when `kind` isn't fact/episode, or `offset`/`limit` are not valid non-negative/positive integers; under `strictScope`, throws when `scope` is omitted.
+   * @signature liteCtx.enumerate(opts: { kind: 'fact'|'episode', scope?, offset?, limit?, body? }) => Promise<{ items, total, offset, nextOffset }>
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * let offset = 0, all = []
+   * do { const p = await ctx.enumerate({ kind: 'fact', offset }); all.push(...p.items); offset = p.nextOffset } while (offset !== null)
    */
   async enumerate(opts) {
     const { kind, offset = 0, limit = 100, body = false } = opts ?? {}; // clean validation throw, not a raw TypeError, on a no-arg JS call
@@ -1470,6 +1642,15 @@ export class LiteCtx {
    * @param {{ scope?: string | symbol, kind?: string | string[] }} [opts]  `kind` ⊆ {fact, episode, doc};
    *   omitted → all three (the tenant's whole writable memory). Single kind or array.
    * @returns {number}
+   * @category memory
+   * @when Report how much memory a tenant holds ("N facts / M episodes / K docs") without pulling rows.
+   * @fails Throws when `kind` isn't a subset of fact/episode/doc; under `strictScope`, throws when `scope` is omitted.
+   * @signature liteCtx.count(opts?: { scope?, kind? }) => number
+   * @example
+   * import { LiteCtx } from 'litectx'
+   * const ctx = new LiteCtx({ root: process.cwd() })
+   * const facts = ctx.count({ kind: 'fact' })
+   * const all = ctx.count() // fact + episode + doc for this tenant
    */
   count(opts = {}) {
     const kinds = Array.isArray(opts.kind) ? opts.kind : opts.kind ? [opts.kind] : ["fact", "episode", "doc"];

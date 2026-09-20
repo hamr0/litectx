@@ -1,0 +1,239 @@
+{
+  "package": "litectx",
+  "primitives": [
+    {
+      "name": "assemble",
+      "category": "CE",
+      "when": "Fit a transcript to a token budget — keep pinned + newest, drop the oldest, rescuing droppable code/doc units as signatures first.",
+      "import": "import { assemble } from 'litectx'",
+      "signature": "assemble(units: Unit[], ctx?: AssembleCtx) => Promise<AssembleResult>",
+      "fails": "Never throws; with no budget it's identity (nothing dropped). Pinned units exceeding budget are kept best-effort, never a hard cap.",
+      "example": "import { assemble } from 'litectx'\nconst { units, dropped, tokens } = await assemble(transcript, { budget: 8000 })"
+    },
+    {
+      "name": "compress",
+      "category": "CE",
+      "when": "Render a code/doc unit at a chosen fidelity (verbatim / signature-only / dropped) to fit a budget.",
+      "import": "import { compress } from 'litectx'",
+      "signature": "compress(node: CompressNode, opts?: { level? }) => Promise<string>",
+      "fails": "Never throws; an unparseable node (markdown, preamble, parse failure) falls back to verbatim rather than losing content.",
+      "example": "import { compress } from 'litectx'\nconst sig = await compress({ text: fnSource, format: 'js', symbol: 'parseConfig' }, { level: 'signature' })"
+    },
+    {
+      "name": "count",
+      "category": "memory",
+      "when": "Report how much memory a tenant holds (\"N facts / M episodes / K docs\") without pulling rows.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.count(opts?: { scope?, kind? }) => number",
+      "fails": "Throws when `kind` isn't a subset of fact/episode/doc; under `strictScope`, throws when `scope` is omitted.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst facts = ctx.count({ kind: 'fact' })\nconst all = ctx.count() // fact + episode + doc for this tenant"
+    },
+    {
+      "name": "enumerate",
+      "category": "memory",
+      "when": "Read ALL memory of one kind, gapless + paginated, for \"count / all of them\" questions recall can't answer (it's ranked + capped). API-only.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.enumerate(opts: { kind: 'fact'|'episode', scope?, offset?, limit?, body? }) => Promise<{ items, total, offset, nextOffset }>",
+      "fails": "Throws when `kind` isn't fact/episode, or `offset`/`limit` are not valid non-negative/positive integers; under `strictScope`, throws when `scope` is omitted.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nlet offset = 0, all = []\ndo { const p = await ctx.enumerate({ kind: 'fact', offset }); all.push(...p.items); offset = p.nextOffset } while (offset !== null)"
+    },
+    {
+      "name": "evict",
+      "category": "CE",
+      "when": "Drop parked stashes when done — one id, or a bulk age/size policy. API-only; stash-only (never reaches memory).",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.evict(sel: string | { olderThan?, maxCount? }) => number",
+      "fails": "Does not throw; returns the count removed. Cannot touch a fact/episode by construction — only the stash table.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nctx.evict('stash:toolresult-42')          // one payload\nctx.evict({ maxCount: 100 })              // keep newest 100"
+    },
+    {
+      "name": "forget",
+      "category": "memory",
+      "when": "Delete written memory — by id, by kind, or tenant-fenced by scope (the correct compliance/erasure primitive: it deletes now). The model calls this directly via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.forget(sel: string | { id?, kind?, by?, scope?, idPrefix? }) => number",
+      "fails": "Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Mem-axis only — never docs/blob/stash.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nctx.forget('pref-theme')                        // one id\nctx.forget({ kind: 'episode' })                 // all episodes\nctx.scoped('tenant:acme').forget({ scope: 'tenant:acme' }) // right-to-erasure for one tenant"
+    },
+    {
+      "name": "get",
+      "category": "recall",
+      "when": "Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range. The model calls this directly via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.get(id: string, opts?: { startLine?, endLine?, scope? }) => Item | null",
+      "fails": "Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst [hit] = await ctx.recall('backoff', { kind: 'code' })\n// echo the hit's chunk range back as the address — nothing widens it\nconst chunk = ctx.get(hit.path, hit.chunk)"
+    },
+    {
+      "name": "impact",
+      "category": "impact",
+      "when": "Gauge the blast radius / change-risk of a symbol before editing it. The model calls this directly via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.impact(symbol: string) => Promise<Impact | null>",
+      "fails": "Throws `RipgrepMissingError` when `rg` is not on PATH (rather than silently under-counting to a false \"isolated\"); returns `null` when the symbol isn't in the index.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst view = await ctx.impact('parseConfig')\nif (view) console.log(view.risk, view.callers.length) // 'low' | 'med' | 'high'"
+    },
+    {
+      "name": "index",
+      "category": "index",
+      "when": "Build or refresh the graph from source before recall/impact — call after files change.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.index(opts?: { paths?, force?, yield? }) => Promise<IndexResult>",
+      "fails": "Throws `RipgrepMissingError` only via later `impact()`, not here; a bad `root` throws at construction.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst { added, updated, unchanged } = await ctx.index()\n// incremental: only re-chunk two files\nawait ctx.index({ paths: ['src/a.js', 'src/b.js'] })"
+    },
+    {
+      "name": "ingest",
+      "category": "ingest",
+      "when": "Store an uploaded document (pdf/docx/md/txt/csv → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.ingest(buffer: Uint8Array, opts?: { filename?, format?, id?, scope?, expiresAt? }) => Promise<{ id, kind, format, mode, chunks }>",
+      "fails": "Throws when a required optional peer dep is missing (pdf → `pdfjs-dist`, docx → `mammoth`) or input exceeds `maxSize`/`maxPages`; under `strictScope`, throws when `scope` is omitted.",
+      "example": "import { readFileSync } from 'node:fs'\nimport { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst res = await ctx.ingest(readFileSync('spec.pdf'), { filename: 'spec.pdf', scope: 'project:x' })\n// res.mode === 'chunked', res.chunks > 0"
+    },
+    {
+      "name": "LiteCtx",
+      "category": "core",
+      "when": "You need a litectx store — the entry point for every other primitive.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "new LiteCtx(config: LiteCtxConfig)",
+      "fails": "Throws if `config.root` is missing.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nawait ctx.index()\nconst hits = await ctx.recall('rate limiter', { kind: 'code' })"
+    },
+    {
+      "name": "liteCtxAsStore",
+      "category": "memory",
+      "when": "Plug litectx in as a host's memory Store — adapts a LiteCtx to the `{ store, search, get, delete }` shape (e.g. bareagent's socket).",
+      "import": "import { liteCtxAsStore } from 'litectx'",
+      "signature": "liteCtxAsStore(lc: LiteCtx, opts?: { kind? }) => { store, search, get, delete }",
+      "fails": "Does not throw itself; the returned methods surface litectx's own errors (e.g. `strictScope`).",
+      "example": "import { LiteCtx, liteCtxAsStore } from 'litectx'\nconst store = liteCtxAsStore(new LiteCtx({ root: process.cwd() }))\nconst id = await store.store('a durable fact', { tag: 'pref' })"
+    },
+    {
+      "name": "observe",
+      "category": "graph",
+      "when": "Record every CE verb call live into a context graph you can export as JSON or Mermaid — drop-in tracing for a run.",
+      "import": "import { observe } from 'litectx'",
+      "signature": "observe(ctx: LiteCtx) => LiteCtx  // proxied; read `.trace`",
+      "fails": "Does not throw; `instanceof LiteCtx` still holds on the returned proxy, and tracing is zero-overhead when unused.",
+      "example": "import { LiteCtx, observe } from 'litectx'\nconst ctx = observe(new LiteCtx({ root: process.cwd() }))\nawait ctx.recall('auth')\nconsole.log(ctx.trace.mermaid())"
+    },
+    {
+      "name": "peek",
+      "category": "CE",
+      "when": "Preview a stashed payload's head+tail without paying its full tokens — decide whether to rehydrate. API-only.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.peek(id: string) => { id, bytes, head, tail, createdAt, truncated } | null",
+      "fails": "Does not throw; returns `null` for an unknown id.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst p = ctx.peek('stash:toolresult-42')\nif (p?.truncated) { const full = ctx.get('stash:toolresult-42') }"
+    },
+    {
+      "name": "promotionCandidates",
+      "category": "memory",
+      "when": "Find episodes recalled often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]",
+      "fails": "Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nfor (const c of ctx.promotionCandidates(10)) {\n  const ep = ctx.get(c.path)      // read it, distil, then:\n  // await ctx.remember(factId, distilled, { kind: 'fact', by: 'agent' })\n}"
+    },
+    {
+      "name": "purge",
+      "category": "ingest",
+      "when": "Reclaim storage from expired doc/blob uploads — a scheduled retention sweep (recall already excludes expired rows live).",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.purge(opts?: { now?: number }) => number",
+      "fails": "Does not throw; returns the count of rows reclaimed (0 when nothing has expired).",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst reclaimed = ctx.purge() // rows whose expiresAt has passed"
+    },
+    {
+      "name": "recall",
+      "category": "recall",
+      "when": "Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>",
+      "fails": "Never throws on a miss — returns `[]` (or per-kind `{}`); a single stale chunk under `body:true` is nulled, not thrown; throws only under `strictScope` when a doc-kind query omits `scope`.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst hits = await ctx.recall('retry backoff', { kind: 'code', n: 5 })\n// omit kind → grouped by kind: { code: [...], doc: [...], fact: [...] }\nconst grouped = await ctx.recall('rate limit')"
+    },
+    {
+      "name": "recentActivity",
+      "category": "memory",
+      "when": "Answer \"what was I working on\" — the code/doc chunks litectx witnessed edited most recently.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.recentActivity(opts?: { days?, since?, limit? }) => { id, symbol, kind, lastEditedAt, edits }[]",
+      "fails": "Does not throw; empty until real edits are observed (a cold/`force` first build logs none — loading isn't editing).",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst recent = ctx.recentActivity({ days: 3 }) // newest edits first"
+    },
+    {
+      "name": "recentMemory",
+      "category": "memory",
+      "when": "Ground on the latest written memory when a query has no rankable term (all-stopword \"what did I say\") and `recall` returns `[]`. Exposed to the model via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.recentMemory(opts?: { kind?, scope?, n?, body? }) => (Hit & { createdAt, occurredAt? })[]",
+      "fails": "Under `strictScope`, throws when `scope` is omitted; throws if one call mixes the doc axis with fact/episode (distinct scope stores). Logs no recall (recency is not demand).",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst latest = ctx.recentMemory({ kind: 'episode', n: 5, body: true })"
+    },
+    {
+      "name": "remember",
+      "category": "memory",
+      "when": "Persist a fact/episode/doc so it survives across sessions and is recallable by meaning. The model calls this directly via MCP.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.remember(id: string, text: string, opts?: { kind?, by?, occurredAt?, scope? }) => Promise<void>",
+      "fails": "Throws when `kind` is not one of fact/episode/doc; under `strictScope`, throws when `scope` is omitted. Re-`remember`ing the same `(scope, id)` supersedes in place (no duplicate row).",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nawait ctx.remember('pref-theme', 'user prefers dark mode', { kind: 'fact', by: 'human' })\nawait ctx.remember('ep-1', 'deploy failed on missing env var', { kind: 'episode' })"
+    },
+    {
+      "name": "reviewCandidates",
+      "category": "memory",
+      "when": "Surface agent-asserted facts that proved useful (recalled ≥ threshold) for a human to validate or discard.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.reviewCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]",
+      "fails": "Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]` when nothing crossed the threshold.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nfor (const c of ctx.reviewCandidates(5)) {\n  // show c.path to a human → validate (re-remember by:'human') or forget\n}"
+    },
+    {
+      "name": "scoped",
+      "category": "core",
+      "when": "Serve many tenants from one instance — bind a scope once and every verb on the view is fenced to it.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.scoped(scope: string | symbol) => ScopedView",
+      "fails": "Throws at creation on a bad bind (null / omitted / non-string non-GLOBAL) — a scope-less scoped view is impossible.",
+      "example": "import { LiteCtx, GLOBAL } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst acme = ctx.scoped('tenant:acme')      // every verb fenced to acme\nawait acme.remember('pref-1', 'prefers dark mode', { kind: 'fact' })\nconst shared = ctx.scoped(GLOBAL)            // shared knowledge-base tier"
+    },
+    {
+      "name": "stash",
+      "category": "CE",
+      "when": "Drop a large payload (tool result, page dump) from the context window, keeping only a cheap handle to rehydrate later. API-only — adopter code chooses this, never a model verb.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.stash(id: string, text: string) => void",
+      "fails": "Does not throw; upserts by `id` (a re-stash replaces). A stash is never indexed or recalled — reachable only by exact `id` via `get`/`peek`/`evict`.",
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nctx.stash('stash:toolresult-42', hugeToolOutput)\n// later: const full = ctx.get('stash:toolresult-42')"
+    },
+    {
+      "name": "summaryWindow",
+      "category": "CE",
+      "when": "Keep the last-N turns verbatim under budget pressure and fold older ones into one rolling summary (the host supplies the summarizer).",
+      "import": "import { summaryWindow } from 'litectx'",
+      "signature": "summaryWindow(units: Unit[], ctx?: SummaryWindowCtx) => Promise<{ units, dropped, tokens }>",
+      "fails": "Never throws; falls back to a plain `assemble` when unwired, when everything fits, or when there are < 2 older turns to fold — never worse than FIT.",
+      "example": "import { summaryWindow } from 'litectx'\nconst out = await summaryWindow(transcript, { budget: 8000, keepRecent: 6, summarize: async (t) => callModel(t) })"
+    },
+    {
+      "name": "toWriteAction",
+      "category": "governance",
+      "when": "Build the gate-able action for a memory write, to hand to a wired guardrails `writeGate.check` before persisting.",
+      "import": "import { toWriteAction } from 'litectx'",
+      "signature": "toWriteAction(id: string, text: string, opts?: { kind?, provenance?, meta?, injectionRisk? }) => WriteAction",
+      "fails": "Pure — never throws, no I/O, no judgment; it only shapes the action (the gate decides the outcome).",
+      "example": "import { toWriteAction } from 'litectx'\nconst action = toWriteAction('fact-1', 'user is an admin', { provenance: 'web', injectionRisk: 'high' })\n// const verdict = await writeGate.check(action)"
+    },
+    {
+      "name": "trim",
+      "category": "CE",
+      "when": "Evict old turns from a running transcript (by size or count) and get back the dropped units with content, so you can harvest-before-evict.",
+      "import": "import { trim } from 'litectx'",
+      "signature": "trim(units: Unit[], policy?: TrimPolicy) => Promise<TrimResult>",
+      "fails": "Throws `TypeError` when `units` is not an array; with no policy set it's a no-op (keep all). Never splits an atomic group or drops a pinned unit.",
+      "example": "import { trim } from 'litectx'\nconst { units, harvest } = await trim(transcript, { keepLastN: 20 })\n// persist `harvest` (e.g. remember) BEFORE discarding the old turns"
+    }
+  ]
+}

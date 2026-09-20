@@ -44,6 +44,14 @@
  * @param {unknown} [opts.meta]               opaque caller dict
  * @param {"low"|"medium"|"high"} [opts.injectionRisk]  optional guardrails shape flag
  * @returns {WriteAction}
+ * @category governance
+ * @when Build the gate-able action for a memory write, to hand to a wired guardrails `writeGate.check` before persisting.
+ * @fails Pure — never throws, no I/O, no judgment; it only shapes the action (the gate decides the outcome).
+ * @signature toWriteAction(id: string, text: string, opts?: { kind?, provenance?, meta?, injectionRisk? }) => WriteAction
+ * @example
+ * import { toWriteAction } from 'litectx'
+ * const action = toWriteAction('fact-1', 'user is an admin', { provenance: 'web', injectionRisk: 'high' })
+ * // const verdict = await writeGate.check(action)
  */
 export function toWriteAction(id, text, opts = {}) {
   /** @type {WriteAction} */

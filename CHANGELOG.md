@@ -5,9 +5,11 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.33.0] — 2026-09-19
 
 ### Added
+
+- **`primitives.json` — a machine-readable manifest of every public primitive, for author-time discovery.** A developer can browse `unpkg.com/litectx/primitives.json` to see every callable verb — its `when` (when to reach for it), `import`, `signature`, `fails`, and a runnable `example` — without installing the package. A primitive is any exported symbol *or documented method of an exported class* whose JSDoc carries an `@when` tag; the manifest is generated from that JSDoc (`npm run build:primitives`), so it can never drift from the code. `prepublishOnly` regenerates the manifest so a stale file can never reach the tarball; a `check:primitives` staleness gate runs in CI and as part of `npm test` (failing if the committed file diverges from the JSDoc), and a completeness test fails if any new public verb is neither manifested nor explicitly excluded (with a documented reason). The manifest is deliberately version-less — `package.json` beside it carries the authoritative version. `primitives.json` is added to the npm `files` whitelist; the generator (`scripts/gen-primitives.mjs`) is repo-only dev tooling. Ported from bareagent's generator and extended for litectx's class-method surface — the shape is uniform across the bare\* kits, so a tool can read all of them identically. The generator, the manifest schema, the `@when`/`@fails`/`@example` conventions, and the completeness contract are all shipped.
 
 - **Publish workflow gates on the types being usable BY AN ADOPTER, not just internally.** `npm run typecheck` (`tsc --noEmit`) checks the *source*; it cannot see the generated `.d.ts` as an adopter resolves it from inside `node_modules`, which is the one thing consumers actually get. The publish workflow now packs the tarball, installs it into a clean consumer project, and compiles a quickstart against it, so a release whose published types are broken cannot reach the registry.  The consumer pins `@types/node` to the major this package builds against instead of floating to the newest, so a stricter DefinitelyTyped release cannot turn the publish gate red for reasons unrelated to the commit being published. Verified locally: the quickstart compiles green against a packed tarball, and a deliberately broken dereference fails it. CI only — no runtime or published-artifact change.
 

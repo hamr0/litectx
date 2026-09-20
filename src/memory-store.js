@@ -49,6 +49,14 @@ function reassembleMeta(x) {
  *   get(id: string): { id: string, content: string|null, metadata: Record<string, unknown> } | null,
  *   delete(id: string): void,
  * }}
+ * @category memory
+ * @when Plug litectx in as a host's memory Store — adapts a LiteCtx to the `{ store, search, get, delete }` shape (e.g. bareagent's socket).
+ * @fails Does not throw itself; the returned methods surface litectx's own errors (e.g. `strictScope`).
+ * @signature liteCtxAsStore(lc: LiteCtx, opts?: { kind? }) => { store, search, get, delete }
+ * @example
+ * import { LiteCtx, liteCtxAsStore } from 'litectx'
+ * const store = liteCtxAsStore(new LiteCtx({ root: process.cwd() }))
+ * const id = await store.store('a durable fact', { tag: 'pref' })
  */
 export function liteCtxAsStore(lc, opts = {}) {
   const defaultKind = opts.kind ?? "fact";

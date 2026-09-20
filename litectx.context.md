@@ -1208,6 +1208,32 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 > `nodes` schema is the substrate for in-progress slices and may change. Treat
 > `index` / `recall` / `size` / `close` as the stable surface.
 
+## Author-time discovery — `primitives.json`
+
+The package ships a **`primitives.json`** manifest at its root: a machine-readable
+index of every public primitive, meant for *author-time* discovery (browse
+`unpkg.com/litectx/primitives.json` before you install, or point a tool at it).
+It is **not** the runtime tool surface — the MCP server is that.
+
+A primitive is any exported symbol *or documented method of an exported class*
+whose JSDoc carries an `@when` tag. Each entry is a uniform 7-field object —
+`{ name, category, when, import, signature, fails, example }` — so a tool can read
+this manifest and the sibling `bare*` kits' manifests identically. The
+MCP-vs-code-only distinction (which verbs the model calls directly vs which
+adopter code drives) lives in the `when` line, not a separate field. The manifest
+is deliberately **version-less** — `package.json` beside it in the same tarball
+carries the authoritative version.
+
+It is **generated from the JSDoc**, never hand-edited: `npm run build:primitives`
+writes it, and `npm run check:primitives` fails if the committed file diverges
+from the JSDoc. `prepublishOnly` regenerates the manifest (so the tarball is never
+stale), while the `check` staleness gate runs in CI and as part of `npm test`, and
+a completeness test fails if a new public verb is neither manifested nor explicitly
+excluded. So the manifest cannot
+drift from the code. (Not every export is a primitive — error classes you catch,
+vocabulary constants you read, and low-level tokenizer/embedder internals are
+deliberately excluded; they remain in the API, just not in the discovery surface.)
+
 ## Consumption surfaces — CLI & MCP (slice 10)
 
 The library is the core; two **thin adapters** ship in the same package, both wrapping the
