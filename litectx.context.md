@@ -1212,8 +1212,10 @@ const hits = await memory.search("how does auth work");           // [{ id, cont
 
 The package ships a **`primitives.json`** manifest at its root: a machine-readable
 index of every public primitive, meant for *author-time* discovery (browse
-`unpkg.com/litectx/primitives.json` before you install, or point a tool at it).
-It is **not** the runtime tool surface — the MCP server is that.
+`unpkg.com/litectx/primitives.json` before you install, read it off disk, or —
+since v0.33.1 — import it by subpath: `import manifest from 'litectx/primitives.json'
+with { type: 'json' }`). It is **not** the runtime tool surface — the MCP server
+is that.
 
 A primitive is any exported symbol *or documented method of an exported class*
 whose JSDoc carries an `@when` tag. Each entry is a uniform 7-field object —

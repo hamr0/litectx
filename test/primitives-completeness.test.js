@@ -82,6 +82,16 @@ test("exclusion allow-list has no stale entries", () => {
     `EXCLUDED entries that are now manifested or no longer on the public surface — remove them:\n  ${stale.join("\n  ")}`);
 });
 
+test("primitives.json is reachable via the package exports subpath", () => {
+  // Shipping the file in `files` is not enough: with an `exports` map present,
+  // Node blocks any subpath not listed (ERR_PACKAGE_PATH_NOT_EXPORTED), so a
+  // consumer's `import 'litectx/primitives.json'` fails unless the subpath is
+  // exported. Guards the 0.33.1 fix.
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  assert.equal(pkg.exports?.["./primitives.json"], "./primitives.json",
+    "package.json exports must map './primitives.json' so consumers can import the manifest by subpath");
+});
+
 test("committed primitives.json is not stale — matches the generator's current output", () => {
   // Name coverage + field presence above do NOT catch a reworded @when/@fails that
   // was never regenerated. This runs the generator's own `--check` so `npm test`

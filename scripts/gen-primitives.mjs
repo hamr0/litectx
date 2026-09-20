@@ -150,7 +150,12 @@ async function exportIndex() {
   for (const [sub, entry] of Object.entries(exp)) {
     const file = typeof entry === "string" ? entry : entry.default || entry.import || entry.require;
     if (!file) continue;
-    const abs = resolve(CWD, typeof file === "string" ? file : file.default);
+    const target = typeof file === "string" ? file : file.default;
+    // Only JS barrels export symbols. Skip a data subpath (e.g. "./primitives.json" itself) — importing
+    // it would throw ("needs an import attribute of type: json") and, since a barrel-import failure is
+    // fatal by design, abort the whole generation.
+    if (typeof target !== "string" || !/\.(js|mjs|cjs)$/.test(target)) continue;
+    const abs = resolve(CWD, target);
     if (!existsSync(abs)) continue;
     let names = [];
     // Runtime import (not a static scan) so `export { X } from './y'` re-exports resolve to their
