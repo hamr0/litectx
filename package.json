@@ -39,7 +39,8 @@
     "bench:assemble": "node poc/assemble-bench.mjs",
     "bench:summary": "node poc/summarywindow-bench.mjs",
     "bench:all": "npm run bench && npm run bench:impact && npm run bench:memory && npm run bench:assemble && npm run bench:summary",
-    "bench:ablation": "node poc/run.mjs aurora && node poc/run.mjs gitdone"
+    "bench:ablation": "node poc/run.mjs aurora && node poc/run.mjs gitdone",
+    "check:lockfile": "node scripts/check-lockfile.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^11.8.1",
