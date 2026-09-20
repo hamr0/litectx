@@ -5,6 +5,12 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.33.1] — 2026-09-20
+
+### Fixed
+
+- **`primitives.json` is now importable by subpath.** v0.33.0 shipped the manifest in the `files` whitelist, but the `exports` map defined only `"."`; with an `exports` map present Node blocks every unlisted subpath, so a consumer's `import 'litectx/primitives.json'` (or `require`) failed with `ERR_PACKAGE_PATH_NOT_EXPORTED`. Added `"./primitives.json": "./primitives.json"` to `exports`. The documented primary path (browsing on unpkg, or reading the file off disk) was unaffected — this only restores the package-subpath import. A regression test asserts the export mapping, verified by installing the packed tarball into a clean project and importing the subpath via both CJS `require` and ESM `import … with { type: 'json' }`.
+
 ## [0.33.0] — 2026-09-19
 
 ### Added
