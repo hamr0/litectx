@@ -9,6 +9,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **A broken `exports` map now fails the test suite with a clear, named message instead of a misleading "stale manifest" error.** The primitives completeness suite resolved the public surface by importing the barrel file directly, so a broken `exports` target (a subpath whose file was renamed or removed) surfaced only indirectly — the generator's staleness `--check` would report every primitive as "not found in any exports barrel", pointing at the manifest rather than the real cause. A new test resolves each JS export subpath *through the package name* (Node self-referencing, the exact lookup a consumer's `import 'litectx'` performs), so a broken mapping fails at that assertion with `export subpath "." does not resolve as "litectx" …`. Mirrors the existing `./primitives.json` subpath resolution test. Test/CI only — no runtime or published-artifact change.
 - **The publish workflow now fails when `package-lock.json`'s version drifts from `package.json`.** npm writes that field on install, so a release that bumps `package.json` without running one leaves it behind — and nothing caught it: `npm ci` fails when the lockfile's *dependency* entries disagree, but never checks the lockfile's copy of the project's own version. `scripts/check-lockfile.mjs` (`npm run check:lockfile`) compares both places npm writes it and runs in the publish workflow. No lockfile is not a failure.
 
 ## [0.33.1] — 2026-09-20
