@@ -110,6 +110,33 @@ test("primitives.json subpath actually resolves and loads at runtime", async () 
   assert.deepStrictEqual(Object.keys(loaded).sort(), ["package", "primitives"]);
 });
 
+test("every JS export subpath resolves through the package name", async () => {
+  // Derive entry points from the exports MAP (never a hardcoded barrel path) and
+  // resolve each through the package NAME via Node self-referencing — the exact
+  // lookup a consumer's `import 'litectx'` / `import 'litectx/x'` performs. A broken
+  // exports target (renamed/missing file, wrong condition) fails HERE with a clean
+  // named failure, instead of surfacing only indirectly as a misleading "stale
+  // manifest" error from the generator's --check. Auto-covers any future JS subpath.
+  // Data subpaths (*.json) are covered by the dedicated primitives.json test above
+  // and skipped here (importing one needs a JSON import attribute).
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const targetOf = (v) => (typeof v === "string" ? v : v?.default ?? v?.import ?? "");
+  const jsSubpaths = Object.entries(pkg.exports || {})
+    .filter(([, v]) => !String(targetOf(v)).endsWith(".json"))
+    .map(([k]) => k);
+  assert.ok(jsSubpaths.includes("."), "expected the main '.' export to be present in the exports map");
+  for (const sub of jsSubpaths) {
+    const spec = sub === "." ? pkg.name : `${pkg.name}/${sub.slice(2)}`;
+    let mod;
+    try {
+      mod = await import(spec);
+    } catch (e) {
+      assert.fail(`export subpath "${sub}" does not resolve as "${spec}" — a consumer's import would break: ${e.code || e.message}`);
+    }
+    assert.ok(Object.keys(mod).length > 0, `export subpath "${sub}" resolved but exported nothing`);
+  }
+});
+
 test("committed primitives.json is not stale — matches the generator's current output", () => {
   // Name coverage + field presence above do NOT catch a reworded @when/@fails that
   // was never regenerated. This runs the generator's own `--check` so `npm test`
