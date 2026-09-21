@@ -61,6 +61,27 @@ const facts = await ctx.recall("how does login work", { kind: "fact" });   // ma
 
 There's a CLI too (`litectx index`, `litectx recall …`) over the same index. Node >= 18. Hand your assistant `litectx.context.md` — it ships in the package and documents every option and the full API.
 
+## For AI agents — the menu
+
+Building tool-calling automation? Read **`primitives.json`** first. It's a compact, machine-readable menu of every verb — the fast path to *using* litectx without reading the docs: load it, pick a verb, call it. Each entry carries `when` to reach for it, its `import`, `signature`, `fails`, and a runnable `example`:
+
+```jsonc
+{
+  "name": "recall",
+  "category": "recall",
+  "when": "Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on).",
+  "import": "import { LiteCtx } from 'litectx'",
+  "signature": "liteCtx.recall(query, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>",
+  "fails": "…",
+  "example": "…"
+}
+// 26 entries across: recall · impact · memory · ingest · index · graph · CE · governance
+```
+
+Browse it on unpkg (`unpkg.com/litectx/primitives.json`) before you install, import it (`import menu from 'litectx/primitives.json' with { type: 'json' }`), or point a tool at it. Generated from the source, so it never drifts.
+
+**Then go deeper:** `litectx.context.md` (the complete contract — every option, the full API, the graph schema) and the [docs](#docs) for the rest.
+
 ## Recipes
 
 **Mount litectx as a host's memory backend** — one line, the host code never changes:
