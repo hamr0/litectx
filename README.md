@@ -14,91 +14,21 @@
 
 **Lightweight, complete context engineering for AI agents — an active-decay memory plus the full write / select / compress / isolate toolkit, in one local library.**
 
-litectx handles the parts of context that trip agents up: remembering across sessions, finding the right code, and fitting it all into the window. It makes the *context* better, not the model smarter — which matters most when the model is small, cheap, or local and the window is tight. It owns no loop and calls no model of its own. Light enough to read in an afternoon; complete enough that you don't reinvent memory, recall, or budget-fitting. One production dependency (`better-sqlite3`). Import what you need, ignore the rest.
-
-> **`npm i litectx`.** Pre-1.0: the surface is stable and CI-gated, but may still evolve (`recall()` / `impact()` / `assemble()` are async). Release detail in the [CHANGELOG](CHANGELOG.md).
+litectx makes the *context* better, not the model smarter — it owns no loop and calls no model of its own. One production dependency (`better-sqlite3`). Pre-1.0: the surface is stable and CI-gated, but may still evolve — see the [CHANGELOG](CHANGELOG.md).
 
 ## Two cores
 
-litectx is built around two things an agent needs and rarely has together.
+**Active-decay memory** — crucial for long-running workflows. What gets used rises in the ranking; what goes stale fades on its own, and the notes that keep proving useful surface as candidates for promotion to durable facts. This is what [bareloop](https://github.com/hamr0/bareloop) and [fwdloop](https://github.com/hamr0/fwdloop) lean on heavily: memory that survives across runs is what lets a workflow actually improve, instead of relearning the same thing every time.
 
-**Active-decay memory — what the agent knows over time.**
-An agent keeps a scratchpad as it works. What gets used rises in the ranking; what goes stale fades on its own. The notes that keep proving useful surface as candidates for promotion to durable facts — which a human can confirm before they stick. Recall matches by *meaning*, not just keywords, and everything survives across sessions and re-indexes. The payoff is a small, relevant slice of memory instead of a growing wall of text — exactly what a weaker, cheaper, or local model needs to stay on track.
+**Context-engineering toolkit** — everyday boilerplate for agentic automation, and for building harnesses, arbiters, or judges. **write** (store it), **select** (find it by meaning, walk the code graph to what's related), **compress** (render full, as a signature, or drop it), **isolate** (park a payload and page it back). A judge is only as good as what's in its window — this is how you fit the right evidence into it.
 
-**Context-engineering toolkit — how you shape a single call.**
-The moves you need to put the right thing in front of the model: **write** (store it), **select** (find it by meaning and walk the code graph to what's related), **compress** (render a symbol in full, as a signature, or dropped — or roll old turns into one summary), **isolate** (park a payload out of context and page it back when needed). Together they fit more signal into a smaller window.
+Both cores ride the same graph, in one local file.
 
-Both cores ride the same graph in one local file — index once, and memory and code recall share it.
+## Start here
 
-## Two ways to use it
-
-**As a code-aware memory layer — over MCP.**
-Point Claude Code, Cursor, or any MCP client at it. It indexes your repo and serves ranked recall, impact (what a change would touch), and a memory you write to and recall by meaning — no code to write.
-
-```jsonc
-{ "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
-// tools: index · recall · impact · get · recent · promotions · remember · forget
-```
-
-**As a context-engineering library — in your own loop.**
-Import it for the full toolkit, including the render and budget verbs MCP doesn't expose (deciding *when* to compress is your loop's job, not a model's):
-
-```js
-import { LiteCtx } from "litectx";
-
-const ctx = new LiteCtx({ root: "/path/to/repo", include: [".ts", ".js", ".py", ".md"] });
-await ctx.index();
-
-const [hit] = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-const blast = await ctx.impact("validateToken");          // what a change would touch + a risk bucket
-
-// a hit points at a SYMBOL — read just that symbol (with its docstring), not its whole file
-const { text } = ctx.get(hit.path, { startLine: hit.chunk.startLine, endLine: hit.chunk.endLine });
-
-await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
-const facts = await ctx.recall("how does login work", { kind: "fact" });   // matches by meaning
-```
-
-There's a CLI too (`litectx index`, `litectx recall …`) over the same index. Node >= 18. Hand your assistant `litectx.context.md` — it ships in the package and documents every option and the full API.
-
-## For AI agents — the menu
-
-Building tool-calling automation? Read **`primitives.json`** first. It's a compact, machine-readable menu of every verb — the fast path to *using* litectx without reading the docs: load it, pick a verb, call it. Each entry carries `when` to reach for it, its `import`, `signature`, `fails`, and a runnable `example`:
-
-```jsonc
-{
-  "name": "recall",
-  "category": "recall",
-  "when": "Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on).",
-  "import": "import { LiteCtx } from 'litectx'",
-  "signature": "liteCtx.recall(query, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>",
-  "fails": "…",
-  "example": "…"
-}
-// 26 entries across: recall · impact · memory · ingest · index · graph · CE · governance
-```
-
-Browse it on unpkg (`unpkg.com/litectx/primitives.json`) before you install, import it (`import menu from 'litectx/primitives.json' with { type: 'json' }`), or point a tool at it. Generated from the source, so it never drifts.
-
-**Then go deeper:** `litectx.context.md` (the complete contract — every option, the full API, the graph schema) and the [docs](#docs) for the rest.
-
-## Recipes
-
-**Mount litectx as a host's memory backend** — one line, the host code never changes:
-
-```js
-import { LiteCtx, liteCtxAsStore } from "litectx";
-const store = liteCtxAsStore(new LiteCtx({ root, embeddings: true }));
-// store now satisfies { store, search, get, delete } — ranked, graph-aware recall in place of a substring scan
-```
-
-**Budget-fit a transcript for the next model call** — deterministic, accounts for every elision:
-
-```js
-import { assemble } from "litectx";
-const { units, dropped, tokens } = await assemble(transcriptUnits, { budget: 8000, task });
-// pinned units never drop; a tool-call + its result are kept or dropped together; dropped[] lists what was cut
-```
+- **MCP client** (Claude Code, Cursor…) → run `litectx-mcp --root /path/to/repo`. Tools: index · recall · impact · get · recent · promotions · remember · forget.
+- **Your own loop** → `npm i litectx`, hand your assistant `litectx.context.md` (the full API, including the render/budget verbs MCP doesn't expose).
+- **AI agent / tool-calling** → read `primitives.json` first (`unpkg.com/litectx/primitives.json`, or import it); generated from source, never drifts.
 
 ## What's inside
 
@@ -106,12 +36,14 @@ One substrate — a typed code+context graph in one file — and the verbs that 
 
 | Group | Verbs | What it does |
 |---|---|---|
-| **Substrate** | `index` · `getNode` · `related` · `get` | Index a repo (routed by file extension) into typed nodes + import edges. Address a node, walk its edges, fetch any body — or **just one chunk** (`get(path, {startLine, endLine})`: the symbol a hit pointed at, docstring included, instead of its whole file). The index **self-heals on upgrade**: it records which litectx built it and re-chunks when that changes, so a chunker fix actually reaches you. |
-| **Select** | `recall` · `impact` | **recall** ranks by relevance now, not just keyword match. **impact** walks callers/callees to what a change touches + a risk bucket. |
-| **Memory** | `remember` · `ingest` · `forget` · `purge` · `recentMemory` · `count` · `enumerate` · `recentActivity` · `promotionCandidates` · `reviewCandidates` | Knowledge that isn't a repo file — facts, episodes, notes, and **uploaded files** (`ingest`: md/PDF/DOCX/txt/log/csv → extract → segment → recall by meaning; **any other file** → stored **byte-exact**, found by filename; optional lazy parser tier). A per-call **`scope`** fences one chat/customer from another across **every kind** — uploads *and* facts/episodes, on **search, direct `get`, `forget`, and write** (a guessed id can't cross tenants; one tenant's wipe can't reach another's memory; re-`remember`ing the same id **supersedes in place per tenant** — a restated fact never piles up and never clobbers another tenant's) — so one shared instance is a complete multi-tenant store (`strictScope: true` + `ctx.scoped(scope)` make a forgotten scope impossible, not just discouraged); optional **`expiresAt`** retention (`purge` reclaims); **`recentMemory`** is the newest-first recency view — the empty-query fallback *and* the conversation window (latest facts/episodes by time, scope-fenced) — and **`count`** sizes a tenant's memory by kind, while **`enumerate`** walks *every* row of a kind exhaustively (rank-free, scope-fenced, paginated) for batch "all of them" passes recall can't answer. Same store, same ranking, carries provenance, survives re-index. Episodes auto-prune on a configurable rolling window (default 30 days). |
+| **Substrate** | `index` · `getNode` · `related` · `get` | Index a repo into typed nodes + import edges. Fetch a whole body or just one chunk. Self-heals on upgrade. |
+| **Select** | `recall` · `impact` | `recall` ranks by relevance, not just keyword match. `impact` walks callers/callees to what a change touches, plus a risk bucket. |
+| **Memory** | `remember` · `ingest` · `forget` · `recentMemory` · `count` · `enumerate` | Facts, episodes, notes, and uploaded files — recall by meaning, per-tenant `scope`, retention, and an exhaustive count/enumerate for "all of them" passes recall can't answer. |
 | **Compress / Isolate** | `assemble` · `summaryWindow` · `trim` · `compress` · `stash` · `peek` · `evict` | Fit a transcript to a budget, roll old turns into a restorable summary, render a symbol full/signature/dropped, park a payload and page it back. |
-| **Sockets** | `liteCtxAsStore` · write-gate | Make a `LiteCtx` satisfy a host's memory interface in one line. A gate-able action and an audit line per memory write. |
-| **Graphs** | `observe` / `trace` · `getNode` / `related` | Two views over the same data: a live run as a pipeline graph, and the code mapped by its edges. |
+| **Sockets** | `liteCtxAsStore` · write-gate | Make a `LiteCtx` satisfy a host's memory interface in one line. A gate-able action and an audit line per write. |
+| **Graphs** | `observe` / `trace` · `getNode` / `related` | A live run as a pipeline graph, and the code mapped by its edges. |
+
+Two recipes cover most uses: mount litectx as a host's memory store (one line, host code never changes), or budget-fit a transcript for the next model call (deterministic, accounts for every elision).
 
 ## Proof — measured, not asserted
 
@@ -119,32 +51,12 @@ Every claim below is a committed benchmark; the core ones run in CI on every pus
 
 | Claim | Result |
 |---|---|
-| graph-aware recall beats plain keyword search | gate cleared on the ablation |
-| recall lands the ground-truth file | per-dataset accuracy floors hold or beat |
 | memory recalls by *meaning*, not just words | paraphrase recall **0.000 → 0.574** with embeddings on; exact matches held |
 | impact never marks a used symbol "safe to remove" | safety violations **= 0**, enforced by exit code |
 | `assemble` keeps a needed unit a tight budget would drop | rescued as a signature (1/1 vs 0/1 without) |
 | `summaryWindow` retains decisions from dropped turns | **3/3** vs **0/3** for a plain trim |
 
-**What it doesn't claim.** litectx scaffolds *search* — it doesn't replace the model's reasoning. In live A/B runs, in-loop recall gave a strong model no net speed win (its bottleneck is thinking, not finding) and a weaker model a consistent nudge, not a rescue. The durable wins are **cross-session memory** (on a fresh session it surfaces the right past decision into your top few results, where keyword search is blind — a shortlist, not a guaranteed top hit) and **impact's safety check**.
-
-## Under the hood
-
-If you want the mechanism: storage is `better-sqlite3` + FTS5 in a single file; code structure comes from tree-sitter; `impact`'s caller sweep shells out to `ripgrep` (no LSP — so `impact` needs `rg` on `PATH`, and throws `RipgrepMissingError` rather than let a symbol read as zero callers when it's absent); ranking and decay use ACT-R-style activation. Semantic recall is an optional local embeddings model (ONNX, no API, ~23 MB downloaded once) — without it, recall falls back to keyword search.
-
-## Where litectx fits
-
-litectx is the **context organ** — what an agent knows and how it's organized. It pairs with [baresuite](https://github.com/hamr0/bareagent) (`bareagent` + `bareguard`), the **runtime** — what an agent does, step by step, safely. They meet at one interface; the dependency points one way.
-
-| | baresuite | litectx |
-|---|---|---|
-| **is a** | runtime / harness | library |
-| **owns** | loop, tools, gates, budgets | recall, impact, graph, memory, the context verbs |
-| **made for** | lightweight one-shot automation | persistent, long-running loops |
-| **has a model/loop** | yes | no — deterministic |
-| **depends on** | imports litectx | nothing (standalone) |
-
-litectx owns the data and the mechanism; baresuite owns the control flow — including the decision of *when* to compress or recall.
+**What it doesn't claim.** litectx scaffolds *search* — it doesn't replace the model's reasoning. A strong model saw no net speed win from in-loop recall; a weaker model got a consistent nudge, not a rescue. The durable wins are cross-session memory and impact's safety check.
 
 ## The bare ecosystem
 
@@ -165,11 +77,9 @@ mix and match, each module works standalone.
 
 ## Docs
 
-| | |
-|---|---|
-| **Integration Guide** (`litectx.context.md`) | The complete adopter contract — every option, the full API, the graph schema. Hand it to your AI assistant. Ships in the package. |
-| **Primitives manifest** (`primitives.json`) | Every verb — when to use it, its signature, and a runnable example — as machine-readable JSON. Browse it on unpkg before you install, or point a tool at it. Ships in the package, generated from the source so it never drifts. |
-| **[CHANGELOG](CHANGELOG.md)** | keep-a-changelog; an entry every release. |
+- **Integration Guide** (`litectx.context.md`) — the complete adopter contract: every option, the full API, the graph schema. Hand it to your AI assistant. Ships in the package.
+- **Primitives manifest** (`primitives.json`) — every verb, when to use it, and a runnable example, as machine-readable JSON. Ships in the package, generated from source.
+- **[CHANGELOG](CHANGELOG.md)** — keep-a-changelog; an entry every release.
 
 ## License
 
