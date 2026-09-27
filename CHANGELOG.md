@@ -5,7 +5,20 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.33.2] — 2026-09-27
+
+### Docs
+
+- **README streamlined (155→86 lines).** Rewritten around two cores framed by
+  who needs them (active-decay memory for long-running workflows; the
+  context-engineering toolkit for harnesses/arbiters/judges), a "Start here"
+  section (MCP client / your own loop / AI agent), a condensed one-line
+  component map, and a shorter proof section. Runnable recipes stay covered by
+  `litectx.context.md`, unlinked verbatim code removed from the README itself.
+- **README "For AI agents" primitives.json quick-menu** — added a "Start
+  here" entry pointing tool-calling agents at `primitives.json`
+  (`unpkg.com/litectx/primitives.json`) as the machine-readable menu, on to
+  `litectx.context.md` and the docs for depth.
 
 ### Fixed
 
