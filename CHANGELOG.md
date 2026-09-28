@@ -5,11 +5,11 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.33.3] — 2026-09-28
 
 ### Docs
 
-- **README no longer claims fwdloop builds on litectx.** fwdloop imports no litectx code; the line overstated the relationship. Part of a fix ledger pass that also corrected `CLAUDE.md`'s claim that the README carries a 6-line quickstart — it doesn't; the quickstart lives in `litectx.context.md`.
+- **README's active-decay-memory paragraph now names only bareloop as the consumer leaning on it today.** fwdloop was dropped from that sentence — it depends on litectx (`^0.32.0`) and does dynamically `import()` it, but as of this writing that import path isn't exercised in a running fwdloop workflow, so naming it as a current consumer overstated the relationship. Not a claim that fwdloop is unrelated to litectx, just that it isn't live yet.
 
 ### Fixed
 
