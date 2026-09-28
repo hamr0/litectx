@@ -32,6 +32,16 @@ function braced(s) {
   }
   return null;
 }
+// Tags parseBlock understands, plus the standard JSDoc tag litectx's @when
+// blocks actually use alongside them (throws — found by scanning every @when
+// block in src/, not guessed). Only a @when block is parsed at all, so an
+// unrecognized tag there is the trap this set catches: a wrapped @when/@fails
+// line that happens to start with `@word` would otherwise read as a fresh,
+// ignored tag and the truncation would pass silently.
+const KNOWN_TAGS = new Set([
+  "param", "returns", "type", "signature", "when", "fails", "category",
+  "name", "example", "throws",
+]);
 function parseBlock(block) {
   const inner = block.replace(/^\/\*\*/, "").replace(/\*\/\s*$/, "");
   const params = []; let returns = null, when = null, fails = null, category = null, primName = null;
@@ -43,10 +53,13 @@ function parseBlock(block) {
   // hasn't been closed yet"; a non-blank, non-tag line while it's set is a
   // continuation. A blank line or the next @tag closes it without a problem.
   const continued = new Set(); let contState = null;
+  const unknownTags = [];
   for (const raw of inner.split("\n").map(strip)) {
     const tag = raw.trimEnd().match(/^@(\w+)\s*(.*)$/);
     if (tag) {
-      mode = null; const [, name, rest] = tag; contState = null;
+      const [, name, rest] = tag;
+      if (mode !== "example" && !KNOWN_TAGS.has(name)) unknownTags.push(name);
+      mode = null; contState = null;
       if (name === "param") {
         const b = braced(rest); const nm = b && b.rest.match(/^\s*(\[?)([\w.$]+)/);
         if (b && nm && !nm[2].includes(".")) params.push({ name: nm[2], type: cleanType(b.inner), optional: nm[1] === "[" });
@@ -73,7 +86,7 @@ function parseBlock(block) {
   const indents = example.filter((l) => l.trim()).map((l) => l.match(/^\s*/)[0].length);
   const pad = indents.length ? Math.min(...indents) : 0;
   if (pad) for (let i = 0; i < example.length; i++) example[i] = example[i].slice(pad);
-  return { params, returns, type, sigOverride, when, fails, category, primName, example: example.join("\n"), continued: [...continued] };
+  return { params, returns, type, sigOverride, when, fails, category, primName, example: example.join("\n"), continued: [...continued], unknownTags };
 }
 
 // JS keywords / accessor prefixes a method-shaped line could start with — a
@@ -215,6 +228,7 @@ for (const rel of jsFiles) {
     const name = p.primName || sym.name; // @name overrides an aliased export
     for (const req of ["when", "fails", "example"]) if (!p[req]) problems.push(`${name}: missing @${req}`);
     for (const tag of p.continued) problems.push(`${name}: @${tag} continues onto a second line — keep @when/@fails on one line (the manifest reads only the first)`);
+    for (const tag of p.unknownTags) problems.push(`${name}: unknown tag @${tag} — if this is a wrapped @when/@fails line, keep them on one line; otherwise add the tag to KNOWN_TAGS`);
     // import: a method is reached through its class, so look up the CLASS name.
     const importName = sym.kind === "method" ? sym.className : name;
     const spec = imports.get(importName);
