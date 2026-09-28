@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as barrel from "../src/index.js";
 
@@ -159,6 +159,77 @@ test("manifest is well-formed: every entry has the required fields", () => {
 
 test("manifest shape is exactly {package, primitives} — pins the no-version decision", () => {
   assert.deepStrictEqual(Object.keys(manifest).sort(), ["package", "primitives"]);
+});
+
+// The generator's CWD is process.cwd() (no hardcoded root), so it can be pointed
+// at a throwaway fixture package via the child's `cwd` — the cleanest way to prove
+// a generator-level failure mode without mutating this repo's own source tree.
+function writeFixturePkg(dir, { whenLine }) {
+  writeFileSync(join(dir, "package.json"), JSON.stringify({
+    name: "fixture-pkg", version: "0.0.0", type: "module", main: "./index.js",
+  }));
+  writeFileSync(join(dir, "index.js"), `export { foo } from './src/foo.js';\n`);
+  mkdirSync(join(dir, "src"));
+  writeFileSync(join(dir, "src", "foo.js"), `/**
+ * ${whenLine}
+ * @fails never
+ * @example
+ * foo()
+ */
+export function foo() {}
+`);
+}
+
+test("a continued @when fails the generator loudly instead of silently truncating", () => {
+  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "prim-gen-cont-"));
+  try {
+    writeFixturePkg(dir, { whenLine: "@when this description\n * wraps onto a second line" });
+    let err;
+    try {
+      execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
+    } catch (e) {
+      err = e;
+    }
+    assert.ok(err, "generator should exit non-zero on a continued @when");
+    assert.strictEqual(err.status, 1);
+    assert.match(
+      err.stderr.toString(),
+      /foo: @when continues onto a second line — keep @when\/@fails on one line \(the manifest reads only the first\)/
+    );
+    // No primitives.json should have been written on a failed generation.
+    assert.strictEqual(existsSync(join(dir, "primitives.json")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an intervening @tag closes the @when window — prose after it is not a continuation", () => {
+  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "prim-gen-close-"));
+  try {
+    writeFixturePkg(dir, { whenLine: "@when one liner\n * @category core\n * prose under the category tag" });
+    execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
+    const out = JSON.parse(readFileSync(join(dir, "primitives.json"), "utf8"));
+    assert.strictEqual(out.primitives[0].when, "one liner");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a single-line @when generates cleanly", () => {
+  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "prim-gen-ok-"));
+  try {
+    writeFixturePkg(dir, { whenLine: "@when this description stays on one line" });
+    execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
+    const out = JSON.parse(readFileSync(join(dir, "primitives.json"), "utf8"));
+    assert.strictEqual(out.primitives.length, 1);
+    assert.strictEqual(out.primitives[0].name, "foo");
+    assert.strictEqual(out.primitives[0].when, "this description stays on one line");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("every @example is syntactically valid ESM", () => {

@@ -5,6 +5,12 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Fixed
+
+- **The primitives generator now rejects a `@when`/`@fails` that wraps onto a second line instead of silently truncating it.** `parseBlock` read only the tag's first line, so a wrapped entry was cut mid-sentence in `primitives.json`, and `check:primitives` still passed because it compares against its own truncated output. A continuation line is now a named problem and the generator exits non-zero. Fail-loud rather than joining lines, because the entries are one-line catalog text. Latent in litectx: no `@when`/`@fails` in `src/` wraps today, so `primitives.json` is byte-identical. The same bug had already shipped a truncated entry in a sibling package. Ported from bare-agent `89b693d`. Build/test only, no runtime change.
+
 ## [0.33.2] — 2026-09-27
 
 ### Docs
