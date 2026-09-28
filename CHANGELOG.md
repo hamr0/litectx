@@ -5,6 +5,16 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.33.3] — 2026-09-28
+
+### Docs
+
+- **README's active-decay-memory paragraph now names only bareloop as the consumer leaning on it today.** fwdloop was dropped from that sentence — it depends on litectx (`^0.32.0`) and does dynamically `import()` it, but as of this writing that import path isn't exercised in a running fwdloop workflow, so naming it as a current consumer overstated the relationship. Not a claim that fwdloop is unrelated to litectx, just that it isn't live yet.
+
+### Fixed
+
+- **litectx's primitives generator is now the shared core used by bare-agent and bareguard**, vendored byte-identically (bare-agent `da2ecd8`) and pinned by sha256 in `scripts/primitives-core.hashes.json` — a test fails on any local edit to the vendored files. Repo-specific parts (source roots, category inference, method-receiver names) live in `primitives.config.mjs`. It now rejects, with a named error, instead of silently truncating or overwriting: a `@when`/`@fails`/`@category`/`@name`/`@signature` body that spans more than one line; an unknown tag inside a `@when` block; any line inside `@example` that starts with `@` (`@example` must be the last tag in a block); an indented `@`-led line outside `@example`; and two `@when` blocks resolving to the same catalog name. The old per-repo parser dropped wrapped tag text and truncated examples at `@`-lines while `check:primitives` still passed, because it compared against its own (equally truncated) output — the same bug had already shipped a truncated entry in a sibling package. Latent in litectx: `primitives.json` is byte-identical; no source changes. Build/test only, no runtime change.
+
 ## [0.33.2] — 2026-09-27
 
 ### Docs

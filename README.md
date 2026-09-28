@@ -18,7 +18,7 @@ litectx makes the *context* better, not the model smarter — it owns no loop an
 
 ## Two cores
 
-**Active-decay memory** — crucial for long-running workflows. What gets used rises in the ranking; what goes stale fades on its own, and the notes that keep proving useful surface as candidates for promotion to durable facts. This is what [bareloop](https://github.com/hamr0/bareloop) and [fwdloop](https://github.com/hamr0/fwdloop) lean on heavily: memory that survives across runs is what lets a workflow actually improve, instead of relearning the same thing every time.
+**Active-decay memory** — crucial for long-running workflows. What gets used rises in the ranking; what goes stale fades on its own, and the notes that keep proving useful surface as candidates for promotion to durable facts. This is what [bareloop](https://github.com/hamr0/bareloop) leans on heavily: memory that survives across runs is what lets a workflow actually improve, instead of relearning the same thing every time.
 
 **Context-engineering toolkit** — everyday boilerplate for agentic automation, and for building harnesses, arbiters, or judges. **write** (store it), **select** (find it by meaning, walk the code graph to what's related), **compress** (render full, as a signature, or drop it), **isolate** (park a payload and page it back). A judge is only as good as what's in its window — this is how you fit the right evidence into it.
 

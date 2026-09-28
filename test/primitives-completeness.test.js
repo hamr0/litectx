@@ -161,6 +161,14 @@ test("manifest shape is exactly {package, primitives} — pins the no-version de
   assert.deepStrictEqual(Object.keys(manifest).sort(), ["package", "primitives"]);
 });
 
+// Generator-mechanics fixture tests (continued @when/@fails/@category, unknown
+// tags inside a @when block, @example's strict last-tag/no-@-line rule, a
+// single-line @when generating cleanly) moved to the shared, vendored
+// test/primitives-core.test.mjs — they test the CORE's behavior, not anything
+// litectx-specific, so they belong there once, not duplicated/drifted here.
+// What stays below is litectx-specific: manifest completeness/shape/subpath
+// guards, and every REAL @example's ESM validity.
+
 test("every @example is syntactically valid ESM", () => {
   // A copy-paste example that does not parse is a confident wrong answer.
   // node --check, never executes.
