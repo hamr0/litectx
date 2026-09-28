@@ -215,10 +215,15 @@ directly by an installed consumer (`import 'litectx/primitives.json'` via a dedi
 subpath, added v0.33.1) and browsable on unpkg without installing. It is *not* the runtime tool surface (MCP is that) — the MCP-vs-code-only
 tier is encoded in each entry's `when` line, keeping a **uniform 7-field schema**
 (`{name, category, when, import, signature, fails, example}`) shared across the `bare*` kits. The
-generator was ported from bareagent and **extended for litectx's shape**: litectx's verbs are methods
-on `LiteCtx`/`ScopedView`, not top-level exports, so the symbol walker and the completeness test both
+generator core (`scripts/primitives-core.mjs`) is now **vendored byte-identically** across bare-agent,
+bareguard and litectx, pinned by a per-repo sha256 test (`scripts/primitives-core.hashes.json`) that
+fails loudly on any local edit — a fix lands once, in bare-agent, and is deliberately re-vendored
+everywhere rather than silently drifting. Only what genuinely differs per repo — source roots, category
+inference, and the class-method receiver-name map — lives in each repo's own `primitives.config.mjs`.
+Class methods are a resolvable symbol kind in the shared core itself (litectx's verbs are methods on
+`LiteCtx`/`ScopedView`, not top-level exports, so the symbol walker and the completeness test both
 enumerate documented class methods (`getOwnPropertyNames(Cls.prototype)`) — without that, manifesting
-the `LiteCtx` class alone would be a toothless guard. One canonical entry per verb (the `LiteCtx`
+the `LiteCtx` class alone would be a toothless guard). One canonical entry per verb (the `LiteCtx`
 method; the `ScopedView` mirror is noted in prose). Deliberately **version-less** (package.json beside
 it carries the version). A `check:primitives` staleness gate (CI + `npm test`) and a completeness test
 (a new public verb must be manifested or explicitly excluded, with a reason) keep it from drifting.
