@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as barrel from "../src/index.js";
 
@@ -161,138 +161,13 @@ test("manifest shape is exactly {package, primitives} — pins the no-version de
   assert.deepStrictEqual(Object.keys(manifest).sort(), ["package", "primitives"]);
 });
 
-// The generator's CWD is process.cwd() (no hardcoded root), so it can be pointed
-// at a throwaway fixture package via the child's `cwd` — the cleanest way to prove
-// a generator-level failure mode without mutating this repo's own source tree.
-function writeFixturePkg(dir, { whenLine }) {
-  writeFileSync(join(dir, "package.json"), JSON.stringify({
-    name: "fixture-pkg", version: "0.0.0", type: "module", main: "./index.js",
-  }));
-  writeFileSync(join(dir, "index.js"), `export { foo } from './src/foo.js';\n`);
-  mkdirSync(join(dir, "src"));
-  writeFileSync(join(dir, "src", "foo.js"), `/**
- * ${whenLine}
- * @fails never
- * @example
- * foo()
- */
-export function foo() {}
-`);
-}
-
-test("a continued @when fails the generator loudly instead of silently truncating", () => {
-  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "prim-gen-cont-"));
-  try {
-    writeFixturePkg(dir, { whenLine: "@when this description\n * wraps onto a second line" });
-    let err;
-    try {
-      execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
-    } catch (e) {
-      err = e;
-    }
-    assert.ok(err, "generator should exit non-zero on a continued @when");
-    assert.strictEqual(err.status, 1);
-    assert.match(
-      err.stderr.toString(),
-      /foo: @when continues onto a second line — keep @when\/@fails on one line \(the manifest reads only the first\)/
-    );
-    // No primitives.json should have been written on a failed generation.
-    assert.strictEqual(existsSync(join(dir, "primitives.json")), false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a wrapped @when line that starts with an unknown @word fails loudly", () => {
-  // The continuation check only sees NON-tag lines; a wrapped line beginning with
-  // `@word` parses as a fresh tag. Without the KNOWN_TAGS check it was silently
-  // ignored — @when truncated, exit 0.
-  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "prim-gen-unk-"));
-  try {
-    writeFixturePkg(dir, { whenLine: "@when this description wraps and the next line\n * @typo starts with an at-word" });
-    let err;
-    try {
-      execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
-    } catch (e) {
-      err = e;
-    }
-    assert.ok(err, "generator should exit non-zero on an unknown tag in a @when block");
-    assert.strictEqual(err.status, 1);
-    assert.match(err.stderr.toString(), /foo: unknown tag @typo — if this is a wrapped @when\/@fails line/);
-    assert.strictEqual(existsSync(join(dir, "primitives.json")), false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a @word line inside @example does not trip the unknown-tag check", () => {
-  // The unknown-tag guard is scoped to `mode !== "example"` on purpose: real
-  // code examples legitimately contain `@word`-shaped lines (TS/JS decorators
-  // like `@Component()`) that are not JSDoc tags at all. writeFixturePkg's
-  // fixed `@example\n * foo()` body can't express this, so this fixture is
-  // written inline. Separately (not fixed here, just recorded): the line
-  // still ends the example body early, because the tag-detection branch sets
-  // `mode = null` unconditionally — `example` truncates to "foo()", silently
-  // dropping the decorator and the line after it. That is a pre-existing,
-  // separate hole from the one this suite guards.
-  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "prim-gen-example-atword-"));
-  try {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({
-      name: "fixture-pkg", version: "0.0.0", type: "module", main: "./index.js",
-    }));
-    writeFileSync(join(dir, "index.js"), `export { foo } from './src/foo.js';\n`);
-    mkdirSync(join(dir, "src"));
-    writeFileSync(join(dir, "src", "foo.js"), `/**
- * @when something
- * @fails never
- * @example
- * foo()
- * @Component()
- * class Widget {}
- */
-export function foo() {}
-`);
-    execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(join(dir, "primitives.json"), "utf8"));
-    // Recorded, not asserted-against as a target: the example is truncated to
-    // "foo()" — the decorator line ends example mode early. The point of this
-    // test is only that this does NOT make the generator exit non-zero.
-    assert.strictEqual(out.primitives[0].example, "foo()");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("an intervening @tag closes the @when window — prose after it is not a continuation", () => {
-  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "prim-gen-close-"));
-  try {
-    writeFixturePkg(dir, { whenLine: "@when one liner\n * @category core\n * prose under the category tag" });
-    execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(join(dir, "primitives.json"), "utf8"));
-    assert.strictEqual(out.primitives[0].when, "one liner");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test("a single-line @when generates cleanly", () => {
-  const genScript = join(ROOT, "scripts", "gen-primitives.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "prim-gen-ok-"));
-  try {
-    writeFixturePkg(dir, { whenLine: "@when this description stays on one line" });
-    execFileSync(process.execPath, [genScript], { cwd: dir, stdio: "pipe" });
-    const out = JSON.parse(readFileSync(join(dir, "primitives.json"), "utf8"));
-    assert.strictEqual(out.primitives.length, 1);
-    assert.strictEqual(out.primitives[0].name, "foo");
-    assert.strictEqual(out.primitives[0].when, "this description stays on one line");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+// Generator-mechanics fixture tests (continued @when/@fails/@category, unknown
+// tags inside a @when block, @example's strict last-tag/no-@-line rule, a
+// single-line @when generating cleanly) moved to the shared, vendored
+// test/primitives-core.test.mjs — they test the CORE's behavior, not anything
+// litectx-specific, so they belong there once, not duplicated/drifted here.
+// What stays below is litectx-specific: manifest completeness/shape/subpath
+// guards, and every REAL @example's ESM validity.
 
 test("every @example is syntactically valid ESM", () => {
   // A copy-paste example that does not parse is a confident wrong answer.

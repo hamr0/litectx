@@ -7,9 +7,13 @@ All notable changes to this project are documented here, following
 
 ## [Unreleased]
 
+### Docs
+
+- **README no longer claims fwdloop builds on litectx.** fwdloop imports no litectx code; the line overstated the relationship. Part of a fix ledger pass that also corrected `CLAUDE.md`'s claim that the README carries a 6-line quickstart — it doesn't; the quickstart lives in `litectx.context.md`.
+
 ### Fixed
 
-- **The primitives generator now rejects a `@when`/`@fails` that wraps onto a second line instead of silently truncating it.** `parseBlock` read only the tag's first line, so a wrapped entry was cut mid-sentence in `primitives.json`, and `check:primitives` still passed because it compares against its own truncated output. A continuation line is now a named problem and the generator exits non-zero. Fail-loud rather than joining lines, because the entries are one-line catalog text. A second hole in the same check: a wrapped line that itself begins with `@word` parsed as a fresh, unrecognized tag rather than a continuation, so it slipped past the check and was silently ignored too. Unknown tags inside a `@when` block are now their own named problem, checked against a `KNOWN_TAGS` set built from litectx's own `@when` blocks in `src/`. Latent in litectx: no `@when`/`@fails` in `src/` wraps today, so `primitives.json` is byte-identical. The same bug had already shipped a truncated entry in a sibling package. Ported from bare-agent `89b693d` + `a5b51c6`. Build/test only, no runtime change.
+- **litectx's primitives generator is now the shared core used by bare-agent and bareguard**, vendored byte-identically (bare-agent `da2ecd8`) and pinned by sha256 in `scripts/primitives-core.hashes.json` — a test fails on any local edit to the vendored files. Repo-specific parts (source roots, category inference, method-receiver names) live in `primitives.config.mjs`. It now rejects, with a named error, instead of silently truncating or overwriting: a `@when`/`@fails`/`@category`/`@name`/`@signature` body that spans more than one line; an unknown tag inside a `@when` block; any line inside `@example` that starts with `@` (`@example` must be the last tag in a block); an indented `@`-led line outside `@example`; and two `@when` blocks resolving to the same catalog name. The old per-repo parser dropped wrapped tag text and truncated examples at `@`-lines while `check:primitives` still passed, because it compared against its own (equally truncated) output — the same bug had already shipped a truncated entry in a sibling package. Latent in litectx: `primitives.json` is byte-identical; no source changes. Build/test only, no runtime change.
 
 ## [0.33.2] — 2026-09-27
 

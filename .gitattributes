@@ -1,0 +1,3 @@
+scripts/primitives-core.mjs text eol=lf
+test/primitives-core.test.mjs text eol=lf
+scripts/primitives-core.hashes.json text eol=lf
