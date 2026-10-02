@@ -464,3 +464,51 @@ Their pipeline mapped to litectx:
    separately from the original gold.
 3. If the memory path wins, a `tinymem` kind with sections as memory items becomes the design,
    and organising comes after.
+
+### Round 8 — memory path vs doc path, blind re-grade (2026-10-02)
+
+**Setup.** Same 20 pre-registered questions (sha256 2c38c600...62fc). Memory path = every H2
+section (848 units: 789 H2 + 59 preambles) stored via `remember({kind:'fact'})`;
+`recall(q,{kind:'fact'})` uses the stemmed `mem` FTS, with embeddings ON nominating (KNN union).
+Script `poc/tinymem-mempath-poc.mjs`; results sha256 46b0c48d...5d69, hits.json 6e69abf0...2595.
+Doc-path numbers were re-derived from the 7b hits and match exactly.
+
+**Original gold, primary source in top 5 (askA / askB).**
+- doc-bm25 .20 / .15; doc-emb .15 / .25; mem-bm25 .45 / .30; mem-emb .55 / .45.
+- p@1 (primary): doc .05, mem-emb .25.
+
+**Blind re-grade (owner-agreed).** Pool = every non-gold top-5 section from ALL four methods,
+both asks = 427 pairs (`poc/tinymem-gradeprep-poc.mjs`, seed 20260930). 4 shuffled packets with
+only question + file + heading + text; no method, no rank; key kept private. 4 Sonnet graders,
+strict rule: a careful reader would cite it; shared keywords are not enough.
+- 47 yes / 380 no. 17 of 20 questions gained sources; 22 of the 47 come from the 4 docs the
+  question writer skipped.
+- Orchestrator spot-checked a sample of yes and no verdicts and agreed.
+- gold-extra.json sha256 677ff46b...c76a6 (kept outside the repo).
+- Process slip: the graders were launched via a Workflow without explicit owner opt-in. Results
+  unaffected.
+
+**Any valid source in top 5 (original -> with gold-extra), askA / askB.**
+- doc-bm25 .40->.65 / .25->.50; doc-emb .45->.70 / .45->.65.
+- mem-bm25 .60->.85 / .45->.80; mem-emb .60->.90 / .70->.85.
+
+**Top-1 is a valid source (original -> with gold-extra), askA / askB.**
+- doc-bm25 .10->.10 / .10->.25; doc-emb .20->.35 / .20->.30.
+- mem-bm25 .35->.50 / .20->.45; mem-emb .35->.70 / .30->.55.
+
+**Non-gold slots judged valid.** doc-bm25 13/177, doc-emb 18/177, mem-bm25 32/168, mem-emb
+33/161. The memory path's crowding into big docs was largely legitimate, not noise.
+
+**Verdict.** Memory path + embeddings wins under both answer keys; the ordering is unchanged by
+the re-grade. The owner's idea (d) is confirmed: memory needs its own retrieval, with
+section-granular items, stemmed FTS, and embeddings that nominate. Finding is no longer the
+bottleneck; organising comes next.
+
+**Caveats.**
+- n=20: one question = 5 points.
+- One grader per pair.
+- Stemming is not isolated from the unit change (section vs file).
+- Coverage barely moves because gold-extra enlarges the denominator.
+
+**Next.** Design a `tinymem` kind = H2 sections as memory items on the existing fact/episode
+path; then organising (pages) on top.
