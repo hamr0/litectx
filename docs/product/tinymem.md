@@ -3,6 +3,7 @@
 > **Status: DRAFT, a portal that changes as POCs come and go. Module 0 (the bake-off) signed off 2026-10-02.** Nothing here is built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
+> Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
 
 > **Sources for the concepts.** OpenHuman's Memory Tree (its docs only, not its source; it is
 > GPL-3.0 Rust, so concepts are borrowed and no code is ported), Karpathy's LLM-wiki gist, and
@@ -268,63 +269,9 @@ the nested subagent transcripts separately.
 
 Each stage is checked by the orchestrator's own re-run before the next starts.
 
-### Stage 1 results (2026-10-02, corrected the same day)
+### Stage 1 results
 
-Run on the frozen copy: 245 top-level session logs and 65 docs, bareloop at `eff64e4`. The
-script is `poc/tinymem-cut-poc.mjs`. Every run, including the orchestrator's own, gave
-identical statistics.
-
-**Correction.** The first run harvested only `user` and `assistant` lines. A breakdown of what
-it ignored showed two real sources were dropped: commands queued while the agent was busy, and
-files attached to the conversation. Both are now harvested. The five original kinds are
-unchanged by the fix.
-
-| Measure | Value |
-|---|---|
-| Raw session log bytes | 301.9 MB |
-| Text held in pieces | 65.9 MB, 22% of raw |
-| After dropping exact duplicates | 60.2 MB, 20% of raw |
-| Session pieces, total and unique | 49,754 and 43,612 (12.3% exact duplicates) |
-| Cut and hash speed | 87 to 97 MB per second |
-| Doc pieces, total and unique | 1,014 and 998 |
-| Pages and their headings | 29 and 290 |
-
-| Piece kind | Unique pieces | Text | Exact duplicates |
-|---|---|---|---|
-| Tool result | 14,350 | 24.9 MB | 17% |
-| Tool call | 16,092 | 16.1 MB | 8% |
-| User text | 3,778 | 15.4 MB | 27% |
-| Assistant text | 8,253 | 5.8 MB | 4% |
-| File attachment | 185 | 2.5 MB | 12% |
-| Queued command | 710 | 1.0 MB | 5% |
-| Assistant thinking | 262 | 0.06 MB | 6% |
-
-What this shows:
-
-- Tool traffic is 62% of the text: 41.1 of 65.9 MB.
-- A third of user text, 5.0 of 15.4 MB in 896 pieces, is injected by the harness, not typed.
-- Thinking is almost absent: 13,101 thinking blocks are empty in the logs.
-- Exact dedupe removes 12% of pieces. Near-duplicates are not measured yet.
-- No piece is byte-identical between the sessions and the docs.
-- The hot path is cheap: cutting and hashing 302 MB took about 3 seconds.
-- No queued command exactly duplicates a user text piece. Only 23 of the 745 carry the
-  human-turn flag and it is absent on the other 722, so that flag cannot separate typed
-  commands from automated ones.
-
-**How the harvest decides.** By log structure only: the line type and the block type. Nothing
-is judged for importance, and everything harvested is kept, noise included.
-
-What the harvest ignores, by size:
-
-| Ignored | Size | Why |
-|---|---|---|
-| A second copy of every tool result, stored beside the first | 52 MB | duplicates what is kept |
-| Encrypted signatures on thinking blocks | 31 MB | no readable text |
-| Queue bookkeeping | 16.7 MB | not examined in detail |
-| Harness attachments: instructions, style and token reminders, hook output, skill lists | about 30 MB | boilerplate |
-
-Not verified: whether attached file content is truncated for large files, and whether an
-edited-file snippet is a diff or file text.
+Recorded in [tinymem-learnings.md](tinymem-learnings.md#stage-1--cutting-the-corpus-2026-10-02).
 
 ### A second question for the bake-off: is a piece worth keeping
 
@@ -338,19 +285,7 @@ Contenders:
 - the share of tokens that are real dictionary words ("not words" is machine output);
 - the share of function words such as "the", "to", "is".
 
-A first look, by the orchestrator's own throwaway check on pieces of 200 bytes or more. It is
-indicative only: there is no ground truth yet, and it compares kinds, which the log already
-gives.
-
-| Kind | Dictionary words, median share | Pieces under 50% real words | Function words, median share |
-|---|---|---|---|
-| Assistant text | 0.84 | 0% | 0.28 |
-| Typed user text | 0.73 | 7% | 0.18 |
-| Tool results | 0.59 | 34% | 0.16 |
-| Tool calls | 0.50 | 49% | 0.08 |
-
-Line count, line length and compressibility barely differed between kinds. These signals
-measure form, not importance: a one-line error is "not words" and can still be worth keeping.
+A first, indicative look at these signals is in [tinymem-learnings.md](tinymem-learnings.md).
 
 ### Stage 2: the labelled sample (settled 2026-10-02)
 
@@ -377,50 +312,9 @@ measure form, not importance: a one-line error is "not words" and can still be w
   checks the labels: every sampled id labelled once, every page from the closed list.
 - The owner spot-checks 20 labelled pieces.
 
-### Stage 2 results (2026-10-02)
+### Stage 2 results
 
-All four label files pass the checker, run by the orchestrator. The orchestrator's re-run of
-the sampler reproduced the worker's file hashes.
-
-| Batch | Pieces | On a page | "None" | Keep | Noise | Unsure |
-|---|---|---|---|---|---|---|
-| Messy, tune | 102 | 33 | 69 | 19 | 83 | 32 |
-| Messy, held out | 102 | 27 | 75 | 16 | 86 | 21 |
-| Structured, tune | 100 | 74 | 26 | 93 | 7 | 50 |
-| Structured, held out | 100 | 74 | 26 | 87 | 13 | 47 |
-
-Pieces marked keep in the messy exam, both halves together, out of 34 per kind:
-
-| Kind | Keep |
-|---|---|
-| Assistant text | 12 |
-| Typed user text | 7 |
-| Tool calls | 6 |
-| File attachments | 6 |
-| Queued commands | 4 |
-| Tool results | 0 |
-
-What this shows:
-
-- Seven in ten session pieces belong on none of the 29 doc-seeded pages (144 of 204), and five
-  in six are noise (169 of 204).
-- No tool result in the sample was worth keeping, 0 of 34. Tool results are 24.9 of the 65.9 MB
-  of text. On 34 pieces this is indicative, not proof.
-- The structured labels are weak ground truth: 97 of 200 are marked unsure. The labellers
-  reported that many log sections are experiment findings only loosely tied to one product
-  page, and that several pages overlap. None of the four labellers opened the full product
-  docs; all judged from the page headings.
-- The two structured labellers did not use "unsure" the same way: one marked all 26 of its
-  "none" answers unsure, the other 11 of 26.
-
-Problems this raises, not yet decided:
-
-- **The coverage bar is ill-posed for the messy exam.** It asks for 50% of kept pieces to be
-  placed, but 71% of the sampled session pieces have no right page among the 29. A correct
-  filer could not reach it. Any change to the bar is the owner's decision.
-- **Few positives.** The messy held-out half has 27 pieces with a page, 11 of them marked sure.
-  A percent bar on that few pieces moves about four points per piece.
-- **Label reliability is unmeasured.** No piece was labelled twice.
+Recorded in [tinymem-learnings.md](tinymem-learnings.md), with the problems they raise for stage 3.
 
 ## Reuse map
 
