@@ -407,3 +407,60 @@ Shipped litectx recall, BM25, 59 files / 1607 nodes.
 Open: re-grade the skipped-doc slots blind. Owner's idea: tinymem may need its own retrieval kind
 (section-level, possibly via the memory path: stemmed `mem` FTS + embeddings nominating), since doc
 recall is file-level.
+
+### Where module 0 stands, and what carries forward (2026-10-02)
+
+**Correction to 7b.** The "gold-file@5" column was copied from a worker report, not computed by
+the script. The orchestrator recomputed it from per-question hits: askA .43 (not .44), askB .25
+(not .21). At @10: .56 / .50. No conclusion changes.
+
+**OpenHuman: copy / don't copy.**
+- Copy: an entity -> chunk index read at query time (no filing onto one page).
+- Copy: a cheap noise gate before storing. Keep >=0.85, drop <=0.15, admit >=0.3, on weighted
+  cheap signals.
+- Copy: content-hash ids.
+- Copy: top-down reading (summary -> children -> leaves). For us: index -> page -> leaf -> line
+  range via `get`.
+- Copy: hotness counters (30-day mentions, distinct sources, last seen). The formula is ours to
+  write and test.
+- Don't copy: LLM entity extraction, LLM summaries, LLM goals-reflection inside the library.
+  All host/bareagent lane.
+- Don't copy: their evaluation. None exists.
+
+Their pipeline mapped to litectx:
+1. Source adapters -> `index()` / `remember()` / `ingest()`.
+2. Canonicalize -> ingest's pdf/docx -> md.
+3. Chunker -> heading chunker + content-hash ids.
+4. content_store -> one SQLite file (settled).
+5. Score -> embeddings exist; noise gate + entity index missing.
+6. Source/topic/global trees -> none. Their topic/global trees are retired.
+7. Retrieval -> `recall` + `get` exist; topic lookup missing.
+
+**Owner's ideas this session (credit).**
+- (a) Build topics from the data, not fixed pages.
+- (b) Let questions build pages: pages grow from what an agent actually used.
+- (c) Measure term concentration as density against the doc's CONTENT words (prepositions and
+  connectives excluded).
+- (d) Memory may need its own retrieval kind, because doc recall is file-level and tuned for
+  code/md top 5.
+- (e) Focus on docs. Session logs are mostly noise; that data was deleted.
+
+**Direction as of now (supersedes "Direction agreed with the owner" above).**
+- Filing a piece onto exactly one page: dropped (rounds 1-4).
+- Blind topic building: Method A gives a few real cross-doc topics, mostly small or mixed. Word
+  co-occurrence alone fails (rounds 5-5b). Global topic-word ranking by density lift fails;
+  per-doc density does find the docs about a term (7a).
+- Entity index as a router: dropped. BM25/recall is the lookup (round 6).
+- Pages grown from use: do not help when search is weak, and overlapping topics make page
+  matching wrong (7b). A page is capped by the first ask's search.
+- The bottleneck is FINDING, not organising. Doc recall returns one section per file.
+
+**Next: round 8 (running).**
+1. The same 20 pre-registered questions through litectx's memory path. Every H2 section is stored
+   as a `fact` (stemmed `mem` FTS + embeddings that nominate). Embeddings off and on, side by
+   side with the doc path.
+2. ONE blind re-grade of every non-gold top-5 section from BOTH methods. Shuffled; method and
+   rank hidden; criterion: a careful reader would cite it. Result is `gold-extra`, reported
+   separately from the original gold.
+3. If the memory path wins, a `tinymem` kind with sections as memory items becomes the design,
+   and organising comes after.
