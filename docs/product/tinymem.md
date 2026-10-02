@@ -377,6 +377,51 @@ measure form, not importance: a one-line error is "not words" and can still be w
   checks the labels: every sampled id labelled once, every page from the closed list.
 - The owner spot-checks 20 labelled pieces.
 
+### Stage 2 results (2026-10-02)
+
+All four label files pass the checker, run by the orchestrator. The orchestrator's re-run of
+the sampler reproduced the worker's file hashes.
+
+| Batch | Pieces | On a page | "None" | Keep | Noise | Unsure |
+|---|---|---|---|---|---|---|
+| Messy, tune | 102 | 33 | 69 | 19 | 83 | 32 |
+| Messy, held out | 102 | 27 | 75 | 16 | 86 | 21 |
+| Structured, tune | 100 | 74 | 26 | 93 | 7 | 50 |
+| Structured, held out | 100 | 74 | 26 | 87 | 13 | 47 |
+
+Pieces marked keep in the messy exam, both halves together, out of 34 per kind:
+
+| Kind | Keep |
+|---|---|
+| Assistant text | 12 |
+| Typed user text | 7 |
+| Tool calls | 6 |
+| File attachments | 6 |
+| Queued commands | 4 |
+| Tool results | 0 |
+
+What this shows:
+
+- Seven in ten session pieces belong on none of the 29 doc-seeded pages (144 of 204), and five
+  in six are noise (169 of 204).
+- No tool result in the sample was worth keeping, 0 of 34. Tool results are 24.9 of the 65.9 MB
+  of text. On 34 pieces this is indicative, not proof.
+- The structured labels are weak ground truth: 97 of 200 are marked unsure. The labellers
+  reported that many log sections are experiment findings only loosely tied to one product
+  page, and that several pages overlap. None of the four labellers opened the full product
+  docs; all judged from the page headings.
+- The two structured labellers did not use "unsure" the same way: one marked all 26 of its
+  "none" answers unsure, the other 11 of 26.
+
+Problems this raises, not yet decided:
+
+- **The coverage bar is ill-posed for the messy exam.** It asks for 50% of kept pieces to be
+  placed, but 71% of the sampled session pieces have no right page among the 29. A correct
+  filer could not reach it. Any change to the bar is the owner's decision.
+- **Few positives.** The messy held-out half has 27 pieces with a page, 11 of them marked sure.
+  A percent bar on that few pieces moves about four points per piece.
+- **Label reliability is unmeasured.** No piece was labelled twice.
+
 ## Reuse map
 
 What already exists and is borrowed, as an idea or as code.
