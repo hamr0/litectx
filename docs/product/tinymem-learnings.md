@@ -215,3 +215,118 @@ less it counts as untouched. A final pass or fail needs fresh labels.
   key is contaminated by the kind of method under test.
 - Choosing a threshold on the same sample it is scored on is fitting to pass. Tune on one half,
   score on the other.
+
+
+## Module 0 bake-off, rounds 4 and 5 (2026-10-02)
+
+### Round 4 — Haiku picks from the BM25-by-windows top 5
+
+Script `poc/tinymem-pick-poc.mjs`, claude CLI. 404 calls, about $4.13, 32 minutes, 0 invalid, 0
+skipped. stage4 results.json sha256
+`4d2252b2c0523ff76492646f8e35f6053cc0fdf37646b2b85842e408810c446a`.
+
+| Exam / half | BM25 first pick | Model first pick | Top-5 ceiling | Model right when in top 5 |
+|---|---|---|---|---|
+| Session, held-out (27 with a page) | 13 (48%) | 17 (63%) | 22 (81%) | 17/22 (77%) |
+| Session, tune (33) | 14 (42%) | 20 (61%) | 25 (76%) | 20/25 (80%) |
+| Docs, held-out (74) | 39 (53%) | 39 (53%) | 64 (86%) | 39/64 (61%) |
+| Docs, tune (74) | 27 (36%) | 38 (51%) | 60 (81%) | 38/60 (63%) |
+
+- Session held-out went 13 to 17 of 27 (ceiling 22), tune 14 to 20 of 33 (25).
+- Docs held-out stayed at 39 of 74 (ceiling 64), tune went 27 to 38 of 74 (60).
+- When the right page is in the 5, the model finds it 77–80% on session pieces and 61–63% on
+  docs.
+- NONE: on session pieces labelled none the model says NONE about half the time (36/75 held-out,
+  36/69 tune). On docs it almost never does (4/26, 2/26). When the right page is not in the 5 it
+  picks a decoy instead.
+- Split by label confidence (orchestrator's recount): session sure 18/21, unsure 19/39; docs
+  sure 54/88, unsure 23/60. The model is mostly right where the label is sure.
+- Most-picked pages overall: P26 (42), P20 (32), P08 (22), P29 (22), P13 (20).
+
+Caveats. Haiku saw 1,500 characters and at most 14 headings, with no definition of "belongs
+on". The labellers saw 4,000 characters, all headings, the doc path and heading, and the rule.
+Candidates were shown in BM25 order; a position effect is untested.
+
+**Lesson from round 4.** A large part of the "coin flip" is the setup, not the matcher:
+overlapping doc-seeded pages, and weak labels judged from headings. The model agrees with the
+label where the label is sure and splits where it is not.
+
+### Data removal (2026-10-02)
+
+At the owner's request all copied session-log data and everything derived from it was deleted
+from `~/.cache/tinymem-probe/`: the frozen logs, pieces, messy sample, messy labels, spot-check
+and a stray index. The messy exam cannot be re-run without re-cutting. Session memory is parked;
+work continues on docs only (owner: session pieces are mostly noise).
+
+### Round 5 — building topics from the data
+
+Script `poc/tinymem-topics-poc.mjs`. 998 doc H2 units. Method A: TF-IDF vectors, average-link
+clustering. Method B: term co-occurrence. Scored as same-topic pairs against same-label pairs,
+and against a seeded random partition with the same topic sizes. stage5 sha256
+`4e0d4dde86f619c6522361e480daedbcef6d9a9ae697f705db7e18fd9020df69`.
+
+**Round 5b** (`TOPICS_FILTER=1`) excluded the archive and generated top-level files (998 to 848
+units: 111 archive, 39 other dropped) and added near-duplicate collapse (Jaccard ≥ 0.8). It
+collapsed 0 units. stage5b sha256
+`c8aea830743b7e8105f935691a2289fd6a590910dd16a70310796979d559b517`.
+
+5b, pairs over all labelled units (P = share of same-topic pairs that share a labelled page,
+R = share of same-page pairs found, random P in brackets):
+
+| Variant | Topics | No topic | Giant topic | P / R | Random P |
+|---|---|---|---|---|---|
+| A cos ≥ 0.10 | 130 | 31 | 4.5% | 0.60 / 0.14 | 0.11 |
+| A cos ≥ 0.15 | 196 | 92 | 1.4% | 0.74 / 0.06 | 0.11 |
+| B label-prop J ≥ 0.2 | 139 | 35 | 11.9% | 0.43 / 0.21 | 0.12 |
+| B conn-comp J ≥ 0.2 | 3 | 0 | 100% | 0.11 / 1.00 | 0.11 |
+| B conn-comp J ≥ 0.35 | 140 | 117 | 13.2% | 0.28 / 0.13 | 0.11 |
+
+What changed from round 5:
+
+- Method A barely moved (cos ≥ 0.10 P 0.597 to 0.601; cos ≥ 0.15 P 0.747 to 0.743).
+- Method B conn-comp J ≥ 0.35 giant fell from 45.2% to 13.2%, and its precision rose from 0.113
+  (random level) to 0.284. B label-prop J ≥ 0.2 giant fell 13.8% to 11.9%, P 0.374 to 0.432.
+- Conn-comp J ≥ 0.2 stays one blob (97.9% in round 5, 100% in 5b).
+
+Findings:
+
+- Real topics exist and cut across docs. Examples by name: softgreen / hitl / pause;
+  bundle / export / blessing; clipipe / usage / pricing.
+- Method A is precise (P 0.60–0.96 against about 0.11 random) but low recall (1–14%) and makes
+  no blob.
+- Method B makes blobs or grab-bags and is not usable alone.
+- The junk topic index-flat / log.md came from including generated files. That was an error in
+  the brief, fixed in 5b.
+- Template-doc preambles still cluster as junk.
+- The existing answer key grades doc pages, not topics, so it cannot fully judge topic quality.
+
+### OpenHuman memory tree (read 2026-10-02)
+
+The engine lives in tinyhumansai/tinycortex (commit 72ce1d1).
+
+- Topic trees and the daily digest are retired. Topics are query-time views over an entity to
+  chunk index.
+- Hotness constants exist (create 10.0, archive 2.0) with counters (30-day mentions, distinct
+  sources, last seen, query hits), but no formula combines them.
+- Entities come from regex (email, URL, handle, hashtag), with an LLM only on borderline chunks.
+  Merge is exact-match.
+- Noise gate: cheap weighted signals. Keep at ≥ 0.85, drop at ≤ 0.15, model only in between,
+  admit at ≥ 0.3.
+- Seal: L0 at 50k tokens, fanout 10. The default summariser is deterministic concatenation.
+- The 20-minute auto-fetch only ingests. Suggestions come from an LLM "goals reflection agent".
+- No filing-quality evaluation exists in their repo.
+- Relatedness is shared entity, same source or time, and embedding re-rank at query time. There
+  is no clustering.
+
+### Direction agreed with the owner
+
+- H2 sections are the leaves.
+- A noise gate in front.
+- An entity index: literal keys plus distinctive recurring terms.
+- Method A groups seed the pages.
+- Pages grow from lookups. Only USED leaves (fetched or cited) count, never appearance.
+- Counts promote a topic to a page and never re-rank search. This reuses litectx's recall/fetch
+  log and the `promotionCandidates` pattern.
+- A host model on a timer may name or merge pages (bareagent lane).
+
+Next: round 6 tests the entity index.
