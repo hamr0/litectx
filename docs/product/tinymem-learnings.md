@@ -330,3 +330,35 @@ The engine lives in tinyhumansai/tinycortex (commit 72ce1d1).
 - A host model on a timer may name or merge pages (bareagent lane).
 
 Next: round 6 tests the entity index.
+
+### Round 6 — entity index (2026-10-02)
+
+Setup: 848 filtered H2 units. Entities are literal keys (the bake-off regex) plus recurring terms
+(in ≥ 2 doc files and ≤ 25 units, i.e. 3%). A page's score is the idf-sum of the entities a piece
+shares with it. Random baseline is 20 seeded reps. Source: `stage6/report.md` and `results.json`
+(sha256 bd9a3729…d683); script `poc/tinymem-entities-poc.mjs`.
+
+Pieces with a labelled page, first / top5 (round 3 scored held only, so it has no tune BM25):
+
+| method | tune first/top5 | held first/top5 |
+|---|---|---|
+| BM25 by windows (round 3) | n/a | 39/74, 64/74 |
+| literal keys | 23/74, 52/74 | 24/74, 53/74 |
+| recurring terms | 17/74, 51/74 | 23/74, 48/74 |
+| combined | 18/74, 56/74 | 22/74, 52/74 |
+| random (mean of 20) | ~6–7, ~17–24 | ~6–7, ~17–19 |
+
+- Reach of 90–99% is inflated. A piece reaches 20–40% of all units through shared entities, and
+  random recurring/combined entity sets reach ~80% too. Literal keys are the cleanest (reach ~2x
+  random, ~175–180 units vs ~65).
+- No NONE behaviour. 24–26 of 26 none-labelled pieces still reach a page, and top-score cuts
+  (≤ 0/3/6) do not separate none from paged pieces.
+- The frequency cut removes the useful terms. softgreen (56 units), bundle (52), clipipe (52) and
+  spawner (67) are all over the 25-unit cap. The survivors at the cap are glue words (the top
+  recurring entities are generic verbs and adjectives). hitl survives as a literal key (19
+  units, coherent). The literal regex also catches hyphenated English (load-bearing, cap-halt).
+
+Verdict: the entity index is not a router. BM25 stays the lookup. Distinctive terms are
+concentrated in a few docs, so a plain unit-count cap cannot separate them from glue; a
+doc-level or concentration measure is the open fix. All of rounds 4–6 grade against doc-page
+labels, which cannot judge cross-doc topics. The next test should be question-based.
