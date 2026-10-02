@@ -362,3 +362,48 @@ Verdict: the entity index is not a router. BM25 stays the lookup. Distinctive te
 concentrated in a few docs, so a plain unit-count cap cannot separate them from glue; a
 doc-level or concentration measure is the open fix. All of rounds 4–6 grade against doc-page
 labels, which cannot judge cross-doc topics. The next test should be question-based.
+
+### Rounds 7a and 7b — topic words and real questions (2026-10-02)
+
+**7a: topic-word concentration** (`poc/tinymem-concentration-poc.mjs`, results sha256
+c2acf3e03ce4ce7d9ee543f9f288b0d41451749486a4baa2a48fa8961cd46db0). 59 whole docs. Density = term
+count / doc content words (stopwords excluded, owner's spec). Score = mean top-3 doc density /
+corpus density, count >= 5.
+
+- FAILS as a topic-word picker. The top of the list is run ids and one-off rare words. Check terms
+  sit mid-table (bundle 20th percentile, softgreen 43, hitl 53, spawner 55, clipipe 82) against a
+  glue median of 93, and the two groups overlap (come at 37 beats clipipe). No separation in 9
+  settings; the denominator choice barely matters.
+- WORKS the other way: a term's densest docs are the docs about it.
+- Cause: lift rewards rarity and ignores mass. Untested fix: per-doc keyness (log-likelihood).
+- The check terms were chosen from earlier rounds, so this is a sanity check, not an unbiased test.
+
+**7b: real questions** (`poc/tinymem-questions-poc.mjs`). Questions pre-registered, sha256
+2c38c60040edbcecf277956e4899b335c1119e30e6d039f1679fd05ce97c62fc, written by a worker that ran no
+retrieval. Results sha256 537b9408ed382670e13e394116b7153e2da06b253086ef7e02282a6dc87b758c.
+Shipped litectx recall, BM25, 59 files / 1607 nodes.
+
+| ask | p@1 | primary@5 | any-gold@5 | gold-file@5 |
+|---|---|---|---|---|
+| askA | .05 | .20 | .40 | .44 |
+| askB | .05 | .15 | .25 | .21 |
+
+- Embeddings: askA no gain; askB any-gold@5 .25 -> .45 (noisy, n=20).
+- CONFOUND (found by the orchestrator): the question writer skipped the 4 largest docs (PRD,
+  FINDINGS, UPSTREAM-ASKS, TESTGEN-PREREG) but recall searched them. 18/100 askA and 31/100 askB
+  top-5 slots come from them (14 and 16 of 20 questions). Some are real answers (q01 scout ON/OFF
+  -> FINDINGS F126 was scored a miss). The search numbers are a FLOOR of unknown distance. Not yet
+  re-graded.
+- Structural limit: doc `recall` returns one best chunk per FILE, so two gold sections in one file
+  can never both be retrieved. litectx doc retrieval is tuned file-level (code/md top 5), not
+  section-level memory.
+- Grow (less affected by the confound, relative comparison): a realistic agent (top 3 fetched) is
+  flat to slightly negative. Wrong page 16/18 (leaf overlap) and 14/19 (term overlap); 1.7-2.7
+  non-gold leaves injected per 5 slots. The oracle helps <= 1 question; only 8/20 askA found any
+  gold, so 12 pages never formed.
+- Lesson: a page is capped by the first ask's search; pages do not fix weak search; overlapping
+  topics make page matching wrong.
+
+Open: re-grade the skipped-doc slots blind. Owner's idea: tinymem may need its own retrieval kind
+(section-level, possibly via the memory path: stemmed `mem` FTS + embeddings nominating), since doc
+recall is file-level.
