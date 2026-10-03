@@ -512,3 +512,54 @@ bottleneck; organising comes next.
 
 **Next.** Design a `tinymem` kind = H2 sections as memory items on the existing fact/episode
 path; then organising (pages) on top.
+
+### Round 9 — chunk size, what drives the win, grading reliability (2026-10-03)
+
+**Setup.** Same 20 questions, memory path. Three unit shapes, hits mapped back to their H2,
+first-rank dedupe:
+- U1 H2 sections (848; reproduces round 8 exactly).
+- U2 litectx's own md chunks (1,607, read from the 7b doc index).
+- U3 ~1,000-char windows (1,871).
+- Script `poc/tinymem-chunking-poc.mjs`. Final results sha256 a87f3e39...6a2f, scored with
+  gold-extra2.
+
+**Chunk size, embeddings on, all 20 (askA/askB).**
+- Primary@5: U1 .55/.45; U2 .50/.40; U3 .25/.20.
+- Any-valid@5 (gold + extra + extra2): U1 .90/.85; U2 .95/1.00; U3 .80/.90.
+- BM25-only primary@5: U1 .45/.30; U2 .50/.40; U3 .25/.25.
+- Read: litectx's own md chunker is about equal to H2 (1-2 questions either way). Windows are
+  clearly worse on the primary source: cutting a section from its heading loses context. This
+  reverses round 3, where pieces, not questions, were matched.
+
+**Mechanism split on H2 sections (original gold, primary@5, askA/askB).**
+- Unstemmed per-section BM25: .35/.35. Already beats the doc path (.20/.15), so per-section
+  results are the biggest single factor.
+- Porter stemming: .45/.30. A small, consistent plus.
+- Embeddings nominating: .55/.45. A plus on depth (primary@10 .55 -> .75 on A).
+- One-per-file cap on mem-emb primary@10: .75 -> .55 (A), .60 -> .50 (B). The cap costs depth.
+
+**Conclusion.** Route prose through litectx's EXISTING memory engine (per-item results,
+stemmed FTS, embeddings that nominate) using the EXISTING md chunker. No new chunking, no new
+search engine.
+
+**Remaining decisions.**
+- New kind vs an updated `doc` kind.
+- multis tenant scope.
+- Indexing plumbing.
+
+**Grading reliability (new finding).**
+- Two round-8/9 packets came back with one boilerplate "no" reason for 80-95 verdicts; one
+  grader read sections only partly.
+- Round 8 packet 2, careful re-grade: agreed on 102/106 (same 11 yes, 9 shared). Round 8
+  numbers stand (moves <= .05 under original, re-grade and union).
+- Round 9 packet 1, two independent graders: agreed on 77/83 but on only 3 of 9 "yes" calls.
+  A single-grader "yes" on a borderline section is noisy, so report extended-key numbers as
+  ranges.
+- Round 9 packet 3 re-grade was BLOCKED at 31/83 by the auto-mode classifier ("PII Data
+  Handling"). Not worked around.
+- gold-extra2 = union of all trustworthy yes verdicts, including the partial re-grade (20
+  sections, 14 questions, sha256 8a6aca7f...f04ef620).
+- Method rankings hold under every grading variant.
+
+**Lesson.** A repeated reason is a flag to re-check, not proof of a bad grade. Always check
+grader reason diversity and whether the full text was read.
