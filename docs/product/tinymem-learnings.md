@@ -563,3 +563,220 @@ search engine.
 
 **Lesson.** A repeated reason is a flag to re-check, not proof of a bad grade. Always check
 grader reason diversity and whether the full text was read.
+
+## Code facts for the retrieval change (from the 2026-10-03 design draft)
+
+The new-kind / second-table options were dropped 2026-10-03: owner ruled out a new kind and any duplicate capture of md.
+
+Line cites are to the code at HEAD of `tinymem-poc` on 2026-10-03.
+
+### What the code does today
+
+| Fact | Cite |
+|---|---|
+| `index()` writes ONE `docs` row per file (whole body, unstemmed) and N `nodes` rows (chunks with line ranges, `stamp`) | `store.js:494-575`, `store.js:132` |
+| md chunks = every heading level, plus a preamble | `chunker.js:199-229` |
+| File embedding is ONE vector per file, whole body head-truncated to 6,000 chars (model sees ~512 tokens) | `index.js:471-478`, `embedder.js:11` |
+| `docs` FTS has no stemmer; `mem` FTS is `porter unicode61` | `store.js:118`, `store.js:221` |
+| `search()` for fact/episode reads `mem` + `mem_scope` owner/session fence; other kinds read `docs` + `doc_scope` fence | `store.js:1655-1695` |
+| Cosine NOMINATES only for fact/episode (`MEM_KINDS`); code/doc are BM25-gated, cosine only re-ranks | `index.js:859-880`, `store.js:1967-1969`, `store.js:250` |
+| `ingest()` already stores each segment as its own direct `docs` row `<id>#<n>` (unstemmed, no line ranges); md/DOCX segments reuse the md chunker | `index.js:1259-1303`, `docparse.js:242-252` |
+| `doc_scope` fence: `scope IS NULL OR scope = :scope`, plus expiry; file rows have no sidecar row (global) | `store.js:1690-1696`, `store.js:212` |
+| `get(path,{startLine,endLine})` for file rows: `_chunkState` hash gate, then `nodes` body; written rows return null for a range | `index.js:766-777`, `index.js:1019-1048`, `store.js:1399` |
+| Self-heal: whole-index stamp `user_version` = hash of `src/*.js`; per-node `nodes.stamp` | `indexer.js:32-45`, `store.js:1452` |
+| `forget`/prune touch `source='direct'` only; `index()` force clears file rows only | `store.js:811`, `store.js:439-445` |
+
+Finding: a file's single embedding is made from only its first 6,000 characters
+(`src/embedder.js:11`), which explains the weak doc-path embeddings.
+
+### Cost estimates (unmeasured; to be measured before building)
+
+| Item | Estimate |
+|---|---|
+| Rows | 1,607 md chunks for 59 files (round 9 U2); about 27 chunks per file vs 1 file row |
+| Vector size | 384 float32 = 1.5 KB per chunk, about 2.5 MB for that corpus |
+| Index time with embeddings | one embed call per chunk instead of per file; model cost per call is small but ~27x the calls on md. Unmeasured. Embeddings off: stemmed BM25 alone gave .45/.30 |
+
+Consumers: owner and multis only.
+
+### multis tenant-scope rules
+
+Today: ingest chunks carry `doc_scope(path, scope, expires_at)`; fence is
+`scope IS NULL OR scope = :scope` plus expiry (`store.js:1690-1696`); `strictScope` makes a
+missing scope throw on read and write (`index.js:525-556`); `GLOBAL` maps to `scope IS NULL`.
+File-indexed chunks have no sidecar row, so they are global, as code and md are today.
+
+| Rule | Behaviour |
+|---|---|
+| Read fence | Section search and KNN join `doc_scope` on the row's path with the SAME predicate: `scope ∪ null-global`, expiry-aware. Factor the predicate into one helper used by `search`, `knnCandidates`, `getItem`, `count`, so there is no second copy |
+| strictScope | `recall`, `get`, `ingest` throw without a scope or `GLOBAL`. File rows (global) remain readable under `GLOBAL`/tenant scope |
+| Write / `scoped(tenant)` | direct rows get `doc_scope` like `remember({kind:'doc'})` (`index.js:1100-1108`); `ScopedView` binds scope unchanged (`index.js:625`) |
+
+Two independent mechanisms, as on the memory axis (`store.js:256` W4 key + `mem_scope` JOIN):
+1. SQL fence: the `doc_scope` JOIN in `search`/`knnCandidates`/`getItem`.
+2. Structural key: direct section rows use a scope-qualified physical key `scope\x1Fid`
+   (reuse `assertNoMemSep`), so a bare `get(id)`, an upsert, or `forget({id})` under tenant B
+   cannot match tenant A's row even if the JOIN were broken. The public id is stripped on output.
+
+Isolation tests required (all mutation-verified: break ONE mechanism, the isolation test must
+still pass; break BOTH, it must fail):
+- A's section never appears in B's recall, BM25 and KNN-nominated (semantically identical text).
+- `get(id)` and `get(id,{startLine,endLine})` across tenants return null.
+- Same id under two scopes = two rows; re-ingest replaces only its own tenant's row.
+- `strictScope` throws on read, write, `get`; `GLOBAL` reads only the shared tier.
+- `forget({scope})`/`forget({id})` leaves the other tenant and ALL file-sourced rows alone.
+- `forget`/episode prune/reset-by-kind never delete file-sourced section rows.
+
+## Round 10 — unstemmed per-section doc path (the proposal as specified)
+
+Script: `poc/tinymem-round10-poc.mjs`. Outputs: `~/.cache/tinymem-probe/out/stage10/`
+(`results.json` sha256 `b3deee32de5e1c93cad1adfbf418cebd255e2c45f9244be57ed0330a6dd0d52a`,
+`report.md` sha256 `deadc8a9b471aae49fc72098328dfb9db5b37b53fb290829aab6bd28a85c5349`).
+
+Setup:
+- Same 59-file corpus, same questions, askA/askB, gold + gold-extra + gold-extra2 keys, same scoring as round 9.
+- Sections = litectx's own `chunkFile` (md splits at every heading): 1,607 rows, identical ranges and text to round 9 U2 (0 diffs).
+- Each section written with `remember(file#start-end, text, {kind:'doc'})` into the UNSTEMMED `docs` table, real embedder (all-MiniLM-L6-v2), 1,607 vectors in `mem_embeddings`.
+- C1: BM25 only (same db, second `LiteCtx` with embeddings off, `recall kind doc n=50`).
+- C2: shipped `recall kind doc n=50` (BM25 pool of 400, cosine re-ranks only).
+- C3: BM25 pool UNION nearest-vector nominees, copy of `_rankKind` with the fact/episode-only gate lifted. K=8 (`index.js:40`), pool 400 (`index.js:32`, `:865`), nominees cos>0 not already in pool, score 0, `store.js:1967-1990`. Fusion `minmax(score; nominees at pool floor) + 1.0*minmax(cosine)` (`index.js:892-898`).
+- Checks: my fusion with no nominees equals shipped `recall` on all 40 asks (0 mismatches). All gold sections mapped to rows (0 unmapped).
+
+Numbers (extra2 gold, all 20 questions):
+
+| config | prim@5 A | prim@5 B | prim@10 A | prim@10 B | any@5 A | any@5 B |
+|---|---|---|---|---|---|---|
+| C1 unstemmed BM25 | .40 | .35 | .40 | .40 | .85 | .80 |
+| C2 shipped recall (re-rank only) | .35 | .40 | .55 | .50 | .90 | .95 |
+| C3 proposal (nominate) | .35 | .40 | .55 | .50 | .90 | .95 |
+| round 9 U2 stemmed + emb (ref) | .50 | .40 | .65 | .60 | .95 | 1.00 |
+| round 9 U2 stemmed BM25 (ref) | .50 | .40 | .55 | .50 | .85 | .85 |
+
+Reference rows read from `stage9/results.json` (sha256 `a87f3e39...86a2f`), not re-graded.
+
+Cost (embeddings on, model pre-loaded, same corpus):
+
+| | rows | db size | index time |
+|---|---|---|---|
+| Per section (`remember` loop) | 1,607 | 12.4 MB | 179.8 s (~112 ms/row) |
+| Per file (`ctx.index`, shipped way) | 59 | 7.6 MB | 6.3 s |
+
+Truncation: 37 of 1,607 sections exceed the 6,000-char embed cap (max 84,174 chars; mean 1,542). For comparison 56 of 59 whole files exceed it today.
+
+Plain read:
+- Pass bar missed. C3 vs round 9 U2: any@5 -.05/-.05 (at the edge), prim@5 A -.15, B 0. prim@10 -.10.
+- C3 is identical to C2 on every top-5. Nominees reached the top 10 in 2 of 400 slots. With a 400-row BM25 pool over 1,607 rows, only 8 extra vectors can be added, so nomination does nothing here. The embedding gain comes from re-ranking.
+- C1 vs round 9 stemmed BM25: prim@5 -.10/-.05, any@5 equal on A, -.05 on B. Stemming accounts for the primary@5 gap on BM25. Whether it also explains the gap to U2 stemmed+emb was not isolated (the stemmed run was the `mem` table, unstemmed here is `docs`; path tokens in the FTS body may differ).
+- Index cost is ~28x the time and 1.6x the size of per-file indexing.
+
+## Round 11 — stemming vs path differences (isolation)
+
+Script: `poc/tinymem-round11-poc.mjs`. Outputs: `~/.cache/tinymem-probe/out/stage11/`
+(`results.json` sha256 `4fa8ec4340391c3deddb4a4bb417056e6b412d044c27deef695f4260c5c07713`,
+`report.md` sha256 `dd71362b03f51a396234155bf8a1ee602bd667d698d1da8f98744aa9b8e3df1b`).
+
+Question: round 10's unstemmed `docs` sections scored prim@5 askA .35 (C2) vs round 9 U2's .50.
+Is that stemming, or other differences between the `mem` path and the `docs` path?
+
+Setup (one change per step, same 1,607 sections, questions, gold + gold-extra + gold-extra2, scoring):
+- S1 = round 10 C1 re-run (unstemmed `docs`, BM25 only, shipped `recall`). Reproduces round 10 C1 on all 40 asks.
+- S2 = the SAME FTS column values copied row by row (all 7 columns, 1,607 rows, from the round-10 db) into a
+  `tokenize='porter unicode61'` table; same `ftsMatch` query, same `-bm25(t)` call, `ORDER BY score DESC LIMIT 400`. Only the tokenizer differs.
+  `docs` = `fts5(... body)` default unicode61 (`src/store.js:118`); `mem` = same plus `tokenize='porter unicode61'` (`src/store.js:221`).
+- S3 = S2 pool + the shipped fusion (`minmax(score) + 1.0*minmax(cosine)`, `src/index.js:870-898`, pool 400, vectors from the round-10 `mem_embeddings`).
+- Controls: S1 equals an own-SQL copy of the unstemmed table on 40/40 asks (so the `doc_scope` JOIN and import-spreading are no-ops here: no edges, no scopes);
+  my fusion equals shipped `recall` on 40/40; shipped recall equals round 10 C2 on 40/40; re-scored round 9 refs equal stored metrics.
+
+Numbers (extra2 gold, 20 questions):
+
+| config | prim@5 A | prim@5 B | prim@10 A | prim@10 B | any@5 A | any@5 B |
+|---|---|---|---|---|---|---|
+| S1 unstemmed BM25 | .40 | .35 | .40 | .40 | .85 | .80 |
+| S2 porter BM25, same text | .50 | .40 | .55 | .50 | .85 | .85 |
+| S3 S2 + shipped re-rank | .50 | .40 | .65 | .60 | .95 | 1.00 |
+| ref round 9 U2 stemmed BM25 | .50 | .40 | .55 | .50 | .85 | .85 |
+| ref round 9 U2 stemmed + emb | .50 | .40 | .65 | .60 | .95 | 1.00 |
+| ref round 10 C2 (unstemmed + re-rank) | .35 | .40 | .55 | .50 | .90 | .95 |
+
+Pooled over A+B (40 asks): prim@5 S1 .375, S2 .45, S3 .45; prim@10 .40 / .525 / .625; any@5 .825 / .85 / .975.
+
+Read:
+- S2 equals round 9 U2 stemmed BM25 on the top-10 sections of all 40 asks (0 differences). Stemming is the whole BM25 gap; nothing else in the `mem` vs `docs` path moves BM25 ranking.
+- S3 matches U2 stemmed+emb on every metric, though 8 of 40 top-10 lists differ (U2's KNN nominees on the memory path, not available to `docs`); the metrics do not move.
+- So the .35 vs .50 askA gap in round 10 (C2 vs U2 emb) is stemming; the embedding re-rank behaves the same on both tables.
+- Flips (primary rank, 0 = not in top 10; "extras" = gold-extra/extra2 keys for that question):
+  - askA S1->S2: q01 0->4, q05 0->3 (both enter primary@5; q05 has 6 extras). askA S2->U2: none.
+  - askB S1->S2: q03 0->2 enters primary@5; q06 0->10 and q19 (any@5 only), q13 10->0 (any@5 out). askB S2->U2: none.
+  - S2->S3 (not asked, for context): askA q14 4->0 out of primary@5, q19 0->2 in; askB q06 10->5 in, q08 5->0 out.
+- Primary@5 scores only the original primary key; the graded extras influence any@5 only. The 2-3 primary@5 flips per ask
+  are real rank moves (0 vs 2-4), not borderline-5 effects, and none depends on the disputed grader verdicts. The any@5
+  flips (q06, q13, q19 on B) are the grader-sensitive ones.
+
+Differences between the `mem` path and the `docs` path, besides the tokenizer (none of them changed BM25 order here):
+- FTS body: identical. Both write `indexBody({ path: m.id, body: m.text })` (`src/store.js:624` mem, `:648` docs). Round 9 ids were `file::a-b`, round 10 `file#a-b`; both split to the same path tokens.
+- Columns: `docs` has an extra `source` column (`store.js:118` vs `:221`), UNINDEXED in both, so no effect on BM25. No column weights are passed in either: `-bm25(docs)` (`store.js:1689`) vs `-bm25(mem)` (`store.js:1669`); only `body` is indexed.
+- Query building: same `ftsMatch` and same `_rankKind` entry (`index.js:859-866`).
+- SQL: `docs` fetches `min(max(limit,200),400)` rows then runs import-spreading (`store.js:1683`, `:1696`); `mem` is `LIMIT :limit` with no spreading (`store.js:1674`). Spreading is a no-op without edges (control above).
+- Fences: `doc_scope` JOIN + expiry (docs) vs `mem_scope` owner/session JOIN (mem). No scopes set, so no effect.
+- KNN nomination: only for `MEM_KINDS` (`index.js:866`, `store.js:1968`). docs gets re-rank only. Changed 8 top-10 lists, no metric.
+- `Hit.cosine` surfaced on mem only (`index.js:889`); not a ranking term.
+- Vectors: both use `mem_embeddings` (written rows), same input text.
+
+## Round 12 — fresh questions, two repos (stemming re-check)
+
+Script: `poc/tinymem-round12-poc.mjs`. Outputs: `~/.cache/tinymem-probe/out/stage12/{results.json,report.md}` (results sha256 `171d7ea1d0837035880b4988e8aafd4b7d84f48db4e694f601def1b6e8fa68aa`, report sha256 `a3410a4b52b1c911d34978ae865e278e41258ceee916785796790e79b3c45fac`). Questions: 30 per repo, written blind, never seen by any retrieval (bareloop.json sha `cce11be3...8085`, bareagent.json sha `d6cb21d8...3c7`, both verified first).
+
+Setup: litectx md chunker sections, one `doc` row each via `remember()`, embeddings ON, round-11 mechanics. S1 unstemmed `docs` BM25 | S2 same FTS rows in a `porter unicode61` table, same query + `bm25()` | S3 = S2 + shipped embedding re-rank | S4 = S1 + the same re-rank (new; round 11 lacked it). Scored at chunk level, primary key only, no graders. Primary mapping: question `line` is 1-based, chunker `startLine` is 0-based, so the section is the one with `startLine == line - 1` in that file (first line also checked to contain the heading). 0 unmapped primaries on both corpora. S1 and S4 match the shipped `recall` (no embeddings / embeddings) on 30/30 questions per corpus.
+Corpora: bareloop = the round 9/10/11 corpus (59 files, 1607 sections). bareagent = all `git ls-files '*.md'` at HEAD 4de9da27 (confirmed), 40 files, 832 sections; excluded CHANGELOG.md (release history), docs/index.md and docs/archive/wiki-index.md (both generated by docs-builder, state "never hand-edit"); no node_modules entries.
+
+Pass bar (fixed before running): Stemming is CONFIRMED if, on BOTH corpora, S2 > S1 on primary@5 AND S3 > S4 on primary@5, and in each comparison stemming loses at most 2 questions that unstemmed had in the top 5. Win on one corpus and tie on the other = WEAK. Tie or loss on both = NOT CONFIRMED.
+
+| corpus | cfg | p@1 | p@5 | p@10 | MRR@10 |
+|---|---|---|---|---|---|
+| bareloop | S1 unstemmed | 12 | 22 | 23 | .539 |
+| bareloop | S2 porter | 17 | 24 | 24 | .658 |
+| bareloop | S3 porter + re-rank | 21 | 27 | 27 | .771 |
+| bareloop | S4 unstemmed + re-rank | 18 | 25 | 27 | .710 |
+| bareagent | S1 unstemmed | 10 | 19 | 25 | .493 |
+| bareagent | S2 porter | 17 | 22 | 25 | .656 |
+| bareagent | S3 porter + re-rank | 17 | 22 | 27 | .667 |
+| bareagent | S4 unstemmed + re-rank | 18 | 23 | 26 | .673 |
+
+Verdict: **WEAK**. bareloop meets the bar (S2-S1 = +2, S3-S4 = +2, stemming loses 0 in both). bareagent meets S2 > S1 (+3, loses 1 of S1's top 5, gains 4) but fails S3 > S4 (-1: S3 22 vs S4 23). One corpus passes, the other does not; it is not a tie or loss on both, so not NOT CONFIRMED.
+
+Read:
+- Stemming reliably helps BM25 alone (p@1 12->17 and 10->17, MRR +0.12 and +0.16 on the two repos). With the embedding re-rank on, the p@5 gap shrinks to +2 on bareloop and reverses to -1 on bareagent; the re-rank takes over most of what stemming gives.
+- Movers S1->S2 (bareloop 2, bareagent 5; all primary@5 entries except ba05): 6 of 7 have question~section word-form differences consistent with stemming (agree~agreed, report~reporting, park~parked, fire~fires, mean~means, app~apps, ...). ba05 (S1 5 -> S2 6, loses) has no word-form difference: a BM25 length/idf shift from stemmed term merging, not a form match.
+- Movers S4->S3: bl08 (6->1, agree~agreed, change~changed, message~messages) and bl29 (25->5, pause~paused, answer~answers) are word-form driven; ba25 (4->8, loses) has no word-form difference between question and primary section, so that loss is not explained by forms.
+- The one-question margins (bareagent S3 vs S4) are within what 30 questions can resolve; the claim supported is "stemming helps without embeddings, and the benefit with embeddings is smaller and not consistent across repos".
+
+## Round 13 — whole-file baseline on fresh questions
+
+Script: `poc/tinymem-round13-poc.mjs`. Outputs: `~/.cache/tinymem-probe/out/stage13/{results.json,report.md}` (results sha256 `502a4de281c15ba55336a0b9be2fa39ee9cd2d11b5cd27ae3e88e6b9ee158b3f`, report sha256 `a8300febdbf3314f14efbc79813ff63b76c7696a505ab23d6694d36aefcfb127`).
+
+Setup: SHIPPED code, unmodified. Same round-12 question files (hashes verified) and identical corpora (bareloop 59 files; bareagent HEAD 4de9da27, 40 files, same exclusions), written to a fresh root and indexed with `ctx.index()` (one `docs` row per file; indexed doc count == corpus file count checked), then `recall(q, {kind:'doc', n:10})`. F1 embeddings off, F2 embeddings on. STRICT = hit.path == primary.path AND `chunk.startLine == primary.line - 1`; FILE = path only. S1/S4 not re-scored from scratch; re-run on 5 questions per corpus against the saved round-12 sections dbs and all 10 ranks reproduced exactly.
+
+Pass bar (fixed before running): Sections beat whole files if, on BOTH corpora, round-12 S4 (sections + embeddings) beats F2 (STRICT) on primary@5 by >= 3 of 30, AND S1 beats F1 (STRICT) by >= 3 of 30. Tie or smaller margin on either corpus = NOT CONFIRMED.
+
+| corpus | cfg | p@1 | p@5 | p@10 | MRR@10 |
+|---|---|---|---|---|---|
+| bareloop | F1 strict | 7 | 12 | 13 | .306 |
+| bareloop | F1 file | 8 | 17 | 18 | .390 |
+| bareloop | F2 strict | 7 | 13 | 14 | .312 |
+| bareloop | F2 file | 10 | 19 | 20 | .457 |
+| bareloop | S1 (r12) | 12 | 22 | 23 | .539 |
+| bareloop | S4 (r12) | 18 | 25 | 27 | .710 |
+| bareagent | F1 strict | 10 | 12 | 13 | .366 |
+| bareagent | F1 file | 12 | 18 | 22 | .487 |
+| bareagent | F2 strict | 8 | 11 | 14 | .322 |
+| bareagent | F2 file | 12 | 19 | 25 | .510 |
+| bareagent | S1 (r12) | 10 | 19 | 25 | .493 |
+| bareagent | S4 (r12) | 18 | 23 | 26 | .673 |
+
+Verdict: **CONFIRMED**. Margins at p@5 (STRICT): bareloop S4-F2 = +12, S1-F1 = +10; bareagent S4-F2 = +12, S1-F1 = +7. All four clear the >= 3 bar.
+
+Read:
+- Strict is the fair comparison for section-level questions, but the file-level reading is the upper bound for whole-file search: even there S1 beats F1-file on p@5 (22 vs 17, 19 vs 18) and S4 beats F2-file (25 vs 19, 23 vs 19); the bareagent S1 vs F1-file gap (+1) is within noise at 30 questions. The p@1 and MRR gaps are larger than the p@5 gaps.
+- Right file in top 5 but pointer on the wrong section (or null): bareloop F1 5 of 17, F2 6 of 19; bareagent F1 6 of 18, F2 8 of 19. Roughly a third of right-file hits point at a different section, so the shipped chunk pointer does not close the gap.
+- Embeddings on whole files barely move STRICT p@5 (+1 bareloop, -1 bareagent) but lift FILE p@10 on bareagent (22 to 25).
+- Caveat: indexing a non-git root logs harmless `fatal: not a git repository` from the git-signal step; no effect on results.

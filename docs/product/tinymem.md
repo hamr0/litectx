@@ -48,6 +48,43 @@ splitting docs and searching them.
 | The agent reads the index (page name, headings with line ranges) and fetches only the range it needs. Up to about 100 pages it reads the index; beyond that it searches. |
 | Module 0 is a bake-off: every matching method runs on the same frozen data and labelled sample, and the best wins. |
 
+## Retrieval change (decided 2026-10-04)
+
+**Now.** An indexed md file is one search row. Search ranks whole files and returns one hit per file, with a guess at the best section. That guess is wrong about a third of the time when the right file is found (round 13). One embedding per file, made from its first 6,000 characters.
+
+**Change.**
+- Indexed md files store each heading section as its own `doc` row in the existing `docs` table. The sections come from litectx's existing md chunker, at every heading level.
+- Each section row has its own embedding and line range.
+- Same kind, same table, nothing stored twice.
+- Search returns sections. `get(path,{startLine,endLine})` fetches them.
+- Embeddings keep re-ordering only. They do not nominate.
+- No stemming.
+- `.eml` is added to the text formats (about 800-char paragraph pieces).
+- Uploads (md, docx, pdf, txt, log, csv) are already per piece and are unchanged.
+- Code, facts, episodes and blobs are unchanged.
+
+**Evidence** (learnings, rounds 10-13).
+- Fresh questions (60, two repos), right section in the top 5: sections 23-25 of 30, whole files 11-13 of 30 (round 13).
+- Nomination added nothing (round 10).
+- Stemming helps with embeddings off and is about even with them on (round 12), so it is left out.
+
+**Cost.** First index takes about 3 min, against about 6 s on the bareloop docs (round 10). The db grows from 7.6 to 12.4 MB. After that only changed files re-embed.
+
+**Build tests.**
+- The multis scope fence on section rows, with break-one and break-both mutation tests.
+- Existing tests and the doc and code benches pass.
+- Re-run the 60 fresh questions through the built code and confirm the numbers.
+- Measure index time.
+
+**Not proven.**
+- Uploads and 800-char pieces were not re-tested on real questions. Test them via `.eml` during the build.
+
+**Out of scope.**
+- Relating pieces to each other without a question. That belongs to the pages-and-links module.
+- No tree, no timer, no task suggestions. Merkle ids and pages (module 3), the opt-in timed fold (module 6) and open loops (module 2) stay later modules with their triggers.
+
+Code facts and the tenant-scope tests for this change are in [`tinymem-learnings.md`](tinymem-learnings.md#code-facts-for-the-retrieval-change-from-the-2026-10-03-design-draft).
+
 ## Measured starting facts (2026-10-01, the owner's machine)
 
 | Fact | Value |
@@ -350,6 +387,7 @@ Settled by the owner, 2026-10-02.
 | A global digest across projects | One periodic summary across all projects. A model call each period and another tier that grows. | the owner asks cross-project questions the pages cannot answer |
 | Three scope levels (global, project, agent) | Fences deciding which memory each agent can see. Every table and query carries the fence. | a second agent shares one store |
 | A graph view without Obsidian | For example a Mermaid map of page links. | the owner wants the graph where Obsidian is not available |
+| Stemming for doc sections | Word-form matching (agree/agreed) on section search. | a consumer searches docs with embeddings off (round 12: +5/60 top-5 with embeddings off, ~even with them on) |
 
 ### Not planned
 
