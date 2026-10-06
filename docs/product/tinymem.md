@@ -1,6 +1,6 @@
 # tinymem — long-term organized memory for agents, inside litectx (preliminary PRD)
 
-> **Status: DRAFT, a portal that changes as POCs come and go. Module 0 (the bake-off) signed off 2026-10-02.** Nothing here is built. A line marked **(proposed)**
+> **Status: DRAFT, a portal that changes as POCs come and go. Module 0 (the bake-off) signed off 2026-10-02.** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); the rest is not built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
 > Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
@@ -48,14 +48,15 @@ splitting docs and searching them.
 | The agent reads the index (page name, headings with line ranges) and fetches only the range it needs. Up to about 100 pages it reads the index; beyond that it searches. |
 | Module 0 is a bake-off: every matching method runs on the same frozen data and labelled sample, and the best wins. |
 
-## Retrieval change (decided 2026-10-04)
+## Retrieval change (decided 2026-10-04) — BUILT (0.34.0, unreleased)
 
 **Now.** An indexed md file is one search row. Search ranks whole files and returns one hit per file, with a guess at the best section. That guess is wrong about a third of the time when the right file is found (round 13). One embedding per file, made from its first 6,000 characters.
 
 **Change.**
-- Indexed md files store each heading section as its own `doc` row in the existing `docs` table. The sections come from litectx's existing md chunker, at every heading level.
+- Indexed md files store each heading section as its own `doc` row. Doc rows live in a separate FTS table, `doc_fts` (same unstemmed tokenizer); the `docs` table is code-only, so md no longer perturbs code BM25 (a shared table dropped aurora-mixed HARD MRR 0.447 to 0.294). The sections come from litectx's existing md chunker, at every heading level.
 - Each section row has its own embedding and line range.
-- Same kind, same table, nothing stored twice.
+- Same kind, nothing stored twice.
+- Scoped direct docs (`remember` kind doc, `ingest` under a scope) use their own key namespace in both tiers (`scope\x1Eid`, global `\x1Eid`), separate from the fact keys `owner\x1Fid`. This fixed tenant B's same-filename ingest deleting tenant A's doc, and also the same-id doc/fact collision (they no longer share `mem_text`/`mem_meta`/embedding rows). Scoped `forget({id})`/`{idPrefix}` now also deletes that tenant's own docs.
 - Search returns sections. `get(path,{startLine,endLine})` fetches them.
 - Embeddings keep re-ordering only. They do not nominate.
 - No stemming.
@@ -64,7 +65,7 @@ splitting docs and searching them.
 - Code, facts, episodes and blobs are unchanged.
 
 **Evidence** (learnings, rounds 10-13).
-- Fresh questions (60, two repos), right section in the top 5: sections 23-25 of 30, whole files 11-13 of 30 (round 13).
+- Fresh questions (60, two repos), right section in the top 5: sections: bareloop 22/30 embeddings off, 25/30 on; bareagent 19/30 off, 23/30 on. Whole files (exact section): bareloop 12/30 off, 13/30 on; bareagent 12/30 off, 11/30 on (round 13).
 - Nomination added nothing (round 10).
 - Stemming helps with embeddings off and is about even with them on (round 12), so it is left out.
 

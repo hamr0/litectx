@@ -52,7 +52,7 @@
       "when": "Delete written memory — by id, by kind, or tenant-fenced by scope (the correct compliance/erasure primitive: it deletes now). The model calls this directly via MCP.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.forget(sel: string | { id?, kind?, by?, scope?, idPrefix? }) => number",
-      "fails": "Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Mem-axis only — never docs/blob/stash.",
+      "fails": "Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Scoped `{ scope, id }`/`{ scope, idPrefix }` also delete that tenant's own written/ingested docs (tenant-exact); never touches stash.",
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nctx.forget('pref-theme')                        // one id\nctx.forget({ kind: 'episode' })                 // all episodes\nctx.scoped('tenant:acme').forget({ scope: 'tenant:acme' }) // right-to-erasure for one tenant"
     },
     {

@@ -69,11 +69,11 @@ function minmax(a) {
  * Strip the internal `source` field the docs `search` attaches (so `_rankKind` can route a doc candidate
  * to the right vector table — file vs mem). It exists only for that routing and must never surface on a
  * public recall hit, so `_rankKind` drops it on every path before returning.
- * @param {{ path: string, source?: string }[]} hits
+ * @param {{ path: string, source?: string, rid?: number }[]} hits
  * @returns {void}
  */
 function dropSource(hits) {
-  for (const h of hits) delete h.source;
+  for (const h of hits) (delete h.source, delete h.rid); // `rid` (docs row id) is likewise internal
 }
 
 // v1 default ranking = BM25 + 1-hop import-spreading (additive boost; see store.search). Weight
@@ -469,8 +469,22 @@ export class LiteCtx {
     // embeddings tier (slice 6): embed ONLY the changed files (incremental — unchanged files keep
     // their stored vector). File-level, head-truncated text (POC-validated). The vector rides on the
     // upsert into `applyChanges`, written as a BLOB. Sequential by design (batching deferred).
+    // Indexed md is embedded per heading SECTION (raw section text — the embedder head-caps it), carried as
+    // `sectionVecs`, and gets no file-level vector; every other file keeps its one file vector.
     if (this.embeddings) {
       for (const u of upserts) {
+        if (u.kind === "doc" && u.format === "md" && u.nodes?.length) {
+          /** @type {Float32Array[]} */
+          const vecs = [];
+          for (const c of u.nodes) {
+            const v = await this._embedSafe(c.text);
+            if (v === null) break;
+            vecs.push(v);
+          }
+          if (vecs.length < u.nodes.length) break; // tier unavailable — index BM25-only from here
+          u.sectionVecs = vecs;
+          continue;
+        }
         const v = await this._embedSafe(u.body);
         if (v === null) break; // tier unavailable — index BM25-only from here
         u.embedding = v;
@@ -510,6 +524,30 @@ export class LiteCtx {
         backfilled.push([p, v]);
       }
       this.store.putEmbeddings(backfilled); // one transaction (no-op when empty)
+      // same backfill for indexed-md SECTION rows (embedded per section, no file vector): embed the stored
+      // section body (byte-identical to the normal-path input — chunk text) once the file's disk hash still
+      // matches the indexed hash (TOCTOU guard, as above).
+      /** @type {[number, Float32Array][]} */
+      const secBackfilled = [];
+      /** @type {Map<string, boolean>} */
+      const fresh = new Map();
+      for (const sct of this.store.vectorlessSections()) {
+        if (!current.has(sct.path)) continue;
+        let ok = fresh.get(sct.path);
+        if (ok === undefined) {
+          try {
+            ok = this.store.fileHash(sct.path) === sha256(readFileSync(join(this.root, sct.path), "utf8"));
+          } catch {
+            ok = false;
+          }
+          fresh.set(sct.path, ok);
+        }
+        if (!ok) continue;
+        const v = await this._embedSafe(sct.body);
+        if (v === null) break;
+        secBackfilled.push([sct.rid, v]);
+      }
+      this.store.putSectionEmbeddings(secBackfilled);
     }
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
@@ -646,8 +684,9 @@ export class LiteCtx {
    * (the default) no model is touched — the work is synchronous, just wrapped in a resolved promise.
    *
    * Every hit carries a `chunk` pointer — the best-matching function/section inside the file
-   * (chunk-granular recall; `null` for written memory, where the row is the unit). Ranking stays
-   * file-level and is unchanged by this: the pointer localizes, it never reorders.
+   * (chunk-granular recall; `null` for written memory, where the row is the unit). For indexed md
+   * each heading section is its own `doc` row, so the pointer is the hit's own section; for code, ranking stays
+   * file-level and the pointer localizes without reordering.
    *
    * `log: false` skips the recall audit log. The log is a **demand signal** — anything that isn't
    * real demand (dashboards, CI checks, batch tooling, read-only-db consumers) must not write to it.
@@ -655,7 +694,7 @@ export class LiteCtx {
    * `body: true` inlines each hit's content as `hit.body` (off by default — recall returns pointers,
    * not payloads). litectx owns this because *where the body lives is kind-dependent*: written memory
    * comes back VERBATIM; a file hit returns its localized chunk's indexed text, or the whole file when
-   * nothing localized. Opt in when mounting litectx as a memory store or feeding an assembler. (A blob
+   * nothing localized (an md hit is already one section). Opt in when mounting litectx as a memory store or feeding an assembler. (A blob
    * hit — a byte-exact upload, R3 — has no text body: `body` is null; fetch its bytes with {@link get}.)
    *
    * `scope` (multis M3 R2 / M4) fences BOTH per-upload axes: direct doc/blob rows to `scope ∪ null-global`
@@ -760,17 +799,24 @@ export class LiteCtx {
    * @param {string} path  repo-relative
    * @param {number} startLine  0-based, inclusive
    * @param {number} endLine    0-based, inclusive
+   * @param {Map<string, { disk: string | null, current: boolean }>} [cache]  per-call file state (read + hash once per path)
    * @returns {{ ok: true, body: string | null } | { ok: false, reason: "missing" | "drifted" }}
    *   `ok` with `body: null` means the file is current but no chunk sits at that range.
    */
-  _chunkState(path, startLine, endLine) {
-    let disk;
-    try {
-      disk = readFileSync(join(this.root, path), "utf8");
-    } catch {
-      return { ok: false, reason: "missing" }; // gone from disk — stale until the next index() sweeps it
+  _chunkState(path, startLine, endLine, cache) {
+    // `cache` (one recall's body-fill): the file is read + hashed ONCE per path, however many hits land in it
+    let f = cache?.get(path);
+    if (!f) {
+      try {
+        const disk = readFileSync(join(this.root, path), "utf8");
+        f = { disk, current: this.store.fileHash(path) === sha256(disk) };
+      } catch {
+        f = { disk: null, current: false }; // gone from disk — stale until the next index() sweeps it
+      }
+      cache?.set(path, f);
     }
-    if (this.store.fileHash(path) !== sha256(disk)) return { ok: false, reason: "drifted" };
+    if (f.disk === null) return { ok: false, reason: "missing" };
+    if (!f.current) return { ok: false, reason: "drifted" };
     return { ok: true, body: this.store.chunkBodyAt(path, startLine, endLine) };
   }
 
@@ -790,9 +836,10 @@ export class LiteCtx {
    * @returns {Omit<import("./store.js").Hit, "score">[]}
    */
   _attachBodies(hits) {
+    const cache = new Map();
     for (const h of hits) {
       if (h.chunk) {
-        const st = this._chunkState(h.path, h.chunk.startLine, h.chunk.endLine);
+        const st = this._chunkState(h.path, h.chunk.startLine, h.chunk.endLine, cache);
         // drifted → withhold: the stored text is what the file USED to say, and handing it to a caller
         // who just edited that file is the silent pre-edit-code bug. Null the one hit rather than throw
         // — a single stale file must not blow up a whole result set. missing → still serve: these chunk
@@ -800,7 +847,7 @@ export class LiteCtx {
         h.body = st.ok ? st.body : st.reason === "missing" ? this.store.chunkBodyAt(h.path, h.chunk.startLine, h.chunk.endLine) : null;
         continue;
       }
-      const item = this.store.getItem(h.path);
+      const item = this.store.getItemByKey(h.path); // hits carry the PHYSICAL key — a doc and a same-id fact each resolve to their own row
       if (!item) {
         h.body = null;
         continue;
@@ -1150,8 +1197,9 @@ export class LiteCtx {
    * - `{ scope, kind? }` — **tenant-fenced** (multis M4): deletes only that owner's `fact`+`episode`
    *   rows, the delete-side mirror of the {@link recall} owner fence. A tenant string → `mem_scope.owner
    *   = scope`; {@link GLOBAL} → the shared tier (`owner IS NULL`) ONLY — never a tenant's rows. Prefer
-   *   the bound {@link ScopedView#forget}. Mem-axis only: a tenant's `doc`/blob uploads (separate
-   *   `doc_scope` axis), other tenants' rows, and the stash are untouched. Under `strictScope` a
+   *   the bound {@link ScopedView#forget}. A bare/`fact`/`episode` wipe is memory-only: the tenant's `doc`/blob
+   *   uploads, other tenants' rows, and the stash are untouched. `{ scope, kind: 'doc' }` wipes that tenant's
+   *   uploaded/written docs (keyed `scope\x1Eid` in the doc key namespace, so a same-id doc of another tenant or the shared tier is never hit). Under `strictScope` a
    *   scope-less memory forget THROWS — a tenant-blind wipe is unexpressible by omission.
    * - `{ scope, id }` / `{ scope, idPrefix }` — **tenant-fenced delete-by-key** (Feature B, 0.27.0):
    *   `{ id }`/`{ idPrefix }` COMBINE with the fence to drop one row / one id's segments for exactly that
@@ -1159,12 +1207,14 @@ export class LiteCtx {
    *   owner-qualified physical key): a foreign tenant's id matches nothing → **0**, the fence not
    *   id-matching decides. `{ scope, by }` still THROWS (`by` is owner-blind provenance; combined with a
    *   fence it is the omission-blind footgun — use base `{ by }` for an owner-blind provenance delete).
+   *   The id forms reach the tenant's same-id `doc`/blob rows too (the doc axis is owner-qualified like the memory axis);
+   *   the shared tier is reached only by `{ scope: GLOBAL, id }`.
    *
    * @param {string | { kind?: string, by?: string, scope?: string | symbol, id?: string, idPrefix?: string }} sel
    * @returns {number}
    * @category memory
    * @when Delete written memory — by id, by kind, or tenant-fenced by scope (the correct compliance/erasure primitive: it deletes now). The model calls this directly via MCP.
-   * @fails Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Mem-axis only — never docs/blob/stash.
+   * @fails Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Scoped `{ scope, id }`/`{ scope, idPrefix }` also delete that tenant's own written/ingested docs (tenant-exact); never touches stash.
    * @signature liteCtx.forget(sel: string | { id?, kind?, by?, scope?, idPrefix? }) => number
    * @example
    * import { LiteCtx } from 'litectx'
@@ -1271,7 +1321,9 @@ export class LiteCtx {
       if (buffer.length > maxSize) throw new Error(`ingest: file exceeds maxSize (${buffer.length} > ${maxSize} bytes)`);
       const filename = opts.filename ?? `${id}.${cls.format}`;
       const meta = opts.meta != null ? JSON.stringify(opts.meta) : null;
-      this.store.forgetMemory({ idPrefix: id }); // upsert: drop any prior row/segments + bytes for this id
+      // upsert: drop any prior row/segments + bytes for this id UNDER THIS SCOPE only (a tenant-exact delete on the
+      // owner-qualified doc key — another tenant's same-named upload is a separate row and must survive)
+      this.store.forgetMemory({ ownerFenced: true, owner: writeScope, idPrefix: id, kind: "doc" });
       this.store.writeBlob({ id, bytes: buffer, filename, format: cls.format, meta, scope: writeScope, expiresAt: opts.expiresAt, createdAt: Date.now() });
       return { id, kind: "doc", format: cls.format, mode: "blob", chunks: 0 };
     }
@@ -1282,8 +1334,8 @@ export class LiteCtx {
       maxPages: opts.maxPages,
       parseTimeoutMs: opts.parseTimeoutMs,
     });
-    // re-ingest = upsert: drop any prior segments/blob of THIS document first (direct rows only).
-    this.store.forgetMemory({ idPrefix: id });
+    // re-ingest = upsert: drop any prior segments/blob of THIS document under THIS scope first (direct rows only).
+    this.store.forgetMemory({ ownerFenced: true, owner: writeScope, idPrefix: id, kind: "doc" });
     // one direct doc row per segment, ids `<base>#<n>` — each independently ranked + recallable.
     for (let i = 0; i < segments.length; i++) {
       await this.remember(`${id}#${i}`, segments[i], { kind: "doc", format, meta: opts.meta, scope: opts.scope, expiresAt: opts.expiresAt });

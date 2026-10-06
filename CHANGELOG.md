@@ -5,6 +5,43 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.34.0] — 2026-10-05
+
+### Changed
+
+- **Indexed markdown is now one `doc` row per heading section**, not one row per file. The existing chunker splits at every heading level (`#`..`######`); `index()` and `ingest()` of md both use it. A doc hit carries its section's line range, so `get(path, { startLine, endLine })` fetches just that section. On fresh real questions the right section is in the top 5 for 22/30 (bareloop) and 19/30 (bareagent) questions with embeddings off, 25/30 and 23/30 with them on; whole-file search on the same questions gets 12/30 and 12/30 off, 13/30 and 11/30 on.
+- **Per-section embeddings.** With embeddings on, each md section gets its own vector (`doc_sections.vec`); backfill fills vectorless sections. Embeddings only re-rank doc hits — they never nominate doc candidates (KNN nomination stays fact/episode only).
+- **Doc rows live in a separate FTS table, `doc_fts`** (same unstemmed tokenizer). The `docs` table is now code-only, so md content no longer perturbs code BM25 statistics (a mixed repo ranks code identically to a code-only one).
+- **`.eml`** is ingested as plain text (chunked), like `txt`.
+
+### Performance
+
+- **Doc `get`, `remember`, `ingest` and `forget` no longer slow down as the store grows.** `doc_fts.path` is an unindexed FTS5 column, so every lookup or delete by path read every body. Direct docs and blobs now carry their `doc_fts` row number in the `doc_scope` sidecar (`rid`; an indexed md file is found through its `doc_sections` rows) and every lookup, replace and delete goes through it, never a scan. Measured at 100k doc rows, before to after (median ms): `get` of a doc 95 to 0.3, `get` of a missing id 115 to 0.25, `remember` 44 to 0.3, md `ingest` 234 to 3. Cost is now flat from 3k to 100k rows.
+- **Doc `recall` joins its scope/expiry fence by row number** and reads path/kind/format only for the winning rows (and skips the import-edge lookup, which a doc never has): 100k rows 37 to 14 ms, with `body: true` 187 to 16 ms. Results are unchanged (360 returned objects compared against the previous build, 0 differ).
+- `recall({ body: true })` reads and hashes each file once per call, however many hits land in it.
+- Opening an existing database does a one-time backfill of `doc_scope.rid` (about 100 ms at 100k doc rows); a second open is a no-op.
+- An older litectx writing to the same database (which does not know `rid`) stays safe: a row it leaves without a pointer is repaired on the next lookup or search, before the scope fence runs, so it never reads as shared. A separate index table was tried and rejected because an older writer leaves it stale, which let one tenant read another's doc in a test.
+
+### Fixed
+
+- **A customer uploading a file with the same name as a shared knowledge-base file or another tenant's file deleted it.** Direct docs (`remember(..., { kind: 'doc' })`, `ingest()`, blobs) now have their OWN key namespace, in both tiers: `scope\x1Eid` for a scoped doc and `\x1Eid` for a global one (the fact/episode keys `owner\x1Fid` / bare id are unchanged, and no fact is migrated). Scoped `forget({ id })` / `{ idPrefix }` now also deletes that tenant's own written/ingested docs (tenant-exact; never the stash).
+- **A doc and a fact with the same id no longer share storage.** Before, they shared `mem_text`/`mem_meta`/`mem_embeddings`/`recall_log` rows (within one tenant, and in the global tier since before 0.34.0): a doc recall returned the fact's body and forgetting the fact deleted the doc. Fixed by the doc key namespace above. `\x1E` (as well as `\x1F`) is now rejected in a caller id or scope on write.
+- **Opening a database where a tenant (or the global tier) had a doc and a fact with the same id threw `UNIQUE constraint failed` on every open**, and so did a db written by a mix of versions. The migration now copies a shared sidecar to the doc key while a fact still owns the old key (otherwise moves it), replaces an existing doc target with the migrated row (the old-shape row can only be the newer write), never throws on a collision, and is idempotent.
+- **Indexed markdown dropped by the `doc_fts` migration was never re-indexed by a consumer that only runs `index({ paths })`.** The migration now invalidates those files' `file_index` entries (never deletes them), so a partial pass re-chunks them.
+
+### Upgrade
+
+- Migrations run automatically on open: rows move to `doc_fts`, every direct doc is re-keyed into the doc key namespace (from bare ids on 0.33.x, or from `scope\x1Fid` on a pre-release 0.34.0 build), and a one-time full index rebuild is forced.
+- **The first `index()` after upgrading rebuilds everything.** Measured cold with embeddings on: bareloop ~146 s (vs ~6 s no-change), bareagent ~42 s; the db grew 7.6 to 12.4 MB on bareloop. Afterwards only changed files re-embed.
+
+### Known limits
+
+- (a) A tenant `get(x)` returns a shared fact `x` before the tenant's own doc `x`. Fix if a consumer writes facts and docs that share ids.
+- (b) Legacy ids containing the `\x1E` character (allowed before 0.34.0) are not decoded correctly. Fix if a consumer reports such ids.
+- (c) On databases from before 0.34.0, a shared doc and a shared fact with the same id kept only the last-written text (they shared one `mem_text` row). Fix (recover the text from the search copy) if a consumer reports it.
+- (d) The one-time upgrade of a store created before 0.34.0 re-keys each written/ingested doc one at a time, so a store with many direct docs opens slowly the first time (measured ~2 min at 10k direct docs in a 100k-row store; later opens are instant). Fix (re-key in one set-based pass) when a real store with many direct docs needs upgrading.
+- Unchanged: an unscoped non-strict `get(id)` when several tenants share an id returns the shared/global row if one exists, else the first tenant row in path order.
+
 ## [0.33.3] — 2026-09-28
 
 ### Docs

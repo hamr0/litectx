@@ -91,6 +91,10 @@ Retrieval is two-stage (litectx-prd.md:868):
    most from embeddings, since it has few code edges). Git activity and impact/refs are shown as
    grounding, never scored (litectx-prd.md:870-876).
 
+**Current (0.34.0):** indexed md is one `doc` row per heading section (own line range, own vector that
+re-ranks only), stored in a separate `doc_fts` table so md never perturbs code BM25. See
+[tinymem.md](../product/tinymem.md).
+
 **The code-over-md problem** was that prose-heavy markdown out-surfaced code because a query
 term is simply mentioned more often in prose. Aurora's fix was per-kind hybrid weights, which
 only work once ≥2 signals exist — with BM25 as the sole v1 signal that degenerates into a tuned

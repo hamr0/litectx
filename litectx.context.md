@@ -59,7 +59,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 |---|---|
 | Incremental, git-aware indexing into SQLite (code + md) | ✅ shipped |
 | First-class `kind` / `format` per document | ✅ shipped |
-| Ranked **recall** over FTS5 (BM25), file-granularity | ✅ shipped |
+| Ranked **recall** over FTS5 (BM25) — code at file grain, md **one row per heading section** (0.34.0) | ✅ shipped |
 | Symbol-level `nodes` substrate (tree-sitter: TS/JS/Python + md sections) | ✅ shipped (slice 2) |
 | **Kind-scoped recall** (code-over-md fix: kinds never share a ranking) + code-aware body | ✅ shipped (slice 3) |
 | **Import edges** + 1-hop **spreading** recall (BM25 + additive boost, w=0.3) | ✅ shipped (slice 4) |
@@ -346,7 +346,8 @@ return shape follows the `kind` argument:
 > signal, not a surfaced score).
 > `chunk` is **chunk-granular recall**: the function / method / md-section inside the file that
 > best carries your query terms (0-based inclusive lines). It **localizes, never reorders** —
-> ranking stays file-level and bench-identical. The most *specific* match wins: a class that
+> **code** ranking stays file-level and bench-identical (for indexed **md** the row is already one heading
+> section, so `chunk` is that section's own range — see "Markdown sections" below). The most *specific* match wins: a class that
 > merely contains the matching method never shadows it, and an anonymous arrow is labeled with
 > its nearest named container. A symbol's chunk now **includes its own leading doc-comment**
 > (JS/TS JSDoc / `//` immediately above the def; Python's docstring is in-body so already inside) —
@@ -527,7 +528,8 @@ path the only one a call site touches.
 - Returns a `ScopedView` exposing `recall`, `get`, `ingest`, `remember`, `forget`, `recentMemory`,
   `count`, `enumerate`, `reviewCandidates`, `promotionCandidates` with the same signatures **minus** `opts.scope`.
   `forget()` / `forget({ kind })` deletes only the bound tenant's `fact`+`episode` memory; `forget({ id })`
-  / `forget({ idPrefix })` delete one of its rows **by key**, tenant-fenced (a foreign id → `0`).
+  / `forget({ idPrefix })` delete one of its rows **by key**, tenant-fenced (a foreign id → `0`). Without `kind`,
+  `forget({ id })` deletes BOTH the fact and the doc with that id in the tenant (pass `kind` to hit one).
   `impact`/`index`/`recent` are not on the view (they're the repo-global code/edit axes, never tenant-fenced).
 
 ```js
@@ -701,7 +703,7 @@ Ingest an **uploaded file** (bytes + filename) — the third ingest path, distin
 disk root) and `remember()` (stores text whole, unchunked). Built for the **chat-upload flow**: bytes in, no
 on-disk file needed. Routed by **filename extension**:
 
-- **md / pdf / docx → chunkable** (`mode: "chunked"`). Converted to markdown, split into segments, each
+- **md / pdf / docx / eml → chunkable** (`mode: "chunked"`). Converted to markdown, split into segments, each
   stored as its own `source='direct'` doc row, so `recall(query, { kind: "doc", body: true })` surfaces the
   matching passage:
   - **md** → segmented directly (headings → the markdown chunker, one section per segment; flat → packed).
@@ -819,14 +821,14 @@ Delete directly-written memory. Returns the number of rows removed.
   `episode` rows (optionally one `kind`) — the delete-side mirror of the `recall` owner fence. A tenant
   string → `mem_scope.owner = scope`; **`GLOBAL`** → the shared tier (`owner IS NULL`) **only**, never a
   tenant's rows (a tenant forget is the stricter `owner = scope`, *not* the read fence's `owner ∪ global`
-  — else it would wipe the shared memory for everyone). **Mem-axis only:** a tenant's `doc`/blob uploads
-  (separate `doc_scope` axis), other tenants' rows, and the stash are untouched. Prefer the bound
+  — else it would wipe the shared memory for everyone). A bare/`kind` tenant wipe is memory-only: the tenant's `doc`/blob
+  uploads, other tenants' rows, and the stash are untouched. Prefer the bound
   `ctx.scoped(tenant).forget()` (no scope to omit). Under `strictScope`, a **scope-less** memory forget
   (`forget({})` or owner-blind `forget({ kind })`) **throws** — a tenant-blind wipe is unexpressible by
   omission.
 - `forget({ scope, id })` / `forget({ scope, idPrefix })` — **tenant-fenced delete-by-key** (Feature B):
   `{ id }` / `{ idPrefix }` **combine** with the fence to drop **one row / one id's `#`-segments for that
-  owner only** — the delete-side mirror of the `(scope, id)` upsert (supersede). The fence is
+  owner only** (since 0.34.0 this also deletes that tenant's own written/ingested docs under the same id/prefix, tenant-exact; never the stash) — the delete-side mirror of the `(scope, id)` upsert (supersede). The fence is
   **structural**: it matches the owner-qualified physical key, so a *foreign* tenant's id matches nothing
   and returns **`0`** (the fence, not id-matching, decides — exactly like a cross-tenant `get`). This
   retires the "scoped-`get` to verify, then owner-blind delete" bridge (which was safe only if ids were
@@ -1043,7 +1045,7 @@ path, file-granular) lands when a codebase-scan consumer exists. (`OFFSET` is O(
 the row counts targeted — a `rowid`-cursor is the deferred large-store path.)
 
 ### `ctx.size()` → `number`
-Indexed document count (file-granularity).
+Indexed document count (one per code file; one per heading section for md).
 
 ### `ctx.close()` → `void`
 Closes the SQLite connection. Call it when done (especially for file-backed DBs).
@@ -1315,12 +1317,38 @@ ranges, stored in a `nodes` table:
   Parsing uses **tree-sitter** (vendored WebAssembly grammars). Over-counting
   (e.g. nested arrows) is acceptable by design — the eventual output is a risk
   *bucket*, not a precise reference list.
-- **Markdown** → one chunk per heading section.
+- **Markdown** → one chunk per heading section (every level `#`..`######`).
 - **Anything else / parse failure** → a single file-level chunk (never throws).
 
-These chunks are **additive**: recall still gates on the file-level FTS index, so
-adding them does not change ranking yet. They exist to feed block-level git
-signals, graph edges, and the impact view in later slices.
+For **code**, these chunks are **additive**: recall still gates on the file-level FTS index, so
+they don't change ranking; they feed block-level git signals, graph edges, and the impact view.
+For **markdown** the chunks *are* the recall rows — see below.
+
+### Markdown sections as rows (0.34.0)
+
+An md file indexed by `index()` (or ingested via `ingest()`) becomes **one `doc` row per heading
+section** instead of one whole-file row. A doc hit therefore points at the section that matched, with its
+line range, and `get(path, { startLine, endLine })` fetches just that section (same hash gate as code).
+On fresh real questions this put the right section in the top 5 for 22/30 (bareloop) and 19/30
+(bareagent) questions with embeddings off, 25/30 and 23/30 on; whole-file search on the same questions gets
+12/30 and 12/30 off, 13/30 and 11/30 on.
+
+- **Vectors re-rank only.** With embeddings on, each section gets its own vector (`doc_sections.vec`) and
+  backfill fills any vectorless section. Embeddings **re-rank** doc hits; they never nominate doc
+  candidates (KNN nomination stays fact/episode only).
+- **Separate FTS table.** Doc rows live in `doc_fts` (same unstemmed tokenizer); the `docs` FTS table is
+  code-only, so md content never perturbs code BM25 statistics (a mixed repo ranks code identically to a
+  code-only one).
+- **Tenant-qualified keys.** Scoped direct docs (`remember(..., {kind:'doc'})` and `ingest()` under a
+  scope) are keyed `scope\x1Eid` (global: `\x1Eid`), a key namespace of their own, apart from the fact/episode
+  keys, in both tiers. This fixes a bug where tenant B ingesting the
+  same filename as tenant A deleted A's doc. Scoped `forget({ id })` / `{ idPrefix }` now also deletes
+  that tenant's own docs (tenant-exact, never another tenant's or the shared tier's).
+- **`.eml`** is ingested as plain text (chunked), like `txt`.
+- **Upgrade cost.** Migrations run automatically on open (rows move to `doc_fts`, scoped docs are
+  re-keyed, and a one-time full index rebuild is forced). The first `index()` after upgrading rebuilds
+  everything: measured cold with embeddings on, ~146 s on a large docs repo and ~42 s on a smaller one
+  (vs ~6 s no-change); the db grew ~7.6 → 12.4 MB. After that only changed files re-embed.
 
 ## Architecture
 
@@ -1382,6 +1410,15 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   tier is on. **recency** effects (base-level activation) remain the access-log tier and
   won't appear from git history alone — the POC showed git-seeded recency is repo-dependent,
   so git ships as grounding metadata, not ranking weight.
+- **Unscoped `get(id)` across tenants.** When several tenants share an id, an unscoped non-strict
+  `get(id)` returns the shared/global row if one exists, else the first tenant row in path order. Use
+  `scoped(tenant).get(id)` (or `strictScope`) when ids can collide.
+- **A doc and a fact with the same id are independent** (fixed in 0.34.0; before, within one tenant or in the
+  global tier they shared `mem_text`/`mem_meta` rows). `get(id)` with no kind resolves, in order: the caller's own fact, the shared (global) fact, then docs (the
+  caller's own doc, the shared doc), then indexed files. So a fact beats a doc of the same id, even a tenant's own
+  doc behind a shared fact; use `recall`/`recentMemory` (kind-specific) or distinct ids to address the doc.
+- **First `index()` after upgrading to 0.34.0 is a full rebuild** (md sections + per-section vectors) —
+  expect minutes with embeddings on, not seconds. It runs once.
 - **Same-mtime + same-size content swap.** Change detection fast-skips on
   `(mtime, size)`; an edit that lands within one filesystem mtime tick *and* keeps
   the exact byte length can be missed. Use `index({ force: true })` to be certain.
