@@ -112,6 +112,9 @@ const STASH_TAIL = 80;
 // partial index: finds sidecar rows still missing their rowid (a foreign/older writer's rewrite) in O(1)
 const RID_INDEX = "CREATE INDEX IF NOT EXISTS doc_scope_norid ON doc_scope(path) WHERE rid IS NULL; CREATE INDEX IF NOT EXISTS doc_scope_rid ON doc_scope(rid, scope, expires_at)"; // 2nd: covers the rowid-keyed search fence
 
+// partial index: finds file_index rows with no code-row pointer yet (legacy / a foreign writer's rewrite) in O(1)
+const CODE_RID_INDEX = "CREATE INDEX IF NOT EXISTS file_index_nocoderid ON file_index(path) WHERE code_rowid IS NULL";
+
 const SCHEMA = [
   // path tokens are folded into `body` (doubled) so filename matches count;
   // path/kind/format and the slice-7 write-path metadata are stored but not full-text indexed.
@@ -131,7 +134,7 @@ const SCHEMA = [
   // change detection (§6): (mtime, size) is the fast skip, content_hash the arbiter.
   // size guards the case where an edit lands within one filesystem mtime tick of the last
   // index (mtime unchanged but length moved); `index({ force: true })` covers the rest.
-  "CREATE TABLE IF NOT EXISTS file_index(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS file_index(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at INTEGER NOT NULL, code_rowid INTEGER)", // code_rowid = this file's `docs` rowid (-1 = no code row: a doc file; NULL = unknown/legacy) — `docs.path` is UNINDEXED, so a by-path lookup/delete scans every code row
   // symbol-level chunks (slice 2): the structural substrate. Recall still gates on `docs`
   // (file-granularity) — these line-ranged nodes carry file-level git metadata (slice 4) and
   // anchor call edges (slice 5). `symbol` is nullable (anonymous arrows, preambles); rows are
@@ -376,6 +379,8 @@ export class Store {
       const ridAdded = !dsCols.some((c) => c.name === "rid");
       if (ridAdded) this.db.exec("ALTER TABLE doc_scope ADD COLUMN rid INTEGER");
       this.db.exec(RID_INDEX);
+      if (!(/** @type {{ name: string }[]} */ (this.db.pragma("table_info(file_index)"))).some((c) => c.name === "code_rowid")) this.db.exec("ALTER TABLE file_index ADD COLUMN code_rowid INTEGER");
+      this.db.exec(CODE_RID_INDEX);
       // recentMemory on the memory axis (multis M4 R3): mem_scope gains `created_at` — the fact/episode
       // counterpart of doc_scope.created_at. Column-additive ALTER; pre-existing scope rows backfill NULL
       // (undated, sort last under DESC), exactly like the doc axis. Facts order by it; episodes by occurred_at.
@@ -391,6 +396,7 @@ export class Store {
       this.migrateOwnerKeyedMem();
       this.migrateDocKeyNamespace(); // direct docs → their own `scope\x1Eid` key space (after the vectors reached mem_embeddings and facts are keyed)
       this.healDocScopeRid(ridAdded); // every direct doc needs a sidecar row carrying its doc_fts rowid (after the migrations above moved/re-keyed rows)
+      this.healCodeRowid(); // every indexed file needs its `docs` rowid pointer (a pre-pointer db, or a foreign writer's rewrite)
     }
   }
 
@@ -572,6 +578,46 @@ export class Store {
   }
 
   /**
+   * Fill `file_index.code_rowid` for rows that lack it, in one `docs` pass (a no-op, O(1) via the partial
+   * index, once every row has a pointer). A file with no `docs` row (a doc file) gets -1.
+   * @returns {boolean} whether any row needed filling
+   */
+  healCodeRowid() {
+    if (!this.db.prepare("SELECT 1 FROM file_index WHERE code_rowid IS NULL LIMIT 1").get()) return false;
+    this.db.transaction(() => {
+      this.db.exec("CREATE TEMP TABLE IF NOT EXISTS _crid(path TEXT PRIMARY KEY, r INTEGER) WITHOUT ROWID; DELETE FROM _crid");
+      this.db.exec("INSERT OR REPLACE INTO _crid SELECT path, rowid FROM docs WHERE source = 'file'");
+      this.db.exec("UPDATE file_index SET code_rowid = COALESCE((SELECT r FROM _crid WHERE _crid.path = file_index.path), -1) WHERE code_rowid IS NULL");
+      this.db.exec("DROP TABLE _crid");
+    })();
+    return true;
+  }
+
+  /**
+   * The `docs` (code) rowid of an indexed file via its `file_index` pointer, never a `docs` path scan. A path that
+   * is not indexed, or is a doc file (-1), has no code row. A row whose pointer is still NULL falls back to the
+   * scan once and records the answer.
+   * @param {string} path @returns {number|null}
+   */
+  _codeRowid(path) {
+    const fi = /** @type {{ code_rowid: number|null } | undefined} */ (this.db.prepare("SELECT code_rowid FROM file_index WHERE path = ?").get(path));
+    if (!fi) return null;
+    if (fi.code_rowid != null) return fi.code_rowid > 0 ? fi.code_rowid : null;
+    const w = /** @type {{ rid: number } | undefined} */ (this.db.prepare("SELECT rowid AS rid FROM docs WHERE path = ? AND source = 'file' ORDER BY rowid LIMIT 1").get(path));
+    this.db.prepare("UPDATE file_index SET code_rowid = ? WHERE path = ?").run(w ? w.rid : -1, path);
+    return w ? w.rid : null;
+  }
+
+  /**
+   * The `docs` (code) row stored under `path`, through its pointer.
+   * @param {string} path
+   */
+  _codeRow(path) {
+    const rid = this._codeRowid(path);
+    return rid == null ? undefined : this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE rowid = ? AND path = ?").get(rid, path);
+  }
+
+  /**
    * Delete one direct doc row by physical key through its sidecar rowid (not a doc_fts path scan). A row whose
    * sidecar has no rid yet (a foreign writer's rewrite) falls back to the scan; no sidecar row = a brand-new key.
    * @param {string} p @returns {number}
@@ -642,6 +688,7 @@ export class Store {
     this.db.exec("DROP TABLE IF EXISTS blobs");
     for (const stmt of SCHEMA) this.db.exec(stmt);
     this.db.exec(RID_INDEX);
+    this.db.exec(CODE_RID_INDEX);
   }
 
   /**
@@ -676,7 +723,8 @@ export class Store {
   applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false, stamp = 0, clearFile = false) {
     // a path is code (`docs`) or doc (`doc_fts`) by extension, never both — but delete from both so a stale
     // row can never survive a kind change.
-    const delCode = this.db.prepare("DELETE FROM docs WHERE path = ?");
+    const delCodeByRid = this.db.prepare("DELETE FROM docs WHERE rowid = ? AND path = ?");
+    const delCode = { run: (/** @type {string} */ p) => { const rid = this._codeRowid(p); if (rid != null) delCodeByRid.run(rid, p); } };
     // a file's md rows are its doc_sections rows' rowids; an md file the chunker left whole has none (found by scan, only if it was indexed before)
     const secRids = this.db.prepare("SELECT doc_rowid AS rid FROM doc_sections WHERE path = ?");
     const delByRid = this.db.prepare("DELETE FROM doc_fts WHERE rowid = ? AND source = 'file'");
@@ -707,8 +755,8 @@ export class Store {
     );
     const insDoc = { run: (/** @type {{ path: string, kind: string, format: string, body: string }} */ r) => (r.kind === "doc" ? insDocRow : insCodeRow).run(r) };
     const upIdx = this.db.prepare(
-      "INSERT INTO file_index(path, content_hash, mtime, size, indexed_at) VALUES (@path, @hash, @mtime, @size, @indexed_at) " +
-        "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at"
+      "INSERT INTO file_index(path, content_hash, mtime, size, indexed_at, code_rowid) VALUES (@path, @hash, @mtime, @size, @indexed_at, @code_rowid) " +
+        "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at, code_rowid = excluded.code_rowid"
     );
     const touchIdx = this.db.prepare("UPDATE file_index SET mtime = @mtime WHERE path = @path");
     const delNodes = this.db.prepare("DELETE FROM nodes WHERE path = ?");
@@ -771,8 +819,8 @@ export class Store {
         // indexed md → one `docs` row PER heading section (each with its own line range + vector, via
         // `doc_sections`); everything else (code, md the chunker returned nothing for) stays one row per file.
         const sectioned = u.kind === "doc" && u.format === "md" && (u.nodes?.length ?? 0) > 0;
-        if (!sectioned) insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
-        upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
+        const row = sectioned ? null : insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
+        upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt, code_rowid: row && u.kind !== "doc" ? Number(row.lastInsertRowid) : -1 });
         let i = 0;
         for (const c of u.nodes ?? []) {
           const nodeId = insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text, stamp }).lastInsertRowid;
@@ -1605,7 +1653,7 @@ export class Store {
         (memOwner != null && !globalOnly ? memSel.get(id) : undefined) ??
         (docQ.get(docP) ?? (this.healDocScopeRid() ? docQ.get(docP) : undefined)) ??
         (/\.md$/i.test(id) && this.fileHash(id) != null ? this.db.prepare("SELECT x.path, x.kind, x.format, x.source, x.provenance, x.occurred_at, x.body FROM doc_fts x WHERE x.path = ? AND x.source = 'file' LIMIT 1").get(id) : undefined) ??
-        this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = @id LIMIT 1").get({ id })
+        this._codeRow(id)
     );
     if (!row) {
       // stash fallback (R-C4): a parked payload lives in no FTS table, so the mem/docs lookups miss
@@ -1662,7 +1710,7 @@ export class Store {
   getItemByKey(key) {
     const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
       this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(key) ??
-        this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = ?").get(key) ??
+        this._codeRow(key) ??
         (() => {
           const rid = this._docRowid(key);
           return rid == null ? undefined : this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM doc_fts WHERE rowid = ? AND path = ?").get(rid, key);
