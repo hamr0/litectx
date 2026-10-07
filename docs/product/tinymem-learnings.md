@@ -806,3 +806,80 @@ Problem: `doc_fts.path` is an UNINDEXED fts5 column, so every by-path `get`, rep
 - Numbers at 100k rows (median ms, before to after): get 95 to 0.3, get missing 115 to 0.25, md file 121 to 0.3, section 119 to 0.56, remember 44.5 to 0.3, md ingest 234 to 3.0, recall n=5 37 to 14, recall body 187 to 16. 3k: get 2.2 to 0.35, remember 2.8 to 0.33. Store open pays the one-time backfill (129 to 225 ms at 100k); a second open does nothing. 360 returned objects compared against the old build: 0 differ.
 - Tests: `test/doc-rowid-pointer.test.js`, 15 tests, mutation-verified (no probe in search, no `rid` nulling in `migrateDocFts`, fence joined on the wrong key, no heal-on-miss in `getItem`/`_docRowid`/owner-blind forget, no NULL-rid fallback in the delete, case-sensitive range): each goes red for its own reason.
 - Code table `docs` fixed too (same pattern, `file_index.code_rowid`; -1 = doc file, NULL = legacy, filled by an open-time backfill or on first use via a one-time scan). The scan fully explained the cold-index super-linearity: cold `index()` before to after 2k 1.7 to 0.85 s, 8k 14.2 to 2.9 s, 20k 71 to 6.8 s (about 0.35 ms per file, flat); 60k now 49.5 s (0.83 ms per file, so something else appears above 20k; not investigated; the old build took ~800 s). Per call at 20k: get of a late code file 6.1 to 0.36 ms, get missing 6.4 to 0.26 ms. Not improved: reindexing one changed file (212 ms at 20k, 1.8 s at 60k) and a no-op `index()` (188 ms at 20k) are dominated by the file walk, not by `docs`. Tests `test/code-rowid-pointer.test.js` (11, mutation-verified). Recall/impact on this repo identical to the old build (impact caller order differs run to run on the old build itself; sorted, identical).
+
+## Answer test — go/no-go 1 (2026-10-07)
+
+Question: does an agent with litectx search answer "what did we decide about X" better than an agent with plain grep, at the same or lower cost? Verdict: **NOT CONFIRMED**.
+
+**Setup.**
+- Two corpora, frozen copies. bareloop: 71 docs and 139 sessions. bareagent: 43 docs and 75 sessions. Sessions were converted to md with only the user and assistant text. Headless SDK runs and sessions with no human turns were left out.
+- 30 questions per repo: 15 about docs and 15 that only a session can answer. Written blind by a separate worker, each with a gold answer and a list of must-have facts.
+- Three arms, one fresh `claude -p` run (sonnet, max 15 turns) per question and arm:
+  - A: litectx `recall` and `get` only (branch build, embeddings on).
+  - B: Read, Grep and Glob over the same files.
+  - C: no tools. This is the floor, to catch questions the model can answer from general knowledge.
+- Grading: a blind sonnet grader, arm labels stripped, order shuffled, one question per call. It sees the question, the gold, the must-facts and the corpus, and opens the cited lines. A **win** is correct (all must-facts, nothing contradicting gold) and cited (a citation whose lines really hold the answer).
+- Tokens = input + cache creation + cache read + output.
+
+**Pre-registered bar** (written 2026-10-06, before any question ran; PREREG.md sha256 `4c082a807bb15d5a5877d013a5d89c458619e07a7cd7226a995b87d313a9dd6c`; questions files sha256 bareagent `9d066049f2e93b1f3d3259ccd0af2bf4f836aac1d6eeb384b5e4ad4592a27d57`, bareloop `8acb95a114ec7ad94ec01fb529c361a7786863a9b653894ef527a793131165bc`).
+- Pass only if, on BOTH repos: wins(A) >= wins(B) + 4 of 30, and median tokens(A) <= median tokens(B).
+- A tie or loss on either repo is NOT CONFIRMED.
+- If C wins 5 or more on a repo, that repo's questions leak general knowledge.
+
+**Results** (wins of 30, correct and cited).
+
+| Repo | A wins | B wins | C wins | Median tokens A | Median tokens B |
+|---|---|---|---|---|---|
+| bareagent | 20 | 26 | 0 | 13,011 | 34,908 |
+| bareloop | 18 | 19 | 0 | 12,521 | 39,855 |
+| both | 38 | 45 | 0 | 12,795 | 35,625 |
+
+By question type (wins, A vs B):
+
+| Slice | A | B |
+|---|---|---|
+| bareagent docs (15) | 11 | 13 |
+| bareagent sessions (15) | 9 | 13 |
+| bareloop docs (15) | 10 | 10 |
+| bareloop sessions (15) | 8 | 9 |
+| both, docs (30) | 21 | 23 |
+| both, sessions (30) | 17 | 22 |
+
+- The token half of the bar passed on both repos: A used about a third of B's tokens. The wins half failed on both: A was 6 behind on bareagent and 1 behind on bareloop, where the bar needed 4 ahead.
+- C scored 0 wins on both repos, so the questions do not leak general knowledge.
+- Cost of the answer runs: A $1.78, B $4.50, C $0.28 (60 questions each).
+
+**Why A did not win.**
+- A cited real lines almost every time (59 of 60). Wrong or invented sources were not the problem.
+- Of the 22 questions A did not win, about 18 found the right section but stopped before the neighbouring section that held the rest of the answer. They were graded partial. With only search and a pointer, the agent took the hit and answered. Grep-and-read agents opened the whole file and saw the neighbours.
+  - Caveat: this is the grader's reading of the answers. No tool traces were saved, so it is not yet confirmed from the calls.
+- 2 failures were the wrong session.
+- 1 was a superseded decision. An older session said context windows never overflow; a later finding said they do (on a weak model, 3 of 4 runs crossed the limit). A returned the old session and answered with the old decision. Nothing in search says "newest wins".
+
+**Audit.** The orchestrator skimmed the 12 seeded-random audit items (seed 777): the grader's quoted evidence and reasons for the items it read were consistent with the verdicts, but it did not re-read every answer and cited range in full — this is a light check, not an independent re-grade.
+
+**Harness incidents.**
+- A logout killed some runs mid-way. They were re-run.
+- 45 results were the "session limit reached" message, saved as if they were answers. They were set aside and re-run, and a guard was added so a limit message cannot be saved as an answer.
+- No tool traces were saved, so we cannot say exactly which calls each arm made. Save them next time.
+
+**Cost of the test.** Answers $6.56, grader $3.51.
+
+**What carries forward.**
+- Search alone is not enough, and neither is grep alone: grep wins on answers, search wins on tokens. The next test gives one agent both, plus a way to fetch the neighbours of a hit. See the PRD, "Next, in order".
+- Do not reuse these 60 questions for a confirming run; they have been seen. Write fresh ones.
+
+## Lessons from LlamaIndex's document-search talk (2026-10-07)
+
+The owner found this very relevant. Each point is tied to our own evidence.
+
+- **Grep is enough at about 100 to 1,000 files.** Search earns its keep at thousands of files and up, where reading every time burns tokens. Our corpora (118 and 210 files) were grep's home ground, and grep still cost about 3 times the tokens.
+- **Search is a compass, not a replacement.** Give the agent search and grep and read, and let it choose. Our test pitted litectx-only against grep-only, which is the setup they argue against.
+- **Fetch context around a hit.** Read by offset and length around the chunk. Our main failure was stopping at the hit without the neighbouring section.
+- **Hybrid ranking.** Keyword and vector fused, then a re-ranker over the top 100 or so. Ours: BM25 gates, vectors only re-order. Round 10 found nomination added nothing on retrieval, but that is untested on answers. A local re-ranker with no LLM fits the no-LLM-inside rule.
+- **Metadata filters** (date, source type, folder) let the agent narrow first. This could also fix the superseded-decision failure: newest wins.
+- **Freshness and sync of the index** is why Claude Code skipped vectors. litectx has an incremental index and self-heal stamps. The open cost: a growing session file may re-chunk and re-embed the whole file. The first full index with embeddings took about 19 minutes (bareloop, about 13k session sections, CPU embedding). Solvable later: embed only new sections, batch, use a lighter or static model.
+- **Layout-faithful parsing** (LlamaParse, and the open-source LiteParse) for tables and scans. Our pdf and docx conversion is weak on tables. LiteParse is local, open source, and a TypeScript library. PDF is native; Office files (docx, xlsx, pptx) go through LibreOffice to PDF; images go through ImageMagick to PDF plus OCR. It outputs markdown, JSON or text with bounding boxes. Sources: https://github.com/run-llama/liteparse and https://www.llamaindex.ai/blog/liteparse-local-document-parsing-for-ai-agents. Relevant to multis PDF manuals and tables.
+- **Permissions pushed into the storage layer** is what our scope fences already do, and they are tested.
+- **Sub-agents re-reading documents** are heavy in tokens and time. This agrees with the cost gap we measured.
+- **Not adopted:** page screenshots and multimodal rendering. It needs image handling and is not lean.
