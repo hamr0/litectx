@@ -906,6 +906,7 @@ Question: did arm A stop short, so that fetching the neighbouring sections would
 - Neighbour fetch stays in the hybrid arm: it is cheap, and 9 against 6 is not evidence against it. It is unproven. Nothing goes into `src/` on this evidence.
 - Owner decision (2026-10-07): handle the noise with repeats per question, not more questions. Writing blind questions is the slow part; repeats are only machine time and a few dollars.
 - Step 1 PREREG written and approved 2026-10-07 (40 fresh questions, k = 3): `poc/tinymem-step1-PREREG.md`, sha256 `b5f0949fe0030a3c6d36febfe2ba914cf1097c8ff5771622b1f06bd1422e9675`. The go/no-go 1 PREREG (sha256 `4c082a80...`) is not in the repo; only its hash is recorded here.
+- Step 1 questions frozen 2026-10-07: bareloop sha256 `9ac3ba15742e6b4e8a9d780fe22440754553ab5b3e5435e84791a55cdc77bf73`, bareagent sha256 `26e0284dd52b401fa7653c41cab3b6395acbfef30e4b1e8c10cd8ba4af1fde4a`. 40 questions written blind (Sonnet), audited read-only by Opus: 20 FIX + 20 OK; 22 changed (the 20 FIX plus 2 OK-with-nit: bareloop d01, bareagent d01; 3 severe: bareloop s05, d07, d02 — gold superseded/wrong chronology), 0 replaced. The questions are never edited after this.
 
 ## Lessons from LlamaIndex's document-search talk (2026-10-07)
 
