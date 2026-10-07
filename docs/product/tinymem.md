@@ -24,8 +24,9 @@ splitting docs and searching them.
 
 ## Current direction (2026-10-07)
 
-- Go/no-go 1 ran and is **NOT CONFIRMED**. litectx-only search won 38 of 60 questions; grep/read-only won 45. Search used about a third of the tokens (median ~12.8k against ~35.6k). The bar needed search to win by 4 on each repo. Details: [learnings](tinymem-learnings.md#answer-test--go-no-go-1-2026-10-07).
-- litectx found the right place. The agent then stopped short: about 18 of the 22 non-wins had the right section but not the neighbouring one. This is the grader's reading of the answers. No tool traces were saved, so it is not yet confirmed from the calls.
+- Go/no-go 1 ran and is **NOT CONFIRMED** as a single run. litectx-only search won 38 of 60 questions; grep/read-only won 45. The gap is inside the measured noise, so read it as "search did not clearly win", not "grep clearly won". Search used about a third of the tokens (median ~12.8k against ~35.6k). The bar needed search to win by 4 on each repo. Details: [learnings](tinymem-learnings.md#answer-test--go-no-go-1-2026-10-07).
+- The neighbour diagnostic (step 1a, done) and its control changed the reading. With neighbours, 9 of the 22 non-wins flipped to wins; a plain re-run without neighbours flipped 6. That difference is within noise (sign test p about 0.45). Of the 13 still failing, 5 never reached the gold source, 6 needed non-adjacent sections, 2 read the right section and still missed facts. The "about 18 stopped short" reading is not supported. Details: [learnings](tinymem-learnings.md#neighbour-fetch-diagnostic--control-2026-10-07).
+- Run-to-run noise is large: about 1 in 4 partial answers becomes a win on a plain re-run. So go/no-go 1's single-run 38 against 45 is not solid either way. The owner's decision is to handle noise with repeats per question, not more questions.
 - The plan is now: search as a compass, with grep and read beside it, measured on answers. Pages, filing and the rest of the old design are retired (see "Retired").
 - Lessons from the LlamaIndex talk that shaped this are in [learnings](tinymem-learnings.md#lessons-from-llamaindexs-document-search-talk-2026-10-07).
 
@@ -138,11 +139,13 @@ Settled by the owner, 2026-10-02.
 
 Each step names its pass bar or what it measures. A confirming run uses fresh questions; the 60 from go/no-go 1 have been seen.
 
-1a. **Diagnostic.** Re-run only A2 (litectx plus neighbour fetch) on the ~22 go/no-go 1 non-wins, with tool traces saved. These questions were already seen, so this is diagnostic, not confirming. If most of the ~18 stopped-short cases flip, build neighbour fetch properly and run step 1 on fresh questions. If not, read the traces first.
+1a. **Diagnostic. DONE 2026-10-07.** A2 on the 22 non-wins, traces saved: 9 flipped, but a plain re-run (control) flipped 6, so the neighbour effect is not separable from noise; 13 still failed for other reasons (retrieval, non-adjacent sections, missed facts). Neighbour fetch stays in the hybrid arm, unproven. Details: [learnings](tinymem-learnings.md#neighbour-fetch-diagnostic--control-2026-10-07).
 1. **Hybrid agent.** Three arms on one harness, run in the same batch:
    - **A2:** litectx only, plus neighbour fetch. Tests the stopped-short diagnosis on its own.
    - **D:** litectx plus grep/read, plus neighbour fetch. This is the hybrid.
    - **B:** grep/read only, re-run in the same batch so model drift cancels.
+
+   Each arm runs each question k times (k is set in the PREREG). Each question is scored as wins-of-k, and arms are compared paired, question by question. Answers whose grade is borderline get a second grade. The bar is set against the measured noise (about 1 in 4 partials flip on a re-run; grader differs on about 2 of 22), not against single runs. Final PREREG (approved 2026-10-07; 40 fresh questions, k = 3): `poc/tinymem-step1-PREREG.md`, sha256 `b5f0949fe0030a3c6d36febfe2ba914cf1097c8ff5771622b1f06bd1422e9675`. Questions-file hashes are recorded before any run. The scale test (step 2) is its own PREREG, still a draft: `~/.cache/tinymem-probe/out/step1-scale/PREREG.scale.draft.md`.
 
    `get` also returns the neighbouring sections, or a window by offset and length around a hit. Bar: fixed before the run in a hashed PREREG, with a stated win margin per repo (go/no-go 1 used +4 per repo) and a token ratio. The numbers are set in the PREREG, not here. Harness: save tool traces for every run; guard against session-limit and logout results being saved as answers.
 2. **Scale test, run alongside step 1.** The same questions with 10 to 50 times more files mixed in (other repos' docs and sessions). The test corpora (~210 and ~118 files) sit in the range where grep is enough (~100 to 1,000 files, per the talk), so a tie there is expected. Scale is where litectx's value would show. The real scale is the owner's 8,218 session files. Measures where grep-only stops being enough.

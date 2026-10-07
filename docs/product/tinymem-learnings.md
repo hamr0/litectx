@@ -848,6 +848,7 @@ By question type (wins, A vs B):
 - The token half of the bar passed on both repos: A used about a third of B's tokens. The wins half failed on both: A was 6 behind on bareagent and 1 behind on bareloop, where the bar needed 4 ahead.
 - C scored 0 wins on both repos, so the questions do not leak general knowledge.
 - Cost of the answer runs: A $1.78, B $4.50, C $0.28 (60 questions each).
+- Update 2026-10-07: this single-run gap is within the measured run-to-run noise (about 1 in 4 partial answers flips to a win on a plain re-run). See [Neighbour fetch diagnostic + control](#neighbour-fetch-diagnostic--control-2026-10-07).
 
 **Why A did not win.**
 - A cited real lines almost every time (59 of 60). Wrong or invented sources were not the problem.
@@ -868,6 +869,43 @@ By question type (wins, A vs B):
 **What carries forward.**
 - Search alone is not enough, and neither is grep alone: grep wins on answers, search wins on tokens. The next test gives one agent both, plus a way to fetch the neighbours of a hit. See the PRD, "Next, in order".
 - Do not reuse these 60 questions for a confirming run; they have been seen. Write fresh ones.
+
+## Neighbour fetch diagnostic + control (2026-10-07)
+
+Question: did arm A stop short, so that fetching the neighbouring sections would flip its non-wins? Verdict: **the neighbour effect is not separable from noise at this size.**
+
+**Setup.**
+- Arm A2 = arm A with one change: `get <path> --lines A-B` also prints the previous and next section of the same file, marked. Same model (sonnet), max 15 turns, same prompt except one clause in the `get` description. Scripts: `poc/tinymem-neighbour-{run,append,grade}.mjs`.
+- Run on the 22 questions arm A did not win in go/no-go 1 (20 partial, 2 no), plus 3 of A's original wins as a check. Full tool traces saved for every run.
+- These 22 questions were already seen. This is a diagnostic, not a confirming run.
+- Graded by the same blind grader and prompt as go/no-go 1.
+
+**A2 result.**
+- 9 of the 22 flipped to a win. The 3 original wins held. Median tokens about 14.5k.
+- Cost: runs $0.92 (25 runs), grading $0.70, about $1.62 in all.
+
+**Trace breakdown** (what the calls show, not the grader's reading):
+- 5 of the 9 flips had a gold range only in a neighbour section: bareagent d02, s07, s08, s14, and bareloop s08 (bareloop s08: the gold range lies only inside a neighbour).
+- Source of the 5/5/6/2 trace breakdown: the first diagnostic worker's overlap analysis of the traces. It is not stored as a file.
+- Of the 13 still failing: 5 never reached the gold source (retrieval, or the wrong session); 6 reached the right file but needed sections that are not adjacent; 2 read the right section and still missed facts.
+- So "about 18 stopped short" from go/no-go 1 is not supported as stated. Most non-wins are not a missing neighbour.
+
+**Control.**
+- Plain arm A re-run on the same 22, same runner, no neighbours. Control and A2 answers were graded together in one blind, shuffled pool of 44.
+- Control won 6 of 22; A2 won 9 of 22. Overlap 4, A2 only 5, control only 2. Sign test on the 7 discordant questions: p about 0.45.
+- The control also won 4 of the 9 questions that A2 flipped, with no neighbours. So even the flips are partly noise.
+  - Of the 5 neighbour-supplied flips, the plain re-run also won 3: bareagent d02, bareagent s07, bareloop s08. So 3 of the 5 are not clean neighbour effects either.
+- A2's grade in the joint pool differed from its first grade on 2 of 22 items. That is grader noise.
+- Median tokens equal (control about 14.8k, A2 about 14.5k).
+- Cost: runs $0.69, grading $0.84 (the 44-item pool includes the A2 re-grades), about $1.53 in all.
+
+**What this means.**
+- About 1 in 4 partial answers flips to a win just by running again. Run-to-run noise on one question is large.
+  - Caveat: the 22 were picked because arm A failed them, so this overstates the flip rate for an average question. The size of the noise on unselected questions is still unmeasured.
+- Go/no-go 1's 38 against 45 single-run gap is therefore not solid either way. It is neither a clear loss for search nor a clear win for grep.
+- Neighbour fetch stays in the hybrid arm: it is cheap, and 9 against 6 is not evidence against it. It is unproven. Nothing goes into `src/` on this evidence.
+- Owner decision (2026-10-07): handle the noise with repeats per question, not more questions. Writing blind questions is the slow part; repeats are only machine time and a few dollars.
+- Step 1 PREREG written and approved 2026-10-07 (40 fresh questions, k = 3): `poc/tinymem-step1-PREREG.md`, sha256 `b5f0949fe0030a3c6d36febfe2ba914cf1097c8ff5771622b1f06bd1422e9675`. The go/no-go 1 PREREG (sha256 `4c082a80...`) is not in the repo; only its hash is recorded here.
 
 ## Lessons from LlamaIndex's document-search talk (2026-10-07)
 
