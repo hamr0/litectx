@@ -922,3 +922,10 @@ The owner found this very relevant. Each point is tied to our own evidence.
 - **Permissions pushed into the storage layer** is what our scope fences already do, and they are tested.
 - **Sub-agents re-reading documents** are heavy in tokens and time. This agrees with the cost gap we measured.
 - **Not adopted:** page screenshots and multimodal rendering. It needs image handling and is not lean.
+
+## Step 1 v2 PREREG and padding facts (2026-10-07)
+
+- PREREG v2 sha256 `8e13b70c3b1d252ba897a003c442d0fad57c37e9c76a1d7c23c973a0ba10a2e0` (`poc/tinymem-step1-PREREG-v2.md`); harness `poc/tinymem-step1.mjs` sha256 `e0f6ac68efad61dd14541f32422c583f1678eeb34ae109da2687afabd114a063`. The grader now reads the corpus through a neutral opaque symlink (hides `root5x` vs `answer`); the `_pad` folder name still shows when a padding file is opened, a stated limit.
+- Padding: sizes are about 5.3x (bareagent) and about 3.6x (bareloop) by bytes, not 10x. Padding is doc-heavy (about 82% docs versus 36% at 1x; only 186 clean session files exist).
+- Contamination: the `bareloop-close` docs were removed from bareloop padding (own material). bareloop-d06 has a second valid source and an older-version trap in `sessions/_pad/2026-07-10-adaptlearn-d8fc76dd.md`. Reported with the result, not removed.
+
