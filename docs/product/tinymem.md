@@ -1,6 +1,6 @@
 # tinymem — long-term organized memory for agents, inside litectx (preliminary PRD)
 
-> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED.** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); everything under "Next, in order" is not built. A line marked **(proposed)**
+> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. The next steps are on hold pending an owner re-scope.** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); everything under "Next, in order" is not built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
 > Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
@@ -22,7 +22,9 @@ X" from past sessions, and point to the source. Adapting to the owner's correcti
 **What this is not claiming.** Not a token saving. Our own measurement was a tie between
 splitting docs and searching them.
 
-## Current direction (2026-10-07)
+## Current direction (2026-10-08)
+
+- **Step 1 ran (2026-10-08) and the hybrid is dropped.** D (litectx plus grep/read) against B (grep/read only), 40 questions, k = 3: win rate 0.617 against 0.742 at 1x (FAIL-WORSE), 0.658 against 0.717 at ~5x (FAIL). The gap does not grow with size (mean g +0.067, sign test p = 0.067). D used about 60% of B's tokens. D matched B on docs but lost on sessions, where it stopped early. Per the PREREG outcome table, no build on the hybrid claim. Details: [learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08).
 
 - Go/no-go 1 ran and is **NOT CONFIRMED** as a single run. litectx-only search won 38 of 60 questions; grep/read-only won 45. The gap is inside the measured noise, so read it as "search did not clearly win", not "grep clearly won". Search used about a third of the tokens (median ~12.8k against ~35.6k). The bar needed search to win by 4 on each repo. Details: [learnings](tinymem-learnings.md#answer-test--go-no-go-1-2026-10-07).
 - The neighbour diagnostic (step 1a, done) and its control changed the reading. With neighbours, 9 of the 22 non-wins flipped to wins; a plain re-run without neighbours flipped 6. That difference is within noise (sign test p about 0.45). Of the 13 still failing, 5 never reached the gold source, 6 needed non-adjacent sections, 2 read the right section and still missed facts. The "about 18 stopped short" reading is not supported. Details: [learnings](tinymem-learnings.md#neighbour-fetch-diagnostic--control-2026-10-07).
@@ -137,10 +139,14 @@ Settled by the owner, 2026-10-02.
 
 ## Next, in order
 
+**ON HOLD (2026-10-08) pending the owner's re-scope decision (see "Open: re-scope").** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started.
+
 Each step names its pass bar or what it measures. A confirming run uses fresh questions; the 60 from go/no-go 1 have been seen.
 
 1a. **Diagnostic. DONE 2026-10-07.** A2 on the 22 non-wins, traces saved: 9 flipped, but a plain re-run (control) flipped 6, so the neighbour effect is not separable from noise; 13 still failed for other reasons (retrieval, non-adjacent sections, missed facts). Neighbour fetch stays in the hybrid arm, unproven. Details: [learnings](tinymem-learnings.md#neighbour-fetch-diagnostic--control-2026-10-07).
-1. **Hybrid agent.** Three arms on one harness, run in the same batch:
+1. **Hybrid agent. DONE 2026-10-08: FAIL-WORSE at 1x, FAIL at ~5x.** D win rate 0.617 against B 0.742 at 1x, 0.658 against 0.717 at ~5x; tokens about 0.63 to 0.69 of B. The hybrid is dropped as the plan. Results: [learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08). The design below is as it was run.
+
+   Three arms on one harness, run in the same batch:
    - **A2:** litectx only, plus neighbour fetch. Tests the stopped-short diagnosis on its own.
    - **D:** litectx plus grep/read, plus neighbour fetch. This is the hybrid.
    - **B:** grep/read only, re-run in the same batch so model drift cancels.
@@ -149,7 +155,7 @@ Each step names its pass bar or what it measures. A confirming run uses fresh qu
 
    `get` also returns the neighbouring sections, or a window by offset and length around a hit. Bar: fixed before the run in a hashed PREREG, with a stated win margin per repo (go/no-go 1 used +4 per repo) and a token ratio. The numbers are set in the PREREG, not here. Harness: save tool traces for every run; guard against session-limit and logout results being saved as answers.
    **PREREG v2 (2026-10-07, owner-approved, supersedes v1 which never ran):** `poc/tinymem-step1-PREREG-v2.md`, sha256 `8e13b70c3b1d252ba897a003c442d0fad57c37e9c76a1d7c23c973a0ba10a2e0`; harness `poc/tinymem-step1.mjs` sha256 `e0f6ac68efad61dd14541f32422c583f1678eeb34ae109da2687afabd114a063`. Arms D vs B at 1x and about 5x (scale test folded in), k=3, C once at 1x as the leak floor, A2 dropped, one joint blind grading pool. Scale bar: mean g >= +0.05 and sign test p < 0.05. Budget about $72, hard stop $90.
-2. **Scale test, run alongside step 1.** The same questions with 10 to 50 times more files mixed in (other repos' docs and sessions). The test corpora (~210 and ~118 files) sit in the range where grep is enough (~100 to 1,000 files, per the talk), so a tie there is expected. Scale is where litectx's value would show. The real scale is the owner's 8,218 session files. Measures where grep-only stops being enough.
+2. **Scale test, run alongside step 1. DONE 2026-10-08: gap does not grow** (mean g +0.067, sign test p = 0.067; the bar needs mean g >= +0.05 and p < 0.05). ~5x was about 3.6x to 5.3x by bytes, doc-heavy. Results: [learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08). The real 8,218-file corpus is untested. As planned: the same questions with 10 to 50 times more files mixed in (other repos' docs and sessions). The test corpora (~210 and ~118 files) sit in the range where grep is enough (~100 to 1,000 files, per the talk), so a tie there is expected. Scale is where litectx's value would show. The real scale is the owner's 8,218 session files. Measures where grep-only stops being enough.
 3. **Search filters.** Source type (doc or session), date range, folder, and newest-first for sessions. Re-test the superseded-decision cases. Measures whether those cases are now answered with the newest decision. The newest-first case rests on a single superseded-decision failure, so the bar first requires writing more superseded-decision questions (at least 5 per repo).
 4. **Ranking re-test on answers.** Keyword and vector both nominating, and a local non-LLM re-ranker. Measures wins on answers; round 10 only tested retrieval.
 5. **Cost of growing session files and of the first index with embeddings.** Embed only new sections, batching, a lighter model. Measured before building the chat feed. The first full index took about 19 minutes on bareloop.
@@ -182,4 +188,8 @@ The answer test showed search plus grep is the open question, not filing. These 
 - Does tinymem share the project's existing `.litectx/index.db`, or get its own file beside it?
 - Secret scrubbing before session text is written: which patterns, and the measured miss rate.
 - How headings are laid out for session text, which has no headings of its own.
-- Does a hybrid agent's gain survive at scale (step 2)?
+- Does a hybrid agent's gain survive at scale? Answered 2026-10-08: no gain at 1x or ~5x, and the gap does not grow ([learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08)). The real corpus (8,218 session files) is untested.
+- **Open: re-scope.** The owner decides. Options, none chosen, each needs its own test before any build:
+  - (a) Drop session search as a tinymem goal.
+  - (b) A docs-only token-saving mode. D matched B on docs at about 60% of the tokens, but this PRD says token saving is not the claim.
+  - (c) Change how results are presented so the agent keeps digging, since D lost on sessions by stopping early.

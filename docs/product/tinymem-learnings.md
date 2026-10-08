@@ -929,3 +929,69 @@ The owner found this very relevant. Each point is tied to our own evidence.
 - Padding: sizes are about 5.3x (bareagent) and about 3.6x (bareloop) by bytes, not 10x. Padding is doc-heavy (about 82% docs versus 36% at 1x; only 186 clean session files exist).
 - Contamination: the `bareloop-close` docs were removed from bareloop padding (own material). bareloop-d06 has a second valid source and an older-version trap in `sessions/_pad/2026-07-10-adaptlearn-d8fc76dd.md`. Reported with the result, not removed.
 
+
+## Step 1 v2 — hybrid vs grep at 1x and ~5x (2026-10-08)
+
+Question: does an agent with litectx search AND grep/read (D) answer at least as well as a grep/read-only agent (B), cheaper, at 1x and at about 5x? And does the gap grow with size? Verdict per the PREREG outcome table: **FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow. The hybrid is dropped as the plan.**
+
+**Setup.** 40 frozen questions, k = 3, D vs B at both sizes, C once at 1x as the leak floor, one joint blind grading pool. Bar and rules: [`poc/tinymem-step1-PREREG-v2.md`](../../poc/tinymem-step1-PREREG-v2.md) (sha256 `8e13b70c3b1d252ba897a003c442d0fad57c37e9c76a1d7c23c973a0ba10a2e0`). Source of the numbers: `~/.cache/tinymem-probe/out/step1/pool/score.md`. 520 runs graded; no incomplete runs.
+
+**Results** (win rate = mean wins/k per question; tokens = median over runs; d = D minus B per question).
+
+| | D win rate | B win rate | mean d | up/down | token ratio D/B | outcome |
+|---|---|---|---|---|---|---|
+| 1x | 0.617 | 0.742 | -0.125 (se 0.060) | 5/13 | 0.69 | FAIL-WORSE |
+| ~5x | 0.658 | 0.717 | -0.058 (se 0.065) | 8/9 | 0.63 | FAIL |
+
+- Per repo, mean d at 1x: bareloop -0.117, bareagent -0.133. At ~5x: bareloop 0.000, bareagent -0.117.
+- Wilcoxon p (one-sided, D better): 0.974 at 1x, 0.836 at ~5x. Ties dropped: 22 and 23 of 40.
+- Only the token bar (<= 0.75) held, at both sizes. The win bars failed.
+- Turn cap: no run hit it, in any arm. Mean turns: D 4.6 (1x) and 4.7 (~5x); B 5.0 and 5.2.
+- C floor: 0 wins on both repos, so no leak flag.
+
+**Slices** (D minus B).
+
+| Slice | 1x | ~5x |
+|---|---|---|
+| docs (20 q) | +0.017 | +0.083 |
+| sessions (20 q) | -0.267 | -0.200 |
+| neighbour_spanning (29 q) | -0.080 | -0.023 |
+| superseded (23 q) | -0.130 | +0.043 |
+
+On docs, D matched B or slightly beat it, at about 60% of the tokens. On sessions, D lost at both sizes.
+
+**Scale.** g = d(~5x) minus d(1x) per question, paired on 40 questions.
+- Mean g +0.067 overall (bareloop +0.117, bareagent +0.017).
+- Sign test, one-sided: p = 0.067 (15 positive of 22 non-zero; 18 zeros dropped). Wilcoxon on g, secondary: p = 0.113.
+- Median token ratio D/B: 0.69 at 1x, 0.63 at ~5x (change -0.06).
+- The bar needs mean g >= +0.05 AND p < 0.05. The mean passes and the sign test does not. **Gap does not grow.** The mean g is positive because D's loss shrank, not because D got ahead: D is still below B at ~5x.
+
+**Cost.** Runs $26.52 + grader $19.09 = $45.60 (PREREG estimate $60-72; hard stop $90 not reached). Cost per run: D $0.034 / $0.036, B $0.071 / $0.078 (1x / ~5x). Grading: 520 first grades, 161 second, 12 third.
+
+**Index times, ~5x.**
+- bareloop: 44 min 58 s, 312 MB db, 71,684 sections, peak RSS 825 MB.
+- bareagent: 37.5 min, 217 MB db, 52,306 sections.
+
+**Why D lost on sessions: it stopped early.**
+- D typically made 2 to 4 calls and answered. B kept digging (more turns on average).
+- Session answers are scattered and often superseded, so the first good-looking hit is often not the last word. D trusted search and stopped.
+- Share of D runs (of 120 per size) that used grep or read at all, from the per-run tool list in score.md:
+
+| | 1x | ~5x |
+|---|---|---|
+| all | 66/120 (55%) | 57/120 (48%) |
+| docs | 25/60 (42%) | 22/60 (37%) |
+| sessions | 41/60 (68%) | 35/60 (58%) |
+
+- Every D run used litectx. So the agent did use grep/read on most session runs, but on fewer of them than the questions needed, and it fell with size. Whether those calls were the right ones is not read from the traces here.
+- The per-run list shows tool use and call counts, not the reasoning. "Stopped early" is read from the call counts and turn means, not proven per run.
+
+**Limits** (stated with the result).
+- The 40 questions were written by a model that read the corpus with grep, so answers are grep-findable by construction. This likely favours B.
+- ~5x is about 3.6x (bareloop) to 5.3x (bareagent) by bytes, and 8.8x (bareloop) to 10x (bareagent) by files. Padding is doc-heavy (about 82% docs against 36% at 1x), so ~5x tests docs growth more than session growth.
+- The grader could infer the size from opened `_pad` files. Grading is not fully size-blind.
+- D's instruction sentence is a tip that B lacks. It did not rescue D.
+- One model family (sonnet). No human-checked gold. The real corpus (8,218 session files) was not tested.
+- bareloop-d06 has a second valid source and an older-version trap in padding; reported, not removed.
+
+**Verdict.** Per the PREREG table (FAIL-WORSE at either size), stop the hybrid; read how D used the tools (above). Grep is enough at these sizes. The hybrid is dropped as the plan. Neighbour fetch is not promoted: the neighbour slice shows no D gain (-0.080 at 1x, -0.023 at ~5x).
