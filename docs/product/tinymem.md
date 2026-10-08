@@ -1,6 +1,6 @@
 # tinymem — long-term organized memory for agents, inside litectx (preliminary PRD)
 
-> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. The next steps are on hold pending an owner re-scope.** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); everything under "Next, in order" is not built. A line marked **(proposed)**
+> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. Re-scoped by the owner 2026-10-08: docs-only, litectx as a compass (see Goal); measurement order M1–M3 under "Next".** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); everything under "Next, in order" is not built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
 > Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
@@ -11,18 +11,32 @@
 
 ## Goal
 
-tinymem is long-term, organized memory for agents. It makes an agent smarter as its
-interactions accumulate, the way Claude on the web does: a memory built up from past sessions,
-plus search over those sessions, kept per project. Keep it simple.
+**Goal (owner, 2026-10-08).** An agent working over a project's md docs uses litectx as a
+compass. litectx returns the relevant chunks with file and line ranges, and all the related
+chunks, not just the top hit. The agent reads only those lines and greps for the exact detail,
+without reading whole docs. It is a mix of indexing and grep, the "search = compass + grep/read;
+fetch context around a hit" lesson in [learnings](tinymem-learnings.md#lessons-from-llamaindexs-document-search-talk-2026-10-07).
 
-**The test of "smarter".** The agent can answer "what do we know, or what did we decide, about
-X" from past sessions, and point to the source. Adapting to the owner's corrections is already
-`/remember`'s job and is not tinymem's.
+**Success.** Answers about features and about what was decided are as good as grep-only, while
+the agent reads far less (fewer tokens and fewer lines read). Keep it simple.
 
-**What this is not claiming.** Not a token saving. Our own measurement was a tie between
-splitting docs and searching them.
+**Sessions are parked.** Claude Code session history is out of scope for tests: it is too
+fragmented and noisy (tool calls, edits, unstructured text), while docs are coherent. As a
+product goal, sessions are parked, not dropped for good.
+
+**Original goal (kept as history).** Long-term, organized memory for agents that gets smarter
+as interactions accumulate, the way Claude on the web does: memory built from past sessions,
+plus search over them, kept per project. The test was "what do we know, or what did we decide,
+about X" from past sessions, with a pointer to the source. Adapting to the owner's corrections
+is `/remember`'s job, not tinymem's. The original goal included sessions.
+
+**What this is not claiming (earlier note).** Our own measurement was a tie between splitting
+docs and searching them. Under the new goal, fewer tokens and lines read is part of success, but
+only if answer quality holds against grep-only.
 
 ## Current direction (2026-10-08)
+
+- **Goal clarified by the owner (2026-10-08):** litectx as a compass over md docs. It returns all related chunks with file and line ranges; the agent reads only those lines and greps for detail. Sessions are parked and out of tests. See "Goal". The bullets below are the results that led here.
 
 - **Step 1 ran (2026-10-08) and the hybrid is dropped.** D (litectx plus grep/read) against B (grep/read only), 40 questions, k = 3: win rate 0.617 against 0.742 at 1x (FAIL-WORSE), 0.658 against 0.717 at ~5x (FAIL). The gap does not grow with size (mean g +0.067, sign test p = 0.067). D used about 60% of B's tokens. D matched B on docs but lost on sessions. (The first reading, "stopped early", was wrong; see the autopsy bullet below.) Per the PREREG outcome table, no build on the hybrid claim. Details: [learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08).
 
@@ -142,7 +156,15 @@ Settled by the owner, 2026-10-02.
 
 ## Next, in order
 
-**ON HOLD (2026-10-08) pending the owner's re-scope decision (see "Open: re-scope").** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started.
+**Measurement order (owner, 2026-10-08).** Owner rule: no big paid run without a cheap validating run first. The question set is 30 fresh docs-only questions, written blind (15 per repo; slices single, neighbour, superseded), at `~/.cache/tinymem-probe/out/step2/questions/`. They are under independent audit and not yet hashed.
+
+**Step-2 question set, FROZEN 2026-10-08.** 27 questions (bareloop 15, bareagent 12), written blind, then audited by Opus (16 OK, 11 fixed, 3 dropped from the 30 written). Slices: single 10, neighbour 8, superseded 9 (bareloop 4/6/5, bareagent 6/2/4). sha256 `bareloop.json` `6757b12b009b38ee7b8a1d9798182745e7217a4b2e21f94a533f670ed534f9da`, `bareagent.json` `4c7cd99220678aebe93e3f1533b376e810adcca95d52df439a29dd45a5f5fc1e` (in `~/.cache/tinymem-probe/out/step2/questions/`; pre-fix copies kept as `*.prefix.json`).
+
+- **M1. Offline, no model.** For each question, does recall's result list contain ALL the gold chunks, and at what ranks (all-related coverage)? Compare three ways: current recall, results grouped by file into spans, and one query per sub-question.
+- **M2. Validation run, about $3.** Arm E (wider fetch plus file spans) against B (grep-only), about 10 fresh docs questions, k = 2. Measures answer wins, tokens, and lines read.
+- **M3. Owner approval, then a pre-registered run.**
+
+**Old steps below are ON HOLD or retired (2026-10-08).** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started. Session-feed steps (5 and 6) are parked with sessions.
 
 Each step names its pass bar or what it measures. A confirming run uses fresh questions; the 60 from go/no-go 1 have been seen.
 
@@ -192,7 +214,7 @@ The answer test showed search plus grep is the open question, not filing. These 
 - Secret scrubbing before session text is written: which patterns, and the measured miss rate.
 - How headings are laid out for session text, which has no headings of its own.
 - Does a hybrid agent's gain survive at scale? Answered 2026-10-08: no gain at 1x or ~5x, and the gap does not grow ([learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08)). The real corpus (8,218 session files) is untested.
-- **Open: re-scope.** The owner decides. Options, none chosen, each needs its own test before any build:
+- **Re-scope — decided 2026-10-08** (see Goal): docs-only compass + grep; sessions parked. The options considered were:
   - (a) Drop session search as a tinymem goal.
   - (b) A docs-only token-saving mode. D matched B on docs at about 60% of the tokens, but this PRD says token saving is not the claim.
   - (c) Change how results are presented so the agent keeps digging, since D lost on sessions through small read windows. This now has evidence: arm E (wider fetch) recovered most losers on seen questions ([learnings](tinymem-learnings.md#trace-autopsy-and-widened-fetch-diagnostic-2026-10-08)). Not yet proven on fresh questions.

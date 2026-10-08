@@ -1050,3 +1050,5 @@ E is D with only the tool output changed. The prompt is byte-identical.
 - No big paid run without a cheap validation run first.
 - Claude session history is too fragmented. tinymem tests stick to md docs: questions about features and what was decided.
 - Next: fresh docs-only questions (blind and audited), a ~$3 validation run of E against B, owner approval, then a pre-registered run.
+
+- Step-2 questions frozen 2026-10-08: 27 docs-only questions (bareloop 15, bareagent 12), blind-written, Opus-audited (16 OK, 11 fixed, 3 dropped); sha256 recorded in [tinymem.md](tinymem.md#measurement-order).
