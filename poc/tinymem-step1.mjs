@@ -19,7 +19,7 @@ const ROOT = join(homedir(), '.cache/tinymem-probe/out'), BASE = join(ROOT, 'ans
 const OUT = process.env.STEP1_DIR ?? join(ROOT, 'step1'), QDIR = process.env.STEP1_QDIR ?? join(OUT, 'questions');
 const CROOT = process.env.STEP1_CORPUS_ROOT ?? BASE; // holds <repo>/corpus and <repo>/lroot (built litectx index); point at a padded copy for the 10x runs
 const K = +(process.env.STEP1_K ?? 3), REPOS = ['bareloop', 'bareagent'];
-const LX2 = join(ROOT, 'neighbour/scratch/lx2'), SCRATCH = join(BASE, 'scratch/pilot');
+const LX3 = join(ROOT, 'step1-dprime/scratch/lx3'), LX2 = join(ROOT, 'neighbour/scratch/lx2'), SCRATCH = join(BASE, 'scratch/pilot');
 const ARMS = (process.env.STEP1_ARMS ?? 'D,B,C').split(',');
 const SIZE = process.env.STEP1_SIZE ?? 'x1', SIZES = ['x1', 'x5']; // size tag recorded in every run; C is only ever run at x1
 const POOL = process.env.STEP1_POOL_DIRS?.split(',').filter(Boolean); // grade-build/score: runs from several STEP1_DIRs into one joint pool (STEP1_DIR then holds grades/score)
@@ -32,17 +32,19 @@ const loadQ = () => { const Q = {}; const only = process.env.STEP1_QIDS?.split('
   for (const repo of REPOS) { const f = join(QDIR, repo + '.json'); if (!existsSync(f)) continue; for (const q of JSON.parse(readFileSync(f))) if (!only || only.includes(q.id)) Q[q.id] = { ...q, repo }; } return Q; };
 
 // ---------- runs ----------
-const A2_SENT = `You have one tool, Bash, which may only run "${LX2} recall \\"<query>\\" --kind doc -n <N>" (ranked search over the repo's docs and past Claude Code session logs; prints score, path, "→ section:startLine-endLine") and "${LX2} get <path> --lines A-B" (prints that section, followed by the immediately previous and next sections of the same file, marked; copy the range exactly as recall printed it; omit --lines for the whole file). Paths are relative to the corpus root. Run exactly one command per Bash call, starting with the absolute path above (no cd, no ;, &&, pipes or relative paths).`;
+const A2_SENTF = (LX2) => `You have one tool, Bash, which may only run "${LX2} recall \\"<query>\\" --kind doc -n <N>" (ranked search over the repo's docs and past Claude Code session logs; prints score, path, "→ section:startLine-endLine") and "${LX2} get <path> --lines A-B" (prints that section, followed by the immediately previous and next sections of the same file, marked; copy the range exactly as recall printed it; omit --lines for the whole file). Paths are relative to the corpus root. Run exactly one command per Bash call, starting with the absolute path above (no cd, no ;, &&, pipes or relative paths).`;
+const A2_SENT = A2_SENTF(LX2), E_SENT = A2_SENTF(LX3); // arm E (D'): sentence byte-identical to D except the wrapper path; only the tool OUTPUT differs (wider get, FILE span lines)
 export function runArm(arm, repo, question, { model = 'sonnet', maxTurns = 15 } = {}) {
   const corpus = join(CROOT, repo, 'corpus'), lroot = join(CROOT, repo, 'lroot');
   const B_SENT = `You have the tools Read, Grep and Glob over the corpus directory ${corpus} (subfolders docs/ = the repo's markdown docs, sessions/ = past Claude Code session logs as markdown).`;
   const D_SENT = `You also have Read, Grep and Glob over ${corpus} (docs/ and sessions/). Use search to find where to look; use grep and read when you need more of a file.`; // FROZEN (PREREG)
-  const tool = { A2: A2_SENT, D: A2_SENT + ' ' + D_SENT, B: B_SENT, C: 'You have no tools. Answer from your own knowledge only.' }[arm];
+  const tool = { A2: A2_SENT, D: A2_SENT + ' ' + D_SENT, E: E_SENT + ' ' + D_SENT, B: B_SENT, C: 'You have no tools. Answer from your own knowledge only.' }[arm];
   const sys = `You answer questions about the decisions and history of a software project ("${repo}") from its docs and past working sessions. ${tool}\nAnswer the question, quote the supporting text verbatim, and cite each source as \`path:line-range\`. If you are not sure or cannot find it, say "not found".`;
   const args = ['-p', question, '--model', model, '--output-format', 'stream-json', '--verbose', '--system-prompt', sys, '--strict-mcp-config', '--no-session-persistence', '--setting-sources', '', '--disable-slash-commands', '--permission-mode', 'dontAsk', '--max-turns', String(maxTurns)];
-  const rd = [`Read(/${corpus}/**)`, `Grep(/${corpus}/**)`, `Glob(/${corpus}/**)`], bash = [`Bash(${LX2} recall:*)`, `Bash(${LX2} get:*)`], X = ['WebFetch', 'WebSearch', 'Edit', 'Write'];
+  const rd = [`Read(/${corpus}/**)`, `Grep(/${corpus}/**)`, `Glob(/${corpus}/**)`], bash = [`Bash(${LX2} recall:*)`, `Bash(${LX2} get:*)`], bashE = [`Bash(${LX3} recall:*)`, `Bash(${LX3} get:*)`], X = ['WebFetch', 'WebSearch', 'Edit', 'Write'];
   if (arm === 'A2') args.push('--tools=Bash', '--allowedTools', ...bash, '--disallowedTools', 'Read', 'Grep', 'Glob', ...X);
   if (arm === 'D') args.push('--tools=Bash,Read,Grep,Glob', '--allowedTools', ...bash, ...rd, '--add-dir', corpus, '--disallowedTools', ...X);
+  if (arm === 'E') args.push('--tools=Bash,Read,Grep,Glob', '--allowedTools', ...bashE, ...rd, '--add-dir', corpus, '--disallowedTools', ...X);
   if (arm === 'B') args.push('--tools=Read,Grep,Glob', '--allowedTools', ...rd, '--add-dir', corpus, '--disallowedTools', 'Bash', ...X);
   if (arm === 'C') args.push('--tools=', '--disallowedTools', 'Bash', 'Edit', 'Read', 'Write', 'Glob', 'Grep', 'Agent', 'Workflow', 'ToolSearch', ...X, 'NotebookEdit');
   const t = Date.now();

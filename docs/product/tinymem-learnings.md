@@ -972,7 +972,7 @@ On docs, D matched B or slightly beat it, at about 60% of the tokens. On session
 - bareloop: 44 min 58 s, 312 MB db, 71,684 sections, peak RSS 825 MB.
 - bareagent: 37.5 min, 217 MB db, 52,306 sections.
 
-**Why D lost on sessions: it stopped early.**
+**Why D lost on sessions: it stopped early.** (Corrected 2026-10-08: the trace autopsy below shows this reading was wrong. The cause is small read windows, not stopping early.)
 - D typically made 2 to 4 calls and answered. B kept digging (more turns on average).
 - Session answers are scattered and often superseded, so the first good-looking hit is often not the last word. D trusted search and stopped.
 - Share of D runs (of 120 per size) that used grep or read at all, from the per-run tool list in score.md:
@@ -995,3 +995,58 @@ On docs, D matched B or slightly beat it, at about 60% of the tokens. On session
 - bareloop-d06 has a second valid source and an older-version trap in padding; reported, not removed.
 
 **Verdict.** Per the PREREG table (FAIL-WORSE at either size), stop the hybrid; read how D used the tools (above). Grep is enough at these sizes. The hybrid is dropped as the plan. Neighbour fetch is not promoted: the neighbour slice shows no D gain (-0.080 at 1x, -0.023 at ~5x).
+
+## Trace autopsy and widened-fetch diagnostic (2026-10-08)
+
+### A. Trace autopsy of the step-1 v2 D losses
+
+Read-only, Opus, two repos. Question: why did D lose on sessions?
+
+**Findings.**
+- Search found the right file and section in nearly all losing runs.
+- Citation format is ruled out. All runs cited (cited=yes) and the lx line numbers were 1-based and correct.
+- The earlier wording "stopped early / trusted search" is wrong. D used grep or read on 68% (1x) and 58% (~5x) of session runs. The real cause is small read windows.
+
+**Mechanism 1 (high confidence): the fetch window is too small.**
+- `get` returned one section plus one neighbour on each side.
+- Session logs are fragmented. Assistant turns average 8.6 lines, and one decision spans 5 to 20 sections.
+- D read a median 35-line window; B read 75.
+- Answers lay 3 to 5 turns past the window.
+- In bareagent-s04 the previous neighbour held a superseded theory, and D repeated it.
+
+**Mechanism 2 (medium-high): one compound query ranks a recap or stale section first.**
+- bareloop-d07: rank 1 says "TBD"; the set values rank 15.
+- bareloop-s10: rank 1 is the recap written after the decision.
+- Short sub-question queries put the gold turns in the top 3 to 4.
+- D won when one self-contained section held the answer (docs).
+
+**Offline replay.** Widening D's real fetches to -30/+120 lines raised gold coverage to 85 to 100% on s02, s03 and s07.
+
+### B. D-prime diagnostic (arm E)
+
+E is D with only the tool output changed. The prompt is byte-identical.
+- `get` returns the requested section, the previous section, and a forward budget (+120 lines for `sessions/`, +60 for `docs/`).
+- `recall` adds a line "FILE <path>: N hits, lines a-b" for any file with 2 or more hits.
+
+**Validated first.** Offline replay of 95 real D `get` calls: gold coverage rose on every loser (s04 23 to 100, s10 65 to 100, d08 50 to 100, s07 5 to 16, s03 18 to 50, d07 28 to 56) and no winner dropped. `get` output median grew from 2.8 KB to 9.3 KB (about 3x). A live pilot confirmed it.
+
+**Run.** SEEN questions, k = 2, $3.31. Wins out of runs (old D / E / B):
+
+| | 6 losers | 3 winners |
+|---|---|---|
+| 1x | 0/18, 8/12, 14/18 | 8/9, 6/6, 3/9 |
+| ~5x | 1/18, 10/12, 14/18 | 8/9, 6/6, 7/9 |
+
+- bareagent s04, s10, d08 and bareloop d07 flipped to 2/2 at both sizes.
+- bareloop-s07 (0/2 at both sizes) and bareloop-s03 (0/2 at 1x) still fail. The top hit was wrong (recall surfaced other sessions). Widening does not fix that.
+- Median tokens, 1x: D 26.6k, E 27.1k, B 35.4k. At ~5x: D 26.6k, E 29.3k, B 40.5k.
+
+**Limits.** Seen questions, k = 2, 9 questions, not significant. This shows the mechanism, not a result.
+
+**Score-column finding (display issue, not a ranking bug).** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`). `LiteCtx.recall` re-sorts by the fused minmax(score) + embedWeight x minmax(cosine) (`src/index.js` about 938-946). So the printed score can disagree with the printed order. To fix separately.
+
+### C. Owner direction (2026-10-08)
+
+- No big paid run without a cheap validation run first.
+- Claude session history is too fragmented. tinymem tests stick to md docs: questions about features and what was decided.
+- Next: fresh docs-only questions (blind and audited), a ~$3 validation run of E against B, owner approval, then a pre-registered run.
