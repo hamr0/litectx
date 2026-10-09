@@ -155,7 +155,9 @@ tenant-deletes on `owner = scope` exactly (stricter than read's `owner ∪ globa
 shared memory) and combines only with `kind` — adding `by`/`id`/`idPrefix` throws rather than
 silently widening the wipe (litectx-prd.md:348-366). `scoped(tenant).forget({ id })` / `{ idPrefix
 }` (v0.27) compose with the fence: the delete matches the owner-qualified physical key, so a
-foreign tenant's id matches nothing (litectx-prd.md:436,448-458).
+foreign tenant's id matches nothing (litectx-prd.md:436,448-458). Since 0.34.0 the same `{ id }` / `{ idPrefix }` forms also reach that tenant's own same-id
+written/ingested docs (tenant-exact; docs live in their own `scope\x1Eid` key space, so a same-id doc of another
+tenant or the shared tier is never hit).
 
 Optional **`expiresAt`** on doc/blob rows excludes expired rows from recall/get and is reclaimed by
 `ctx.purge()`; there is **no per-row TTL on the memory axis** — facts are durable by default,
@@ -182,7 +184,7 @@ per-query threshold, consumer owns the cut), absent on `code`/`doc` (litectx-prd
 `ctx.ingest(buffer, { filename, scope?, expiresAt? })` is the chat-upload flow, routed by file
 extension (never content-sniffed): **md/pdf/docx** → chunkable, converted to markdown then
 chunked (pdf/docx ride an optional lazy peer-dep tier, `pdfjs-dist` + `mammoth`, so the base
-install stays lean/offline) (litectx-prd.md:251-259); **txt/text/log/csv** → chunkable via the
+install stays lean/offline) (litectx-prd.md:251-259); **txt/text/log/csv/eml** (`eml` since 0.34.0) → chunkable via the
 same headless plaintext packer, no parser/peer-dep needed (litectx-prd.md:271-275); **any other
 type** (xlsx/xml/code/binary) → byte-exact `BLOB`, filename-indexed for recall, body never parsed,
 `get(id)` returns the original bytes (litectx-prd.md:276-279). Ingest is deliberately **not** the
