@@ -1051,7 +1051,7 @@ path, file-granular) lands when a codebase-scan consumer exists. (`OFFSET` is O(
 the row counts targeted — a `rowid`-cursor is the deferred large-store path.)
 
 ### `ctx.size()` → `number`
-Indexed document count (one per code file; one per heading section for md).
+Stored item count: one per indexed file (code or md — an md file counts once however many heading sections it has), plus one per written memory row (docs, blobs, facts, episodes).
 
 ### `ctx.close()` → `void`
 Closes the SQLite connection. Call it when done (especially for file-backed DBs).
@@ -1354,7 +1354,7 @@ On fresh real questions this put the right section in the top 5 for 22/30 (barel
 - **Upgrade cost.** Migrations run automatically on open (rows move to `doc_fts`, scoped docs are
   re-keyed, and a one-time full index rebuild is forced). The first `index()` after upgrading rebuilds
   everything: measured cold with embeddings on, ~146 s on a large docs repo and ~42 s on a smaller one
-  (vs ~6 s no-change); the db grew ~7.6 → 12.4 MB. After that only changed files re-embed.
+  (vs ~6 s no-change); the db grew ~7.6 → 12.4 MB. After that only changed files re-embed. Until that full `index()` completes, indexed md is not searchable: `recall({ kind: 'doc' })` returns `[]` for it, with no error (a `paths`-scoped pass re-indexes only the files it names).
 
 ## Architecture
 

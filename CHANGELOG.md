@@ -35,6 +35,7 @@ All notable changes to this project are documented here, following
 
 - Migrations run automatically on open: rows move to `doc_fts`, every direct doc is re-keyed into the doc key namespace (from bare ids on 0.33.x, or from `scope\x1Fid` on a pre-release 0.34.0 build), and a one-time full index rebuild is forced.
 - **The first `index()` after upgrading rebuilds everything.** Measured cold with embeddings on: bareloop ~146 s (vs ~6 s no-change), bareagent ~42 s; the db grew 7.6 to 12.4 MB on bareloop. Afterwards only changed files re-embed.
+- **Indexed markdown is not searchable until that full `index()` completes.** Before it, `recall({ kind: 'doc' })` returns `[]` for indexed md, with no error; a `paths`-scoped `index()` restores only the files it names.
 
 ### Known limits
 
