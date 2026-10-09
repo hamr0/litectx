@@ -5,7 +5,7 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [0.34.0] — 2026-10-05
+## [0.34.0] — 2026-10-10
 
 ### Changed
 
@@ -13,6 +13,9 @@ All notable changes to this project are documented here, following
 - **Per-section embeddings.** With embeddings on, each md section gets its own vector (`doc_sections.vec`); backfill fills vectorless sections. Embeddings only re-rank doc hits — they never nominate doc candidates (KNN nomination stays fact/episode only).
 - **Doc rows live in a separate FTS table, `doc_fts`** (same unstemmed tokenizer). The `docs` table is now code-only, so md content no longer perturbs code BM25 statistics (a mixed repo ranks code identically to a code-only one).
 - **`.eml`** is ingested as plain text (chunked), like `txt`.
+- **`size()` counts files, not rows.** An indexed md file counts once however many heading sections it has; written memory (docs, blobs, facts, episodes) counts one per row.
+- **README rewritten around three questions** (what breaks if I change this, where in the docs is this decided, what did we learn last time) with the honest docs-search claim.
+- **Doc/JSDoc fixes that change `primitives.json`:** the `impact` example now shows the `'medium'` risk bucket, the `summaryWindow` example uses the real option `summaryKeep` (was `keepRecent`), and `ingest`'s `@when` lists `eml`; the scoped `forget` entry notes it also reaches the tenant's own docs.
 - **Docs wording corrected.** README, `litectx.context.md` and the MCP `recall` description no longer imply doc/code recall "finds by meaning": it is word-gated (a hit must share a query word), embeddings only re-rank (they nominate for fact/episode memory only). Added the measured docs-search result (pre-registered, 24 questions, about 50 and about 1,500 docs: as good or better than grep alone at roughly 25-35% lower cost) and the MCP description now says to use recall to find where to look, then `get` or grep.
 
 ### Performance
