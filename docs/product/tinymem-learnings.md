@@ -1064,6 +1064,7 @@ Source: `~/.cache/tinymem-probe/out/step2/m1/report.md`, docs-only index, both r
 - Grouping hits into file spans adds 3 to 4 points (n=8: 70/100, n=20: 81/100).
 - The misses are other files, or sections far apart in the same file.
 - Caveat: all-found is strict; some gold sources are redundant with each other, so a run can answer correctly with fewer.
+- Docs-only 1x index with embeddings on: bareloop (71 files) 558 s, bareagent (43 files) 338 s. Both were built concurrently, so CPU contention inflates the times. Not investigated.
 
 ### M2 (validation run, E against B, docs-only)
 

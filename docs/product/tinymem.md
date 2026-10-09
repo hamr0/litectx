@@ -34,6 +34,22 @@ is `/remember`'s job, not tinymem's. The original goal included sessions.
 docs and searching them. Under the new goal, fewer tokens and lines read is part of success, but
 only if answer quality holds against grep-only.
 
+## Conclusion so far (2026-10-09)
+
+- litectx here is a compass. It hands the agent the right chunks with line ranges, and the agent greps and reads from there. It is not a replacement for grep.
+- Evidence on project md docs (43 to 71 files): answers are not more correct than grep-only. Three runs tied or lost: step 1 v2 (lost on sessions, then explained by small read windows), M2 on plain docs (20/20 against 20/20), step 3 on reworded questions (19/20 against 20/20).
+- What it does give: on reworded questions (words differ from the docs), the first recall put a gold file in 15/20 runs (median rank 2). The hybrid used about 40% fewer tokens (23.7k against 39.9k median). Lines read were equal (136 against 132.5). On plainly worded questions tokens were even (M2: 24.5k against 23.5k).
+- The "meaning, not words" claim is promising, NOT passed. It rests on validation only (k = 2, 10 graded questions), no pre-registered bar, and accuracy at ceiling.
+- Framing note: the comparison should be litectx plus grep against grep alone (added value), not litectx against grep. The go/no-go 1 litectx-only arm was the wrong framing.
+- Decision pending (owner): whether more probes are needed, for example a 1,000+ file docs pile, or a pre-registered token-saving test on reworded questions.
+- Details: [learnings](tinymem-learnings.md#step-3--paraphrase-validation-2026-10-09).
+
+## Open issues to look at
+
+- **Slow indexing with embeddings.** Docs-only 1x index took 558 s for bareloop (71 files) and 338 s for bareagent (43 files), built concurrently (CPU contention inflates it). The ~5x indexes took 45 min and 37.5 min. The first full session index took about 19 min. Embedding is sequential per section. Not yet investigated. Recorded in [learnings](tinymem-learnings.md#step-2--m1-offline-coverage--m2-validation-2026-1008-09) (M1) and the step 1 v2 section.
+- **Recall score display.** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`), while `LiteCtx.recall` orders by fused `minmax(score) + embedWeight * minmax(cosine)` (`src/index.js` ~938-946). Printed scores can contradict the order (for example 0.54 above 1.00). Display issue, not a ranking bug. Fix: print the fused value or label the column. Seen in the owner's CLI output; not yet recorded in learnings.
+- **Weight mismatch (placeholder).** Weight mismatch reported by the owner (0.5 expected, ~0.9 observed on matching) — details to confirm; current code default embedWeight is 1.0 (`src/index.js:33`).
+
 ## Current direction (2026-10-08)
 
 - **Goal clarified by the owner (2026-10-08):** litectx as a compass over md docs. It returns all related chunks with file and line ranges; the agent reads only those lines and greps for detail. Sessions are parked and out of tests. See "Goal". The bullets below are the results that led here.
