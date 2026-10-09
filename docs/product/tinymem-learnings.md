@@ -1052,3 +1052,32 @@ E is D with only the tool output changed. The prompt is byte-identical.
 - Next: fresh docs-only questions (blind and audited), a ~$3 validation run of E against B, owner approval, then a pre-registered run.
 
 - Step-2 questions frozen 2026-10-08: 27 docs-only questions (bareloop 15, bareagent 12), blind-written, Opus-audited (16 OK, 11 fixed, 3 dropped); sha256 recorded in [tinymem.md](tinymem.md#measurement-order).
+
+## Step 2 — M1 offline coverage + M2 validation (2026-10-08/09)
+
+### M1 (offline, no model)
+
+Source: `~/.cache/tinymem-probe/out/step2/m1/report.md`, docs-only index, both repos, all 27 questions, verbatim query (Q1).
+- Top n=8: any gold source found 93%, all gold sources found 67%. The superseded slice is the weak one: 100% any, 44% all.
+- Top n=20: 100% any, 78% all. Mean rank of the first gold hit (at n=20): 2.5.
+- Splitting into sub-questions (Q2) does not help: n=8 is 70/89 against 67/93 for Q1, and n=20 is 74/96 against 78/100.
+- Grouping hits into file spans adds 3 to 4 points (n=8: 70/100, n=20: 81/100).
+- The misses are other files, or sections far apart in the same file.
+- Caveat: all-found is strict; some gold sources are redundant with each other, so a run can answer correctly with fewer.
+
+### M2 (validation run, E against B, docs-only)
+
+- 10 questions, seed 20261008, 5 per repo; slices 5 single, 2 neighbour, 3 superseded. E against B, k = 2, so 20 runs per arm.
+- Wins: E 20/20, B 20/20. Ceiling, no separation.
+- Median tokens: E 24.5k, B 23.5k. Median lines read: E 182.5, B 106. Cost $2.70 (runs $1.67 + grading $1.03).
+- 4 benign "no chunk at" errors in E (the agent asked for a range that is not a section). The frozen E sentence still mentions `sessions/`; known minor mismatch.
+- Reading: on coherent project docs of 43 to 71 files, grep alone answers everything. The +60 forward window mostly inflates reading on docs.
+- Validation-first saved a roughly $40 run that would have hit the same ceiling.
+
+### Part 1 replay: tighter doc fetch (offline, calls held fixed)
+
+Replayed the 41 E `get` calls under five fetch policies (`poc/tinymem-step2-fetch-replay.mjs`, table in `step2/m2/replay.md`). Median lines/run: P0 as run 182.5; requested only 46; prev+req+next 112; req+next 75; prev+req+20 fwd 120 (B 106). No policy keeps gold coverage at P0's level while cutting lines to B's. Caveat: a live agent may behave differently, and coverage counts only Read and `get` text, not recall or Grep output.
+
+### Next (owner-approved 2026-10-09)
+
+Paraphrase questions: wording differs from the docs, so grep needs exact terms. Written blind, audited, then a roughly $3 validation run.
