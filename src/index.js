@@ -886,7 +886,7 @@ export class LiteCtx {
 
   /**
    * Rank one kind. Dual path (BM25 + spreading) when `qvec` is null; tri-hybrid when it's the query
-   * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)`, then sliced to
+   * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)` (that fused value becomes each hit's `score`), then sliced to
    * `n`. Cosine runs on the pool plus at most {@link KNN_K} nominees, so it stays O(pool), never
    * O(corpus) for files.
    *
@@ -916,7 +916,7 @@ export class LiteCtx {
     // The raw query↔hit cosine — computed ONCE, both surfaced on the hit (Feature A) and fused below.
     // `cosine` here is the UNBLESSED semantic similarity in [-1,1]: separable in aggregate but NOT a
     // per-query threshold (R-S8 — no usable cut), so it is surfaced as a raw signal, never a label; the
-    // consumer owns any threshold. `score` (blended BM25 + spreading) is untouched. 0 for an un-embedded
+    // consumer owns any threshold. 0 for an un-embedded
     // row (a fact written before the tier was on) — `cosine()` guards a missing vector, never throws.
     // `doc` is the one recall kind whose rows span BOTH vector tables — a file `.md` (file_embeddings) and
     // a written doc (mem_embeddings) can even share a path — so route each candidate to the table its own
@@ -934,7 +934,6 @@ export class LiteCtx {
     // to re-rank internally (below), but the doctrine gates it there (a code query shares identifiers with
     // its answer, so cosine is a weaker, gated signal), so it is not surfaced as a per-hit score.
     if (MEM_KINDS.has(kind)) cand.forEach((h, i) => (h.cosine = raw[i]));
-    if (cand.length < 2) return cand.slice(0, n);
     // nominees carry no lexical score — they enter at the pool floor and rank on cosine alone
     const floor = pool.length ? Math.min(...pool.map((h) => h.score)) : 0;
     const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
@@ -943,7 +942,7 @@ export class LiteCtx {
       .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
       .sort((a, b) => b.f - a.f)
       .slice(0, n)
-      .map((x) => x.h);
+      .map((x) => ({ ...x.h, score: x.f })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
   }
 
   /**

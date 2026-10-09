@@ -123,7 +123,7 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
 const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-// hits: [{ path, kind, format, score, git }, ...]  (score: higher = more relevant; git: activity, not scored)
+// hits: [{ path, kind, format, score, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; git: activity, not scored)
 
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
@@ -314,7 +314,7 @@ return shape follows the `kind` argument:
 { path: string,    // repo-relative file path — or, for written memory, the caller's `id` key
   kind: string,    // "code" | "doc" | "fact" | "episode"
   format: string,  // "ts" | "js" | "py" | "md" | "text" | ...
-  score: number,   // higher = more relevant (BM25 + additive import-spreading)
+  score: number,   // the value the list is ordered by: BM25 + import-spreading (+ embedWeight × cosine with embeddings on), each scaled per query; higher = more relevant; comparable within one list only
   git: { commits: number, lastCommit: number|null } | null,  // activity metadata; null = no history
   chunk: { symbol: string|null, nodeType: string,            // the best-matching chunk INSIDE the
            startLine: number, endLine: number } | null,      // hit — a function pointer, not just a file
@@ -341,9 +341,8 @@ return shape follows the `kind` argument:
 >
 > `cosine` (fact/episode hits, embeddings tier only) is the **raw query↔hit semantic similarity** in
 > `[-1,1]` — the very KNN cosine litectx already computes to rank, surfaced verbatim so you don't
-> re-embed to get it. It is **unlike `score`**: `score` is the blended BM25 + spreading rank (BM25-blind
-> on a zero-shared-token paraphrase, so it can read `0.0` for a semantically perfect match), whereas
-> `cosine` carries the semantic signal directly. It is **an unblessed signal, not a verdict**: it
+> re-embed to get it. It is **unlike `score`**: `score` is the per-query-scaled blend that orders the list (BM25 + spreading,
+> plus `embedWeight` × cosine with embeddings on), whereas `cosine` is the raw, unscaled semantic value. It is **an unblessed signal, not a verdict**: it
 > separates related from unrelated *in aggregate*, but has **no reliable per-query threshold** (a real
 > paraphrase and an unrelated note can share a cosine band — the R-S8 finding), so a fixed cut will
 > mis-classify at the margin. Use it to *rank* or as a *conservative* pre-filter you own the risk of;

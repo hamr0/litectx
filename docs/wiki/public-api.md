@@ -73,7 +73,7 @@ const more = lc.recall("how does auth work", { kind: "code", n: 30 }); // dig de
 const full = lc.recall("how does auth work", { kind: "code", body: true }); // inline each hit's content
 ```
 
-`Hit → { path, kind, format, score, chunk, body?, meta? }` — `body` is populated only with
+`Hit → { path, kind, format, score, chunk, body?, meta? }` — `score` is the value the list is ordered by (BM25 + spreading, plus `embedWeight` × cosine with embeddings on, each scaled per query; comparable within one list only). `body` is populated only with
 `{body:true}`; `meta` is the written-memory opaque dict (litectx-prd.md:181-186). `recall()` is
 async (litectx-prd.md:182-185).
 

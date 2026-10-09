@@ -211,7 +211,7 @@ time an episode needs to earn 10 recalls starves promotion.
 
 What **is** used for ranking, in full:
 
-1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2096-2139`).
+1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2115-2158`), min-max scaled per query to [0,1] (top lexical hit = 1; a lone hit = 1) by one helper, `scaleScores`, for every kind.
 2. For code only: `+0.3 x` the best normalised score among the file's import neighbours in the same result pool
    (`src/index.js:85`, `src/store.js:2161-2200`). Docs have no import edges, so nothing is added (`src/store.js:2179`).
 3. Only if embeddings are on: a cosine term, `norm(score) + weight x norm(cosine)`, weight 1.0
@@ -401,8 +401,8 @@ flowchart TD
 5. Fact/episode: the same, plus up to 8 KNN nominees whose cosine is above 0 and that are not already in the pool
    (`src/index.js:40,913`, `src/store.js:2452-2472`). Nominees get the pool's lowest keyword score and compete on
    cosine alone (`src/index.js:939-941`).
-6. The raw cosine is attached to **fact/episode hits only** (`src/index.js:936`). The returned `score` stays the
-   pre-fusion keyword(+spread) score even though the order follows the fused value (`src/index.js:943-947`).
+6. The raw cosine is attached to **fact/episode hits only** (`src/index.js:936`). The returned `score` is the fused
+   value the list is ordered by (`src/index.js:941-945`), comparable within one result list only.
 7. A section hit already names its chunk; a code hit gets the smallest chunk containing the most query terms, never
    a container that wins only by wrapping a matching method (`src/store.js:2225-2273`).
 8. Every returned hit is logged to `recall_log` (`src/index.js:762,778`).
@@ -524,10 +524,10 @@ Nothing there is built, so none of it is described above.
 
 Where the code and a doc disagree, the code is right.
 
-**Still open.**
+**Still open.** None.
 
-1. **Hit score vs order.** With embeddings on, hits are ordered by the fused value but carry the pre-fusion `score`
-   (`src/index.js:943-947`). This is the open "score display" bug, parked in `docs/product/tinymem.md` (Deferred).
+**Fixed on branch `fix/recall-score-order` (2026-10-10).** Hit score vs order: with embeddings on, `score` is now the fused
+value the list is ordered by (it used to be the pre-fusion keyword score).
 
 **Fixed on branch `tinymem-sections` (2026-10-09).** Eight smaller mismatches found while writing this page were
 corrected in the docs and comments, with no change in behaviour:
