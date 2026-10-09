@@ -47,8 +47,7 @@ only if answer quality holds against grep-only.
 ## Open issues to look at
 
 - **Slow indexing with embeddings.** Docs-only 1x index took 558 s for bareloop (71 files) and 338 s for bareagent (43 files), built concurrently (CPU contention inflates it). The ~5x indexes took 45 min and 37.5 min. The first full session index took about 19 min. Embedding is sequential per section. Not yet investigated. Recorded in [learnings](tinymem-learnings.md#step-2--m1-offline-coverage--m2-validation-2026-1008-09) (M1) and the step 1 v2 section.
-- **Recall score display.** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`), while `LiteCtx.recall` orders by fused `minmax(score) + embedWeight * minmax(cosine)` (`src/index.js` ~938-946). Printed scores can contradict the order (for example 0.54 above 1.00). Display issue, not a ranking bug. Fix: print the fused value or label the column. Found in the step-1 v2 trace autopsy and the arm-E diagnostic; recorded in learnings ("Score-column finding").
-- **Weight mismatch (placeholder).** Weight mismatch reported by the owner (0.5 expected, ~0.9 observed on matching) — details to confirm; current code default embedWeight is 1.0 (`src/index.js:33`).
+- **Recall score display.** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`), while `LiteCtx.recall` orders by fused `minmax(score) + embedWeight * minmax(cosine)` (`src/index.js` ~938-946). Printed scores can contradict the order (for example 0.54 above 1.00). Display issue, not a ranking bug (this is the "weights 0.5 vs 0.9" the owner saw). Fix: print the fused value or label the column. Found in the step-1 v2 trace autopsy and the arm-E diagnostic; recorded in learnings ("Score-column finding").
 
 ## Current direction (2026-10-08)
 
