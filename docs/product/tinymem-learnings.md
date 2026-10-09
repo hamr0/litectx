@@ -453,7 +453,7 @@ Their pipeline mapped to litectx:
 - Entity index as a router: dropped. BM25/recall is the lookup (round 6).
 - Pages grown from use: do not help when search is weak, and overlapping topics make page
   matching wrong (7b). A page is capped by the first ask's search.
-- The bottleneck is FINDING, not organising. Doc recall returns one section per file.
+- The bottleneck is FINDING, not organising. Doc recall returns one section per file. (superseded 2026-10-09: see Step 4)
 
 **Next: round 8 (running).**
 1. The same 20 pre-registered questions through litectx's memory path. Every H2 section is stored
@@ -1096,3 +1096,243 @@ Paraphrase questions: wording differs from the docs, so grep needs exact terms. 
 - Finding cost (the point of the test): E's first recall listed a gold file in 15/20 runs (median rank 2; rank 1 in 6; top 5 in 12); with the section range overlapping a gold range 12/20 (median rank 1.5). B's greps to first touch of a gold file: touched 16/20, median 1.5 greps (mean 1.81; 1 grep in 8; 3 or more in 3); median total 2 greps/run. So grep found the files about as fast as litectx's first recall, with the agent's own wording.
 - Spend: runs $2.877 + grading $0.963 = $3.84 (under the $4 stop).
 - Caveat: validation only, k = 2, 13 questions picked (10 graded), one grader; at the ceiling it cannot show a difference in accuracy. The reliable difference is cost: B used about 1.7x E's tokens here.
+
+## Step 4 — scale, nomination, cut-off, fairness, model (2026-10-09)
+
+All free: no model calls, MiniLM unless stated. Scripts: `poc/tinymem-step4-m4.mjs`,
+`poc/tinymem-knn-doc.mjs`, `poc/tinymem-cutoff.mjs`, `poc/tinymem-models.mjs`. Outputs are under
+`~/.cache/tinymem-probe/out/` (`step4/m4`, `knn-doc`, `cutoff`, `fairness`, `models`).
+
+### Scale: docs-only, 919 to 1,525 files (M4)
+
+The same frozen questions were run against the docs padded with renamed docs from other projects
+(padding folder `docs/ext`). Cell = questions where any gold source is found.
+
+| Question set | Top 8, 1x | Top 8, padded | Top 20, 1x | Top 20, padded |
+|---|---|---|---|---|
+| Plain (27) | 25/27 | 25/27 | 27/27 | 27/27 |
+| Reworded (15) | 8/15 | 8/15 | 11/15 | 8/15 |
+
+- Plain wording holds at scale. Reworded holds at the top 8 but the tail thins: the top 20 loses 3 questions (11 to 8).
+- Padding takes about 11% of the top 8 on plain questions and about 21% on reworded ones.
+- Grep gets noisier too: for the two rarest words of each reworded question, the files containing either word go from a mean of 6.7 to 87 (about 13x).
+- Index times with embeddings, run one at a time: bareloop 1x (71 files) 3:30 alone. The earlier 9:18 was CPU contention, so the old "558 s" figure in the Step 2 section is inflated. bareloop padded (1,525 files, 36,703 sections) 21:02, 167 MB db. bareagent padded (919 files, 21,852 sections) 11:53, 95.6 MB. The bareagent 1x was not re-run, so its old 338 s is still unchecked.
+
+### Letting meaning nominate doc sections changed nothing
+
+- Today doc recall takes a pool of up to 400 sections by word match and then re-ranks them with the meaning score. The test also added the 20 or 50 sections nearest by meaning to the pool.
+- Result: identical to today on plain, reworded and the stress set. 0 better, 0 worse in every cell. The new entries never reached the top 8.
+- Why: the 400-section pool is out of only about 1,100 to 2,300 sections, so it already holds what meaning would add. A control with the pool cut to 10 does make the nominees matter, so the harness works.
+- The "no shared words" stress set (every question word that appears in the gold lines removed) was flawed. Read by hand, 7 of its 12 misses lost or flipped the meaning when the words were stripped (removed "no" or "never", word salad). Only 5 are valid evidence. Its "20%" found figure must not be quoted.
+
+### Length cut-off ruled out
+
+- litectx embeds the first 6,000 characters of a section, then the tokenizer cuts at 512 tokens. The model was trained at 256.
+- Of the 7 reworded misses at the top 8, only 1 has every answer-bearing section starting past the cut. Of the 8 hits, also 1.
+- So truncation does not explain the misses.
+
+### Question fairness ruled out
+
+- Each reworded question was read by hand (single Opus grader): natural, answerable, and the same meaning as the docs.
+- 5 of the 7 misses are fair questions. 6 of the 8 hits are fair. The misses are not an artefact of badly written questions.
+- Fair misses: bareloop-p02, bareagent-p01, bareagent-p04, bareagent-p05, bareagent-p07.
+
+### Model ruled out
+
+bge-small-en-v1.5 and e5-small-v2 were tried, each as litectx would run it and with the model's intended pooling and prefixes (meaning rank only).
+
+- Of the 5 fair misses, only 1 is rescued into the top 8: bareagent-p07 via bge (rank 21 to 2). e5 rescues none.
+- Ranks swing by hundreds in both directions across the 42 questions.
+- Full recall: reworded top 8 is 8/15 for all three models; plain top 8 is 25/27 for MiniLM and e5, 26/27 for bge.
+- Cost: both are about 50% bigger (34 MB against 23 MB) and 2.3x to 5.3x slower to index (the timings are noisy).
+- Keep MiniLM.
+
+### Working explanation (not proven)
+
+- Project words are unknown to a general model, the sections are all about the same broad topic, and each section gets one vector. Nearly-the-same sections are hard to tell apart.
+- The live agent compensates by rewriting its queries (a gold file listed in 15/20 reworded runs). Grep-only did not fail (20/20): the large-model agent supplies the meaning. litectx's measured value is fewer tokens (about 40%), not more correct answers.
+- Chunking: heading-section (H2) chunks would be coarser than today's, because litectx splits at every heading level (`chunkMarkdown`, `src/chunker.js`). Rounds 4 to 9 already found litectx chunks as good as or better than H2.
+- Doc search is word-based with a meaning re-rank (doc and code recall is gated by word match). "Finds by meaning" is not established for docs.
+
+### External reading (2026-10-09)
+
+- No universal chunk size; it depends on the answer type (arXiv 2505.21700).
+- Smaller chunks raise precision, not recall; overlap helped MiniLM more than shrinking (Chroma research, trychroma.com/research/evaluating-chunking).
+- Structure-aware boundaries are the common advice (Reducto, Unstructured).
+- Biggest measured gain: a context prefix on each chunk. Contextual retrieval cut failures 35% with embeddings and 49% with BM25 added (anthropic.com/news/contextual-retrieval).
+- litectx cannot call an LLM per chunk. The deterministic version is a file name plus heading path prefix. The test was run (see the next sub-section) alongside small-to-big (match on the paragraph, return the section).
+
+### Chunk context and small-to-big (2026-10-09)
+
+Free, MiniLM fixed, run through simulated shipped recall (real `recall()`, BM25 pool 400, min-max fusion; only the section vectors swapped). Script: `poc/tinymem-ctxembed.mjs`. Sanity gates passed: base reproduces the shipped ranks with 0 mismatches. Variants: (a) a "path > heading chain" prefix on each section; (b) small-to-big, one vector per paragraph, section score = best paragraph. Cell = any gold section found at the top 8.
+
+| Variant | Reworded (15) any @8 | Reworded all-gold @8 | Plain (27) any @8 | Vectors |
+|---|---|---|---|---|
+| base (shipped) | 8 | 3 | 25 | 3,462 |
+| a: prefix | 8 | 3 | 24 | 3,462 |
+| b: small-to-big | 8 | 5 | 27 | 9,320 |
+
+- Reworded top 8 is 8/15 in every variant, so neither moves the headline.
+- (a) helps the pure-meaning rank on reworded (3 to 5 at the top 8) but slightly hurts plain recall (25 to 24).
+- (b) raises reworded all-gold from 3 to 5 and plain top 8 from 25 to 27, and rescues one fair miss (bareagent-p01, first gold at rank 8). It costs 2.7x the vectors (9,320 against 3,462; about 14 MB against 5 MB) and needs a new per-paragraph vector table. Embedding time rose about 25% to 50% (bareloop 160 s to 199 s, bareagent 44 s to 67 s).
+- Parked. Un-defer only if the scale run shows partial answers (missing gold sections) cost correctness.
+
+### Ranking is not hurting; where the misses sit (2026-10-09)
+
+Fused (BM25 plus meaning) against BM25-only, by first-gold rank. Script: `poc/tinymem-rankcut.mjs`, `poc/tinymem-rankcut-report.mjs`. Sanity: shipped recall against the step-4 ranks, 84 rows, 0 mismatches.
+
+| | Gold moves up | Gold moves down | Same |
+|---|---|---|---|
+| 1x (42) | 17 | 5 | 20 |
+| big (42) | 15 | 4 | 23 |
+
+- The downs are small. At 1x, 2 of 5 go 1 to 2; the others are 9 to 11, 5 to 13, 15 to 20. At big, 2 of 4 go 1 to 2.
+- The doc pool is the BM25 top 400 sections (`SEMANTIC_POOL`, `src/index.js:32`); doc has no meaning nomination (consistent with the nomination test above).
+- Misses of the 5 fair questions: bareagent-p07 is lexically out of the pool (shares only "agent" with its gold section). The rest are in the pool but deep: fused first-gold rank 13 to 23 at 1x, 28 to 102 at big. bareloop-p04 (not a fair-miss question) drops out of the pool at big.
+- The older note "doc recall returns one section per file" is obsolete since 0.34.0 (one row per section). The reverse problem is real: the top 20 averages about 9 distinct files at 1x and about 10 at big, and one file can take 12 to 13 slots.
+
+### Top-N sweep (2026-10-09)
+
+All 42 questions, fused list. Approx tokens = CLI bytes / 4.
+
+| n | All-gold 1x | All-gold big | ~Tokens 1x | ~Tokens big |
+|---|---|---|---|---|
+| 5 | 19 | 18 | 134 | 134 |
+| 8 | 21 | 20 | 209 | 213 |
+| 10 | 24 | 24 | 262 | 270 |
+| 15 | 25 | 24 | 396 | 410 |
+| 20 | 27 | 25 | 525 | 545 |
+
+- 5 to 10 is worth it: all-gold 19 to 24 at 1x and 18 to 24 at big, for about 130 more tokens.
+- Past 10 it is flat at big for reworded (any 8, all 4 at n = 10, 15 and 20). Padding grows: for reworded at big, padding files are 2.2 of 10 at n = 10 and 5.3 of 20 at n = 20 (about 27%).
+
+### Per-file cap against grouping by file (2026-10-09)
+
+Same fused list, post-processing only. Script: `poc/tinymem-filecap.mjs`. Sanity: any-gold counts reproduce the rankcut results, 0 mismatches. Gold-file coverage = share of gold files surfaced.
+
+- A per-file cap loses multi-section answers. Cap 1 at n = 10: all-gold 24 down to 18 (1x and big). On the 13 questions with 2+ gold sections in one file, cap 1 completes 1/13 against 6/13 for plain top 10.
+- Grouping wins. Format: one "FILE path: lines a-b, c-d" line per file, files in best-hit order, sections taken from the top-50 window (`w50`).
+
+| Variant (42 questions) | 1x any / all | 1x file cov. | 1x ~tok | big any / all | big file cov. | big ~tok |
+|---|---|---|---|---|---|---|
+| base top 10 | 33 / 24 | .79 | 262 | 34 / 24 | .79 | 270 |
+| group-8-w50 | 37 / 29 | .84 | 179 | 37 / 27 | .84 | 169 |
+
+- Multi-gold-in-one-file questions: group-8-w50 completes 9/13 at 1x and 7/13 at big, against 6/13 for base top 10.
+- Caveats: part of the token saving is the leaner line format, not the grouping. Grouping reaches past rank 10 through the window, so it sees more sections. It was picked from many variants on the same 42 questions. The grouped-output win was picked and scored on the same 42 questions; confirmation needs a fresh question set with line-level gold. Done: see the next three sub-sections (coverage confirmed; agent A/B lost).
+
+### Fresh question set for confirmation (2026-10-09)
+
+- 24 questions, 12 per repo (bareloop, bareagent). Per repo: 6 plain and 6 reworded, 6 single-section and 6 multi-section.
+- Written blind to the results by an Opus worker, then frozen. sha256 in `~/.cache/tinymem-probe/out/fresh/FROZEN.sha256`: `bareloop.json` `7ab9f9b9706968ca75eb8a40e60256bbdb1dc638616f5071fcc64bd590e9b44b`, `bareagent.json` `e01aebf601b4c83f70e9ed227362803522e48e7346c5e56b593a1ae73afa723b` (checked: both OK).
+- Gold = the `sources` only. `also` lists duplicate places that say the same thing; it is not gold.
+
+### Free confirmation of grouped output (pre-registered, 2026-10-09)
+
+Script: `poc/tinymem-filecap-fresh.mjs`. Rule written and hashed before scoring (`out/fresh/confirm/PREREG.txt`): group-8-w50 holds if, at both sizes, gold-file coverage and all-gold count are at least base-10's and mean tokens are lower. Sanity: base-5/10/20 equal plain fused recall cut at N for all 48 (question, size) runs.
+
+| Size (24 q) | | Gold-file coverage | All-gold | ~Tokens |
+|---|---|---|---|---|
+| 1x | base-10 | .83 | 15 | 262 |
+| 1x | group-8-w50 | .83 | 17 | 175 |
+| big | base-10 | .85 | 15 | 253 |
+| big | group-8-w50 | .90 | 17 | 161 |
+
+- Verdict: HOLDS at both sizes. Never worse than base-10 on any question; it differs on 2 questions at 1x and 5 at big, all in its favour.
+- Grouped lists carry many section pointers: mean 38.0 (max 47) at 1x, 28.3 (max 49) at big.
+- This is coverage only: the gold range is listed. It does not say whether an agent uses the list well (next sub-section).
+
+### Agent A/B of grouped output: it lost (step 6, 2026-10-09)
+
+Pre-registered (`out/step6/PREREG.txt`), k = 2, the 24 fresh questions, 48 runs per arm, blind graded. Cost $7.28 (runs $4.44, grading $2.84); the brief said $7.34, the score file says $7.277.
+
+- **F:** the shipped tool descriptions plus the shipped-style output (`lx3`). **H:** an honest description plus grouped bare-range output (`lx4`).
+- Rule: adopt H if correct >= F - 1, median tokens <= F, and median lines read <= F x 1.25. **H failed the first test.**
+
+| | F | H |
+|---|---|---|
+| Correct (of 48) | 48 | 40 |
+| Plain | 24/24 | 23/24 |
+| Reworded | 24/24 | 17/24 |
+| Median tokens | 25.9k | 26.9k |
+| Median lines read | 192 | 110 |
+| Runs that read a recalled file with Read (hand-off) | 8/48 | 24/48 |
+| First tool was recall | 48/48 | 48/48 |
+
+- Fewer lines read in H is not a gain: the agent left litectx for grep and Read instead (24/48 against 8/48 runs). By the stricter script count (a Grep or Glob aimed at a file from recall) it is 7 against 1.
+- `get` errors ("no chunk at A-B"): H 19 of 68 calls, because the agent merged or computed ranges from the bare FILE lines. F 26 of 115, all from the test wrapper's FILE span line, which is not shipped output and whose ranges are not gettable; F always recovered.
+
+### Likely cause and lesson (hypothesis, not isolated)
+
+- H changed the description AND the format, so the cause is not separated. Most likely cause: the grouped line dropped section names.
+- Shipped CLI line: `<score> doc/md <path> → <heading>:<a-b>`, e.g. `→ Retry:77-90`. Grouped line: `FILE <path>: lines a-b, c-d, ...`, bare numbers. The heading is how the agent picks which range to open. Losses sit on reworded questions (17/24 against 24/24), where the agent has to choose by meaning.
+- Lesson: the free coverage metric (is the gold range listed) did not predict agent behaviour when what was trimmed is what the agent uses to choose. A free win on presentation needs a paid check before shipping.
+- Decision (owner, 2026-10-09): keep the shipped output format for now.
+- Next candidate, not run: grouping WITH section names, e.g. `FILE <path>: Retry 77-90; Backoff 112-119`, tested as a format-only change (same description) so any difference is attributable.
+
+### Pilot at big scale (step 7, 2026-10-09)
+
+- 4 fresh questions (bareagent-f03, bareagent-f10, bareloop-f02, bareloop-f08), F and B, k = 1, big corpus (1,525 bareloop files), 8 runs. Cost $0.713 (runs $0.434, grading $0.279).
+- Result: the harness works at about 1,500 docs. No turn-cap hits, no blowups. F 4/4, B 3/4 (too few runs to read as a result).
+- It set the budget for the scale run and showed the test wrapper's FILE span lines were not get-able. They were removed for the scale run (wrapper `lx5`).
+
+### Scale run (step 8, 2026-10-09)
+
+Pre-registered and hashed before the batch (`out/step8/PREREG.txt`, sha256 `63eb721fa5c57612536a44b6cd12953a75220ac34a95ae226221a5c3c2831c95`; re-checked, matches). Bar fixed in advance, final blind grades.
+
+- **F:** litectx recall output exactly as the shipped CLI prints it (wrapper `lx5`; checked byte-for-byte against the shipped CLI), plus a widened `get` that returns the section and its neighbours (NOT shipped behaviour), plus Read/Grep/Glob. **B:** Read/Grep/Glob only.
+- 24 fresh questions (12 plain, 12 reworded; 12 per repo), both sizes (1x about 114 files, big 1,525 bareloop files), k = 2: 192 runs. The questions were seen in step 6 (F vs H, 1x); step 6 results are not reused. Cost $16.89 (runs $11.00, grading $5.89), under the $20 hard stop.
+- Bar (all three needed): (1) wins F >= B - 2 at each size; (2) median tokens F <= 0.75 x B at each size; (3) F/B token ratio at big <= ratio at 1x + 0.05.
+
+| | 1x F | 1x B | big F | big B |
+|---|---|---|---|---|
+| Correct (of 48) | 45 | 36 | 42 | 42 |
+| Median tokens | 25,571 | 28,956 | 27,452 | 29,984 |
+| Median wall time (ms) | 15,663 | 15,194 | 16,274 | 17,544 |
+| Run cost ($) | 2.02 | 3.12 | 2.50 | 3.35 |
+| Mean turns | 4.5 | 4.9 | 5.1 | 5.1 |
+
+| Bar | Result |
+|---|---|
+| (1) correctness | PASS: 45 vs 36 at 1x, 42 vs 42 at big |
+| (2) tokens F/B <= 0.75 | FAIL: 0.883 at 1x, 0.916 at big |
+| (3) scale | PASS: 0.916 <= 0.883 + 0.05 = 0.933 |
+
+- Wall time is about the same (F/B 1.03 at 1x, 0.93 at big). Total cost F/B is 0.65 at 1x and 0.75 at big. Median lines read: F 186 against B 138 at 1x, 190 against 146 at big (about 1.3x).
+- The token bar failed because the plain questions barely save anything. The split by question wording (24 runs per cell):
+
+| | Correct F / B (1x) | Correct F / B (big) | Median tokens F / B (1x) | Median tokens F / B (big) | F/B tokens |
+|---|---|---|---|---|---|
+| Plain | 23 / 15 | 22 / 21 | 25,470 / 27,475 | 25,340 / 27,366 | 0.93 at both |
+| Reworded | 22 / 21 | 20 / 21 | 25,571 / 38,307 | 29,025 / 42,850 | 0.67 at both |
+
+- Reworded: about one third fewer tokens at both sizes, with about equal correctness. This is the 2026-10-09 step 3 finding (about 40% fewer tokens) holding on fresh questions and at scale.
+- **Goal verdict:** not met overall (the pre-registered 0.75 token bar fails). Met for reworded questions.
+- F was the first tool in 48/48 runs at each size. Only 3/48 F runs per size handed off from a recalled file to Grep or Glob. `get` errors: 20 of 100 gets at 1x, 21 of 102 at big (see the replay below).
+- Caveat: the correctness lead rests partly on F's widened `get` (see the next sub-section). Part of the wall-time and cost picture also includes about 1 to 1.5 s of process spawn per run.
+
+### B plain at 1x: autopsy of the 9 losses (2026-10-09)
+
+Source: `out/step8/autopsy-B1x.txt`. Read by hand: traces, answers, gold, grades. No model calls. B scored 15/24 on plain questions at 1x against 21/24 at big, so the dip was checked for a harness or grader cause.
+
+- 9 not-win runs: 6 real omissions where the agent read too narrow a window or dropped a fact it had already read (in 3 of them the missing fact was in text it had read); 1 never reached the gold file (bareloop-f01 r2 stopped at a CHANGELOG summary); 2 mixed (bareloop-f06: a broad grep for "signed" overflowed the preview and buried the CHANGELOG line, plus a missed fact).
+- No grader false negatives, no citation or format failures, no tool errors, no turn-cap hits. Prompts at 1x and big differ only in the corpus path; the files are byte-identical (hardlinks). A smaller haystack at 1x can only help grep.
+- Same failure modes recur at big for 3 of the 6 questions. At big, one B win (bareagent-f01 r1) was grader leniency: the answer left out the NaN rule and was still passed, so B big plain is closer to 20/24.
+- Verdict: the 15 against 21 swing is ordinary run-to-run variance (about p 0.1 by Fisher at k = 2), not a size effect and not an artefact. Best single estimate of B on plain questions is 36/48, about 75%, across sizes.
+- F's lead on plain (45/48 against 36/48, pooled over sizes) is real but modest. Part of it comes from the widened `get`, which returns the neighbouring sections and so directly cures B's main failure, the too-narrow read. Do not credit it to recall ranking. This matches the step 1 v2 trace finding (arm E).
+- The owner's framing of this failure: without litectx the agent either guesses (reads too narrowly, so facts go missing, the dominant grep-only failure seen here) or reads in full (costly).
+
+### `get` failure replay (2026-10-09)
+
+Source: `out/step8/getreplay/report.txt` and `results.json`. Offline replay of the F traces.
+
+- 96 F traces; 41 `get` calls failed with "no chunk at A-B", in 36 of the 96 runs (20 calls at 1x, 21 at big). Every failure was against a current index (no drift).
+- Cause, recomputed from the printed ranges: 0 failures asked for a range inside one printed section. 38 of 41 asked for a range spanning 2 or more printed sections; in 36 of those both ends sit on printed section bounds (22 of the 38 are directly adjacent sections, 16 have unprinted gaps between). The other 5 are looser: 2 end past or inside a printed section and 3 have no printed section in range (invented ranges). The replay's own cause tag splits the same 41 as 21 "merge of printed sections" and 20 "range includes unprinted sections".
+- The agent mostly merged the sections `recall` printed into one range, as if `get` took any span. It always recovered, but it cost about +0.7 turns per failing run (5.31 turns against 4.57 clean) and about +4% cost per run ($0.0483 against $0.0465; the two groups are not matched for question).
+- Replayed fixes (offline, calls held fixed): S1 (serve the one section containing the range) serves 0 of 41, inert. S2 (serve all sections the range overlaps) serves all 41 and covers gold in 17 of the 18 failed calls in a gold file, but that widens `get` and violates the never-widen doctrine. S3 (keep the error, add a hint listing the exact chunk ranges near the request) keeps the doctrine; the hint overlaps gold in 17 of 18 gold-file calls, but it adds little since the agent already had the printed ranges.
+- Untested, the better fit: a multi-range `get` (several exact printed ranges in one call), which matches what the agent tries to do and widens nothing.
+
+### Owner decision: close out the docs-compass work (2026-10-09)
+
+- Closed as a measurable success. The claim, with litectx an agent answers docs questions as well as or better than grep alone, at about 25 to 35% lower total cost (F/B 0.65 at 1x, 0.75 at big) and about one third fewer tokens when the question's wording differs from the docs (F/B 0.67), about 7% fewer when it matches (0.93). The saving held from about 50 to about 1,500 docs (reworded 0.67 at both sizes; the pre-registered scale bar passed).
+- Honest limits to keep with the claim: the pre-registered 0.75 token bar failed overall (0.883 and 0.916); the correctness lead leans on a non-shipped widened `get`; k = 2 and 24 questions; one grader; the 1,500-doc corpus is padded with other projects' docs, not a naturally grown corpus; "finds by meaning" is still unproven for docs (recall is word-gated).
