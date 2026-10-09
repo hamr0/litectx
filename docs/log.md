@@ -5,3 +5,6 @@
 ## [2026-09-08] validate | PASS — 0 gate failure(s)
 ## [2026-09-08] archive | docs/product/litectx-prd.md -> docs/archive/litectx-prd.md, 21 link(s) rewritten
 ## [2026-09-08] index-flat | 15 row(s) (13 product, 0 logs, 2 archive)
+## [2026-09-28] index-flat | 15 row(s) (13 product, 0 logs, 2 archive)
+## [2026-10-05] index-flat | 17 row(s) (15 product, 0 logs, 2 archive)
+## [2026-10-09] index-flat | 17 row(s) (15 product, 0 logs, 2 archive)

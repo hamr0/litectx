@@ -38,7 +38,7 @@
 export const PRIMITIVES = ["Write", "Select", "Compress", "Isolate"];
 
 /**
- * Canonical verb → primitive map, grounded in `docs/01-product/litectx-ce-prd.md` §skill-map.
+ * Canonical verb → primitive map, grounded in `docs/product/litectx-prd.md` §skill-map.
  * @type {Record<string, string[]>}
  */
 export const VERBS_BY_PRIMITIVE = {

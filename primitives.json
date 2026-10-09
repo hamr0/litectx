@@ -52,7 +52,7 @@
       "when": "Delete written memory — by id, by kind, or tenant-fenced by scope (the correct compliance/erasure primitive: it deletes now). The model calls this directly via MCP.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.forget(sel: string | { id?, kind?, by?, scope?, idPrefix? }) => number",
-      "fails": "Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Mem-axis only — never docs/blob/stash.",
+      "fails": "Under `strictScope`, a scope-less memory forget throws (a tenant-blind wipe is unexpressible by omission); combining `{ scope, by }` throws (owner-blind provenance + a fence is the omission footgun). Scoped `{ scope, id }`/`{ scope, idPrefix }` also delete that tenant's own written/ingested docs (tenant-exact); never touches stash.",
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nctx.forget('pref-theme')                        // one id\nctx.forget({ kind: 'episode' })                 // all episodes\nctx.scoped('tenant:acme').forget({ scope: 'tenant:acme' }) // right-to-erasure for one tenant"
     },
     {
@@ -71,7 +71,7 @@
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.impact(symbol: string) => Promise<Impact | null>",
       "fails": "Throws `RipgrepMissingError` when `rg` is not on PATH (rather than silently under-counting to a false \"isolated\"); returns `null` when the symbol isn't in the index.",
-      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst view = await ctx.impact('parseConfig')\nif (view) console.log(view.risk, view.callers.length) // 'low' | 'med' | 'high'"
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst view = await ctx.impact('parseConfig')\nif (view) console.log(view.risk, view.callers.length) // 'low' | 'medium' | 'high'"
     },
     {
       "name": "index",
@@ -85,7 +85,7 @@
     {
       "name": "ingest",
       "category": "ingest",
-      "when": "Store an uploaded document (pdf/docx/md/txt/csv → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",
+      "when": "Store an uploaded document (pdf/docx/md/txt/csv/eml → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.ingest(buffer: Uint8Array, opts?: { filename?, format?, id?, scope?, expiresAt? }) => Promise<{ id, kind, format, mode, chunks }>",
       "fails": "Throws when a required optional peer dep is missing (pdf → `pdfjs-dist`, docx → `mammoth`) or input exceeds `maxSize`/`maxPages`; under `strictScope`, throws when `scope` is omitted.",
@@ -215,7 +215,7 @@
       "import": "import { summaryWindow } from 'litectx'",
       "signature": "summaryWindow(units: Unit[], ctx?: SummaryWindowCtx) => Promise<{ units, dropped, tokens }>",
       "fails": "Never throws; falls back to a plain `assemble` when unwired, when everything fits, or when there are < 2 older turns to fold — never worse than FIT.",
-      "example": "import { summaryWindow } from 'litectx'\nconst out = await summaryWindow(transcript, { budget: 8000, keepRecent: 6, summarize: async (t) => callModel(t) })"
+      "example": "import { summaryWindow } from 'litectx'\nconst out = await summaryWindow(transcript, { budget: 8000, summaryKeep: 6, summarize: async (t) => callModel(t) })"
     },
     {
       "name": "toWriteAction",

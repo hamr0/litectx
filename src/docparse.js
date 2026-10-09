@@ -38,7 +38,7 @@ const DEFAULT_PARSE_TIMEOUT_MS = 30000; // wall-clock parse bound (§4)
 const CHUNKABLE_MODE = {
   pdf: "convert", docx: "convert",
   md: "markdown", markdown: "markdown",
-  txt: "text", text: "text", log: "text", csv: "text",
+  txt: "text", text: "text", log: "text", csv: "text", eml: "text",
 };
 // Canonicalize the stored `format` tag for spelling-variant extensions (md ≡ markdown, txt ≡ text).
 const FORMAT_CANON = { markdown: "md", text: "txt" };

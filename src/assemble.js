@@ -196,7 +196,7 @@ export async function assemble(units, ctx = {}) {
  * @signature summaryWindow(units: Unit[], ctx?: SummaryWindowCtx) => Promise<{ units, dropped, tokens }>
  * @example
  * import { summaryWindow } from 'litectx'
- * const out = await summaryWindow(transcript, { budget: 8000, keepRecent: 6, summarize: async (t) => callModel(t) })
+ * const out = await summaryWindow(transcript, { budget: 8000, summaryKeep: 6, summarize: async (t) => callModel(t) })
  */
 export async function summaryWindow(units, ctx = {}) {
   if (!Array.isArray(units)) throw new TypeError("summaryWindow: units must be an array");

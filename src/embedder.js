@@ -7,7 +7,7 @@
 // (matches recall's unit), HEAD-truncated text — a distilled symbol/signature string was a wash, so
 // the simpler head wins. Vectors are L2-normalized so cosine similarity is a plain dot product.
 
-const DEFAULT_MODEL = "Xenova/all-MiniLM-L6-v2"; // small (~90 MB), 384-dim; aurora's choice, POC-proven
+const DEFAULT_MODEL = "Xenova/all-MiniLM-L6-v2"; // small (~23 MB quantized (q8)), 384-dim; aurora's choice, POC-proven
 const HEAD_CHARS = 6000; // the model caps at ~512 tokens; head-truncation here bounds the input cheaply
 
 /**

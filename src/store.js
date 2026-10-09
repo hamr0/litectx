@@ -26,10 +26,11 @@ const STASH_TAIL = 80;
  */
 
 /**
- * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig, embedding?: Float32Array }} Upsert
+ * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig, embedding?: Float32Array, sectionVecs?: Float32Array[] }} Upsert
  * `imports` are raw specifiers from the chunker; `edges` are those resolved to intra-repo dst paths
  * (edges.js); `git` is file-level activity metadata (gitsig.js); `embedding` is the file's float32
- * vector when the embeddings tier is on (slice 6), absent otherwise.
+ * vector when the embeddings tier is on (slice 6), absent otherwise; `sectionVecs` are the per-heading-
+ * section vectors of an indexed md file (aligned to `nodes`), used INSTEAD of `embedding` for md.
  */
 
 /**
@@ -80,6 +81,8 @@ const STASH_TAIL = 80;
  *                            metadata supplied to `remember`, parsed back from its sealed JSON store
  *                            and returned VERBATIM. Absent when the memory carries none and on every
  *                            indexed file (a file has no caller metadata). Never tokenized/ranked.
+ * @property {number} [rid]   INTERNAL (doc search only): the FTS row id (`docs` for code, `doc_fts` for doc), so ranking/vector routing can tell
+ *                            apart the several section rows of one md path. Stripped before any public hit.
  */
 
 /**
@@ -106,6 +109,12 @@ const STASH_TAIL = 80;
  * @property {"out"|"in"} via      "out" = the seed imports it; "in" = it imports the seed
  */
 
+// partial index: finds sidecar rows still missing their rowid (a foreign/older writer's rewrite) in O(1)
+const RID_INDEX = "CREATE INDEX IF NOT EXISTS doc_scope_norid ON doc_scope(path) WHERE rid IS NULL; CREATE INDEX IF NOT EXISTS doc_scope_rid ON doc_scope(rid, scope, expires_at)"; // 2nd: covers the rowid-keyed search fence
+
+// partial index: finds file_index rows with no code-row pointer yet (legacy / a foreign writer's rewrite) in O(1)
+const CODE_RID_INDEX = "CREATE INDEX IF NOT EXISTS file_index_nocoderid ON file_index(path) WHERE code_rowid IS NULL";
+
 const SCHEMA = [
   // path tokens are folded into `body` (doubled) so filename matches count;
   // path/kind/format and the slice-7 write-path metadata are stored but not full-text indexed.
@@ -116,10 +125,16 @@ const SCHEMA = [
   //   provenance — 'human' | 'agent' (written memory only; NULL for indexed files). The trust axis.
   //   occurred_at— episode timestamp (epoch ms; NULL for facts/docs/code). Stored, not yet scored.
   "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, source UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body)",
+  // `doc_fts` = the SAME shape/tokenizer as `docs`, but holds ONLY kind='doc' rows (indexed md sections, written
+  // docs, ingest segments, blob filename rows); `docs` then holds code rows only. FTS5 BM25 stats (IDF, avg
+  // length) are table-wide, so docs sharing a table with code shifted code ranking (aurora-mixed HARD MRR 0.414
+  // py-only vs 0.294 with md sections). Recall is already one query per kind, so a table per kind is free.
+  // Unstemmed on purpose (default unicode61, like `docs`) — stemming breaks code/doc recall floors.
+  "CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, source UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body)",
   // change detection (§6): (mtime, size) is the fast skip, content_hash the arbiter.
   // size guards the case where an edit lands within one filesystem mtime tick of the last
   // index (mtime unchanged but length moved); `index({ force: true })` covers the rest.
-  "CREATE TABLE IF NOT EXISTS file_index(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at INTEGER NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS file_index(path TEXT PRIMARY KEY, content_hash TEXT NOT NULL, mtime INTEGER NOT NULL, size INTEGER NOT NULL, indexed_at INTEGER NOT NULL, code_rowid INTEGER)", // code_rowid = this file's `docs` rowid (-1 = no code row: a doc file; NULL = unknown/legacy) — `docs.path` is UNINDEXED, so a by-path lookup/delete scans every code row
   // symbol-level chunks (slice 2): the structural substrate. Recall still gates on `docs`
   // (file-granularity) — these line-ranged nodes carry file-level git metadata (slice 4) and
   // anchor call edges (slice 5). `symbol` is nullable (anonymous arrows, preambles); rows are
@@ -131,10 +146,10 @@ const SCHEMA = [
   // `PRAGMA user_version` stamp structurally cannot (a foreign writer never touches user_version).
   "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, format TEXT NOT NULL, symbol TEXT, node_type TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, body TEXT NOT NULL, stamp INTEGER NOT NULL DEFAULT 0)",
   "CREATE INDEX IF NOT EXISTS nodes_path ON nodes(path)",
-  // directed graph edges (slice 4): `type` discriminates 'import' (recall spreading, shipped
-  // now) from 'call' (impact view, slice 5) so both ride one table. File-granularity src→dst;
+  // directed graph edges (slice 4): `type` is always 'import' today (recall spreading); call
+  // relationships are computed on demand by impact(), never stored. File-granularity src→dst;
   // owned by `src_path` (refreshed when the importer is re-indexed). Indexed both ways so
-  // recall can read neighbours and the impact view can read callers/callees off the same rows.
+  // recall can read neighbours off the same rows.
   "CREATE TABLE IF NOT EXISTS edges(id INTEGER PRIMARY KEY, type TEXT NOT NULL, src_path TEXT NOT NULL, dst_path TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS edges_src ON edges(type, src_path)",
   "CREATE INDEX IF NOT EXISTS edges_dst ON edges(type, dst_path)",
@@ -153,6 +168,12 @@ const SCHEMA = [
   // file's vector). Splitting the tables makes the collision structurally impossible: file recall reads only
   // file_embeddings, fact/episode recall only mem_embeddings (doc spans both — file .md + written docs).
   "CREATE TABLE IF NOT EXISTS mem_embeddings(path TEXT PRIMARY KEY, dim INTEGER NOT NULL, vec BLOB NOT NULL)",
+  // indexed-md sections (tinymem retrieval change): each heading section of a `.md` file is its OWN `docs` row
+  // (FTS5 rowid = doc_rowid). This sidecar maps that row to its `nodes` chunk (line range/symbol come from
+  // there — nothing duplicated) and carries the section's own embedding. A `docs` file row with no row here is
+  // a legacy whole-file row (code, or md indexed before this table existed) and keeps its old behaviour.
+  "CREATE TABLE IF NOT EXISTS doc_sections(doc_rowid INTEGER PRIMARY KEY, path TEXT NOT NULL, node_id INTEGER NOT NULL, dim INTEGER, vec BLOB)",
+  "CREATE INDEX IF NOT EXISTS doc_sections_path ON doc_sections(path)",
   // recall audit log (slice 7): one row per recall hit — the genuine access log §4's base-level
   // tier will later score (written memory produces real access events, not git's proxy). v1 records
   // it but does not rank on it. Also feeds HITL promotion (§3.2): an agent fact whose hit count
@@ -209,15 +230,17 @@ const SCHEMA = [
   // recall/get LEFT JOIN to the old "no row" (still global/forever), so the fence is unchanged. A missing
   // row (file-indexed rows, or direct docs written before this column existed) LEFT-JOINs to NULL on all
   // three: global, forever, and undated — so legacy undated docs still appear in recentMemory, sorted last.
-  "CREATE TABLE IF NOT EXISTS doc_scope(path TEXT PRIMARY KEY, scope TEXT, expires_at INTEGER, created_at INTEGER)",
+  "CREATE TABLE IF NOT EXISTS doc_scope(path TEXT PRIMARY KEY, scope TEXT, expires_at INTEGER, created_at INTEGER, rid INTEGER)", // rid = the direct doc's doc_fts rowid (doc_fts.path is UNINDEXED — a by-path lookup scans every body)
   "CREATE INDEX IF NOT EXISTS doc_scope_expires ON doc_scope(expires_at)",
+  // bare get(id) finds a tenant's direct doc by its PUBLIC id (the text after the \x1E key separator): an expression index makes that lookup a seek, not a scan
+  "CREATE INDEX IF NOT EXISTS doc_scope_pub ON doc_scope(substr(path, instr(path, char(30)) + 1))",
   // written-memory FTS (slice 7b, §5.1): facts/episodes live in their OWN porter-stemmed table, so
   // "refund policy" finds a fact saying "refunds…" (short prose has no redundancy to absorb FTS5's
   // lack of stemming — measured morph MRR 0.000 → 0.722 with porter, exact unchanged). code/doc stay
   // on the unstemmed `docs` table — porter-everywhere was measured and REJECTED (in code, word-forms
   // are distinct symbols; aurora gate broke, gitdone P@1 collapsed). Kinds never share a ranking, so
   // a kind routes to exactly one table and BM25 scores never merge across the two. Direct-written
-  // `doc` rows stay in `docs` (one kind = one ranking domain).
+  // `doc` rows live in `doc_fts` (one kind = one ranking domain).
   "CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body, tokenize='porter unicode61')",
   // chunk-level edit history (slice 5a, §14 #4 view #3): one row each time index() OBSERVES a chunk's
   // body change — added or modified vs the previously-stored `nodes.body`. This is litectx's own
@@ -267,23 +290,40 @@ const MEM_KEY_SEP = "\x1f"; // ASCII Unit Separator — illegal in a path/id/own
 function memKey(owner, id) {
   return owner == null ? id : owner + MEM_KEY_SEP + id;
 }
+// Direct-DOC storage key — its OWN namespace, distinct from the fact/episode keys above. A direct doc
+// (remember kind 'doc', an ingest segment, a blob) and a fact/episode share the sidecar tables (mem_text,
+// mem_meta, mem_embeddings, recall_log), all keyed by one `path`; if both used {@link memKey} a doc `x` and a
+// fact `x` of the same tenant (or both global) would be ONE sidecar row — a doc recall would return the
+// fact's body and forgetting the fact would delete the doc. So a doc key is `scope\x1Eid` (scoped) or
+// `\x1Eid` (global/unscoped): ASCII Record Separator, a different control char from the fact separator, so
+// the two key spaces can never meet. File-indexed doc rows (source='file') keep their file path.
+const DOC_KEY_SEP = "\x1e";
 /**
- * Strip the owner prefix off a stored mem key → the public id the caller wrote. A no-op for an
- * ownerless mem row, a doc/blob row, or a code/file path (none carry the separator). Applied at every
- * consumer-facing return so a recall/get/recentMemory/promotion id round-trips back through write/get.
+ * Physical key of a DIRECT doc/blob row. Always carries {@link DOC_KEY_SEP} (the global tier too), so a doc
+ * key is structurally distinct from a fact key and from a file path.
+ * @param {string|null|undefined} scope @param {string} id @returns {string}
+ */
+function docKey(scope, id) {
+  return (scope ?? "") + DOC_KEY_SEP + id;
+}
+/**
+ * Strip the owner/scope prefix off a stored key → the public id the caller wrote: everything after the first
+ * `\x1F` (a fact/episode `owner\x1Fid`) or `\x1E` (a direct doc `scope\x1Eid`, global `\x1Eid`). A no-op for an
+ * ownerless fact, a file path, or code (none carry a separator). Applied at every consumer-facing return so an id
+ * round-trips back through write/get. New writes reject both separators in an id.
  * @param {string} key @returns {string}
  */
 export function memId(key) {
-  const i = key.indexOf(MEM_KEY_SEP);
+  const i = key.search(/[\x1e\x1f]/);
   return i < 0 ? key : key.slice(i + 1);
 }
 /**
- * Reject the reserved separator in a caller-supplied id/owner (W4 injection guard): without this a
- * tenant could embed `\x1F` in an id to forge another tenant's physical key. Thrown on write only.
+ * Reject the reserved separators in a caller-supplied id/owner/scope (W4 injection guard): without this a
+ * tenant could embed `\x1F`/`\x1E` in an id to forge another tenant's physical key. Thrown on write only.
  * @param {string|null|undefined} v @param {string} what @returns {void}
  */
 function assertNoMemSep(v, what) {
-  if (v != null && v.includes(MEM_KEY_SEP)) throw new Error(`litectx: ${what} may not contain the reserved \\x1F separator`);
+  if (v != null && (v.includes(MEM_KEY_SEP) || v.includes(DOC_KEY_SEP))) throw new Error(`litectx: ${what} may not contain the reserved \\x1F / \\x1E separators`);
 }
 
 /**
@@ -336,6 +376,11 @@ export class Store {
       // ALTER preserves existing scope/expiry rows (their created_at backfills NULL = undated, sorts last).
       const dsCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(doc_scope)"));
       if (!dsCols.some((c) => c.name === "created_at")) this.db.exec("ALTER TABLE doc_scope ADD COLUMN created_at INTEGER");
+      const ridAdded = !dsCols.some((c) => c.name === "rid");
+      if (ridAdded) this.db.exec("ALTER TABLE doc_scope ADD COLUMN rid INTEGER");
+      this.db.exec(RID_INDEX);
+      if (!(/** @type {{ name: string }[]} */ (this.db.pragma("table_info(file_index)"))).some((c) => c.name === "code_rowid")) this.db.exec("ALTER TABLE file_index ADD COLUMN code_rowid INTEGER");
+      this.db.exec(CODE_RID_INDEX);
       // recentMemory on the memory axis (multis M4 R3): mem_scope gains `created_at` — the fact/episode
       // counterpart of doc_scope.created_at. Column-additive ALTER; pre-existing scope rows backfill NULL
       // (undated, sort last under DESC), exactly like the doc axis. Facts order by it; episodes by occurred_at.
@@ -346,9 +391,44 @@ export class Store {
       // the first index() pass after upgrade re-chunks every file once, then they carry a live stamp.
       const nodeCols = /** @type {{ name: string }[]} */ (this.db.pragma("table_info(nodes)"));
       if (!nodeCols.some((c) => c.name === "stamp")) this.db.exec("ALTER TABLE nodes ADD COLUMN stamp INTEGER NOT NULL DEFAULT 0");
+      this.migrateDocFts(); // split kind='doc' rows out of `docs` (before migrateMemEmbeddings, which reads direct docs from doc_fts)
       this.migrateMemEmbeddings(); // move written vectors out of the shared file_embeddings table (before re-keying)
       this.migrateOwnerKeyedMem();
+      this.migrateDocKeyNamespace(); // direct docs → their own `scope\x1Eid` key space (after the vectors reached mem_embeddings and facts are keyed)
+      this.healDocScopeRid(ridAdded); // every direct doc needs a sidecar row carrying its doc_fts rowid (after the migrations above moved/re-keyed rows)
+      this.healCodeRowid(); // every indexed file needs its `docs` rowid pointer (a pre-pointer db, or a foreign writer's rewrite)
     }
+  }
+
+  /**
+   * One-time migration: `docs` used to hold kind='doc' rows too; they now live in `doc_fts` (see SCHEMA). On an
+   * old-layout db, ONE transaction moves every written/direct doc row (remember docs, ingest segments, blob
+   * filename rows) into `doc_fts` with all columns — they have no file behind them and cannot be rebuilt — then
+   * deletes all kind='doc' rows from `docs`. `doc_scope`/`mem_embeddings`/`blobs`/`mem_meta`/`mem_text` are keyed
+   * by path, so they stay valid untouched. File-sourced doc rows (indexed md) are DROPPED, not moved: they are
+   * re-derivable, and their `doc_sections.doc_rowid` would dangle against the new table's rowids. The
+   * `doc_sections` rows go with them, and the stored index stamp is zeroed (the reserved "rebuild me" sentinel)
+   * so the next `index()` is guaranteed to re-chunk the md files instead of trusting a now-md-less index.
+   * Idempotent: a second open finds no kind='doc' row left in `docs` and does nothing. No-op on a fresh db.
+   * @returns {void}
+   */
+  migrateDocFts() {
+    if (!this.db.prepare("SELECT 1 FROM docs WHERE kind = 'doc' LIMIT 1").get()) return;
+    const tx = this.db.transaction(() => {
+      this.db.exec(
+        "INSERT INTO doc_fts(path, kind, format, source, provenance, occurred_at, body) " +
+          "SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE kind = 'doc' AND source = 'direct'"
+      );
+      // invalidate (never delete) the dropped md files' file_index entries: they are about to have no rows, and a
+      // consumer that only runs a partial `index({paths})` must still re-chunk them (the same hash:"" / mtime:-1 /
+      // size:-1 convention as the stamp-mismatch rebuild); a full pass then reports them as `updated`.
+      this.db.exec("UPDATE file_index SET content_hash = '', mtime = -1, size = -1 WHERE path IN (SELECT path FROM docs WHERE kind = 'doc' AND source = 'file')");
+      this.db.exec("DELETE FROM docs WHERE kind = 'doc'");
+      this.db.exec("UPDATE doc_scope SET rid = NULL"); // the direct rows just got NEW doc_fts rowids — every sidecar rid is stale; the heal at the end of open refills them
+      this.db.exec("DELETE FROM doc_sections");
+      this.setStoredStamp(0);
+    });
+    tx();
   }
 
   /**
@@ -366,7 +446,7 @@ export class Store {
       this.db
         .prepare(
           "SELECT path, dim, vec FROM file_embeddings WHERE path IN (SELECT path FROM mem) " +
-            "OR path IN (SELECT path FROM docs WHERE source = 'direct')"
+            "OR path IN (SELECT path FROM doc_fts WHERE source = 'direct')"
         )
         .all()
     );
@@ -377,6 +457,56 @@ export class Store {
     const del = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
     const tx = this.db.transaction(() => {
       for (const r of rows) (ins.run(r), del.run(r.path));
+    });
+    tx();
+  }
+
+  /**
+   * One-time migration into the DOC key namespace ({@link docKey}). A direct doc (remember doc / ingest segment /
+   * blob) used to share the fact/episode key space — bare `id` in the global tier (main), `scope\x1Fid` in the
+   * 0.34.0 pre-release — so a doc and a same-id fact collided on the shared sidecars (`mem_text`/`mem_meta`/
+   * `mem_embeddings`/`recall_log`). Every direct `doc_fts` row whose key lacks `\x1E` is converted: a legacy bare
+   * global `x` → `\x1Ex`, a legacy bare scoped `x` (`doc_scope.scope='acme'`, main) → `acme\x1Ex`, a pre-release
+   * `acme\x1Fx` → `acme\x1Ex`. Sidecars follow the row (`doc_fts`/`doc_scope`/`blobs` always MOVE — doc-only
+   * tables; `mem_text`/`mem_meta`/`mem_embeddings` are SHARED with the memory axis, so they are COPIED while a
+   * fact/episode still owns the old key and MOVED otherwise; `recall_log` doc rows move). It never throws on a
+   * collision: when the target doc key already exists (a mixed-version db — a main-version writer wrote the old
+   * shape after a prior migration, so it is the NEWER write) the converted row REPLACES the target. Pre-release
+   * `\x1F` rows convert first, so a bare row for the same doc wins. One transaction; idempotent (a converted db
+   * has no direct doc key lacking `\x1E`). Indexed md rows (`source='file'`) are never touched. Runs AFTER
+   * {@link migrateOwnerKeyedMem} so the "does a fact still own this key" test sees final fact keys.
+   * @returns {void}
+   */
+  migrateDocKeyNamespace() {
+    const legacy = /** @type {{ path: string, scope: string|null }[]} */ (
+      this.db
+        .prepare("SELECT f.path AS path, ds.scope AS scope FROM doc_fts f LEFT JOIN doc_scope ds ON ds.path = f.path WHERE f.source = 'direct'")
+        .all()
+    )
+      .filter((r) => !r.path.includes(DOC_KEY_SEP))
+      // pre-release `scope\x1Fid` rows convert first, so a bare row for the same doc wins
+      .sort((x, y) => Number(y.path.includes(MEM_KEY_SEP)) - Number(x.path.includes(MEM_KEY_SEP)) || (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
+    if (!legacy.length) return;
+    const factOwns = this.db.prepare("SELECT body FROM mem WHERE path = ?");
+    const tx = this.db.transaction(() => {
+      for (const { path: oldKey, scope: dsScope } of legacy) {
+        const sep = oldKey.indexOf(MEM_KEY_SEP);
+        const scope = sep >= 0 ? oldKey.slice(0, sep) : dsScope;
+        const id = sep >= 0 ? oldKey.slice(sep + 1) : oldKey;
+        const newKey = docKey(scope, id);
+        // replace any existing target doc (the mixed-version case): drop its row + every sidecar first. Its
+        // recall_log rows are append-only history of the same logical doc and stay.
+        this.db.prepare("DELETE FROM doc_fts WHERE path = ? AND source = 'direct'").run(newKey);
+        for (const t of ["doc_scope", "blobs", "mem_text", "mem_meta", "mem_embeddings"]) this.db.prepare(`DELETE FROM ${t} WHERE path = ?`).run(newKey);
+        this.db.prepare("UPDATE doc_fts SET path = ? WHERE path = ? AND source = 'direct'").run(newKey, oldKey);
+        for (const t of ["doc_scope", "blobs"]) this.db.prepare(`UPDATE ${t} SET path = ? WHERE path = ?`).run(newKey, oldKey);
+        const fact = /** @type {{ body: string } | undefined} */ (factOwns.get(oldKey)); // a fact/episode keeps the old key → its sidecar stays
+        for (const [t, cols] of /** @type {[string, string][]} */ ([["mem_text", "text"], ["mem_meta", "meta"], ["mem_embeddings", "dim, vec"]])) {
+          if (fact) this.db.prepare(`INSERT INTO ${t}(path, ${cols}) SELECT ?, ${cols} FROM ${t} WHERE path = ?`).run(newKey, oldKey);
+          else this.db.prepare(`UPDATE ${t} SET path = ? WHERE path = ?`).run(newKey, oldKey);
+        }
+        this.db.prepare("UPDATE recall_log SET path = ? WHERE path = ? AND kind = 'doc'").run(newKey, oldKey);
+      }
     });
     tx();
   }
@@ -429,6 +559,99 @@ export class Store {
   }
 
   /**
+   * Make every direct doc's sidecar row carry its `doc_fts` rowid. `full` (the one-time column-add): also create
+   * the sidecar row for a legacy direct doc that never had one (NULL scope/expiry ≡ absent under every LEFT JOIN).
+   * Otherwise only fills NULL rids (a foreign/older writer's rewrite; -1 = a sidecar with no row behind it, so the probe never re-fires). Returns whether it did anything.
+   * @param {boolean} [full] @returns {boolean}
+   */
+  healDocScopeRid(full = false) {
+    if (!full && !this.db.prepare("SELECT 1 FROM doc_scope WHERE rid IS NULL LIMIT 1").get()) return false;
+    const tx = this.db.transaction(() => {
+      this.db.exec("CREATE TEMP TABLE IF NOT EXISTS _rid(path TEXT PRIMARY KEY, r INTEGER) WITHOUT ROWID; DELETE FROM _rid");
+      this.db.exec("INSERT OR REPLACE INTO _rid SELECT path, rowid FROM doc_fts WHERE source = 'direct'");
+      this.db.exec("UPDATE doc_scope SET rid = COALESCE((SELECT r FROM _rid WHERE _rid.path = doc_scope.path), -1) WHERE rid IS NULL");
+      if (full) this.db.exec("INSERT INTO doc_scope(path, scope, expires_at, created_at, rid) SELECT path, NULL, NULL, NULL, r FROM _rid WHERE path NOT IN (SELECT path FROM doc_scope)");
+      this.db.exec("DROP TABLE _rid");
+    });
+    tx();
+    return true;
+  }
+
+  /**
+   * Fill `file_index.code_rowid` for rows that lack it, in one `docs` pass (a no-op, O(1) via the partial
+   * index, once every row has a pointer). A file with no `docs` row (a doc file) gets -1.
+   * @returns {boolean} whether any row needed filling
+   */
+  healCodeRowid() {
+    if (!this.db.prepare("SELECT 1 FROM file_index WHERE code_rowid IS NULL LIMIT 1").get()) return false;
+    this.db.transaction(() => {
+      this.db.exec("CREATE TEMP TABLE IF NOT EXISTS _crid(path TEXT PRIMARY KEY, r INTEGER) WITHOUT ROWID; DELETE FROM _crid");
+      this.db.exec("INSERT OR REPLACE INTO _crid SELECT path, rowid FROM docs WHERE source = 'file'");
+      this.db.exec("UPDATE file_index SET code_rowid = COALESCE((SELECT r FROM _crid WHERE _crid.path = file_index.path), -1) WHERE code_rowid IS NULL");
+      this.db.exec("DROP TABLE _crid");
+    })();
+    return true;
+  }
+
+  /**
+   * The `docs` (code) rowid of an indexed file via its `file_index` pointer, never a `docs` path scan. A path that
+   * is not indexed, or is a doc file (-1), has no code row. A row whose pointer is still NULL falls back to the
+   * scan once and records the answer.
+   * @param {string} path @returns {number|null}
+   */
+  _codeRowid(path) {
+    const fi = /** @type {{ code_rowid: number|null } | undefined} */ (this.db.prepare("SELECT code_rowid FROM file_index WHERE path = ?").get(path));
+    if (!fi) return null;
+    if (fi.code_rowid != null) return fi.code_rowid > 0 ? fi.code_rowid : null;
+    const w = /** @type {{ rid: number } | undefined} */ (this.db.prepare("SELECT rowid AS rid FROM docs WHERE path = ? AND source = 'file' ORDER BY rowid LIMIT 1").get(path));
+    this.db.prepare("UPDATE file_index SET code_rowid = ? WHERE path = ?").run(w ? w.rid : -1, path);
+    return w ? w.rid : null;
+  }
+
+  /**
+   * The `docs` (code) row stored under `path`, through its pointer.
+   * @param {string} path
+   */
+  _codeRow(path) {
+    const rid = this._codeRowid(path);
+    return rid == null ? undefined : this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE rowid = ? AND path = ?").get(rid, path);
+  }
+
+  /**
+   * Delete one direct doc row by physical key through its sidecar rowid (not a doc_fts path scan). A row whose
+   * sidecar has no rid yet (a foreign writer's rewrite) falls back to the scan; no sidecar row = a brand-new key.
+   * @param {string} p @returns {number}
+   */
+  _delDirectDoc(p) {
+    const ds = /** @type {{ rid: number|null } | undefined} */ (this.db.prepare("SELECT rid FROM doc_scope WHERE path = ?").get(p));
+    if (!ds) return 0;
+    if (ds.rid == null) return this.db.prepare("DELETE FROM doc_fts WHERE path = ? AND source = 'direct'").run(p).changes;
+    return this.db.prepare("DELETE FROM doc_fts WHERE rowid = ? AND path = ? AND source = 'direct'").run(ds.rid, p).changes;
+  }
+
+  /**
+   * The doc_fts rowid of the row stored under physical key `key`: a direct doc/blob via its sidecar, an indexed md
+   * file via its first section row. An md file the chunker left whole (no section row) is the one case with no
+   * pointer — found by scan, only when the file is actually indexed.
+   * @param {string} key @returns {number|null}
+   */
+  _docRowid(key) {
+    const find = () =>
+      /** @type {{ rid: number } | undefined} */ (
+        this.db.prepare("SELECT rid FROM doc_scope WHERE path = ? AND rid IS NOT NULL").get(key) ??
+          this.db.prepare("SELECT doc_rowid AS rid FROM doc_sections WHERE path = ? ORDER BY doc_rowid LIMIT 1").get(key)
+      );
+    let r = find();
+    if (!r && this.healDocScopeRid()) r = find();
+    if (r) return r.rid;
+    if (/\.md$/i.test(key) && this.fileHash(key) != null) {
+      const w = /** @type {{ rid: number } | undefined} */ (this.db.prepare("SELECT rowid AS rid FROM doc_fts WHERE path = ? AND source = 'file' ORDER BY rowid LIMIT 1").get(key));
+      return w ? w.rid : null;
+    }
+    return null;
+  }
+
+  /**
    * The destructive file-row clear WITHOUT its own transaction, so it can run INSIDE another one. A
    * force/self-heal rebuild folds this into {@link applyChanges}'s transaction (`clearFile: true`) so the
    * index is cleared and re-populated atomically — a concurrent reader (e.g. an MCP warm-index firing in
@@ -438,7 +661,9 @@ export class Store {
    */
   _clearIndexedRows() {
     this.db.exec("DELETE FROM file_embeddings WHERE path IN (SELECT path FROM file_index)"); // before file_index is cleared
+    this.db.exec("DELETE FROM doc_sections"); // file-sourced only: direct docs never have a section row
     this.db.exec("DELETE FROM docs WHERE source = 'file'");
+    this.db.exec("DELETE FROM doc_fts WHERE source = 'file'");
     this.db.exec("DELETE FROM file_index");
     this.db.exec("DELETE FROM nodes");
     this.db.exec("DELETE FROM edges");
@@ -448,18 +673,22 @@ export class Store {
   /** Drop and recreate everything (the ≤0.1.0 self-heal rebuild — such a db predates the write path, so nothing unrecoverable exists). */
   reset() {
     this.db.exec("DROP TABLE IF EXISTS docs");
+    this.db.exec("DROP TABLE IF EXISTS doc_fts");
     this.db.exec("DROP TABLE IF EXISTS file_index");
     this.db.exec("DROP TABLE IF EXISTS nodes");
     this.db.exec("DROP TABLE IF EXISTS edges");
     this.db.exec("DROP TABLE IF EXISTS git_sig");
     this.db.exec("DROP TABLE IF EXISTS file_embeddings");
     this.db.exec("DROP TABLE IF EXISTS mem_embeddings");
+    this.db.exec("DROP TABLE IF EXISTS doc_sections");
     this.db.exec("DROP TABLE IF EXISTS recall_log");
     this.db.exec("DROP TABLE IF EXISTS mem");
     this.db.exec("DROP TABLE IF EXISTS mem_text");
     this.db.exec("DROP TABLE IF EXISTS doc_scope");
     this.db.exec("DROP TABLE IF EXISTS blobs");
     for (const stmt of SCHEMA) this.db.exec(stmt);
+    this.db.exec(RID_INDEX);
+    this.db.exec(CODE_RID_INDEX);
   }
 
   /**
@@ -492,17 +721,42 @@ export class Store {
    *   empty index between the clear and the re-population (the warm-index-vs-recall race).
    */
   applyChanges({ upserts, touch, deletes }, indexedAt, recordEdits = false, stamp = 0, clearFile = false) {
-    const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ?");
+    // a path is code (`docs`) or doc (`doc_fts`) by extension, never both — but delete from both so a stale
+    // row can never survive a kind change.
+    const delCodeByRid = this.db.prepare("DELETE FROM docs WHERE rowid = ? AND path = ?");
+    const delCode = { run: (/** @type {string} */ p) => { const rid = this._codeRowid(p); if (rid != null) delCodeByRid.run(rid, p); } };
+    // a file's md rows are its doc_sections rows' rowids; an md file the chunker left whole has none (found by scan, only if it was indexed before)
+    const secRids = this.db.prepare("SELECT doc_rowid AS rid FROM doc_sections WHERE path = ?");
+    const delByRid = this.db.prepare("DELETE FROM doc_fts WHERE rowid = ? AND source = 'file'");
+    const delWhole = this.db.prepare("DELETE FROM doc_fts WHERE path = ? AND source = 'file'");
+    const wasIdx = this.db.prepare("SELECT 1 FROM file_index WHERE path = ?");
+    const delDocRow = {
+      run: (/** @type {string} */ p) => {
+        const rids = /** @type {{ rid: number }[]} */ (secRids.all(p));
+        for (const r of rids) delByRid.run(r.rid);
+        if (!rids.length && /\.md$/i.test(p) && wasIdx.get(p)) delWhole.run(p);
+      },
+    };
+    const delDoc = { run: (/** @type {string} */ p) => (delCode.run(p), delDocRow.run(p)) };
+    const delSec = this.db.prepare("DELETE FROM doc_sections WHERE path = ?");
+    const insSec = this.db.prepare(
+      "INSERT INTO doc_sections(doc_rowid, path, node_id, dim, vec) VALUES (@rid, @path, @node_id, @dim, @vec)"
+    );
     const delIdx = this.db.prepare("DELETE FROM file_index WHERE path = ?");
     // indexed files are always source='file' with no provenance/occurred_at (those are write-path
     // metadata — slice 7 §3.2). Written memory uses a separate insert path (`writeMemory`).
-    const insDoc = this.db.prepare(
+    const insCodeRow = this.db.prepare(
       "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
         "VALUES (@path, @kind, @format, 'file', NULL, NULL, @body)"
     );
+    const insDocRow = this.db.prepare(
+      "INSERT INTO doc_fts(path, kind, format, source, provenance, occurred_at, body) " +
+        "VALUES (@path, @kind, @format, 'file', NULL, NULL, @body)"
+    );
+    const insDoc = { run: (/** @type {{ path: string, kind: string, format: string, body: string }} */ r) => (r.kind === "doc" ? insDocRow : insCodeRow).run(r) };
     const upIdx = this.db.prepare(
-      "INSERT INTO file_index(path, content_hash, mtime, size, indexed_at) VALUES (@path, @hash, @mtime, @size, @indexed_at) " +
-        "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at"
+      "INSERT INTO file_index(path, content_hash, mtime, size, indexed_at, code_rowid) VALUES (@path, @hash, @mtime, @size, @indexed_at, @code_rowid) " +
+        "ON CONFLICT(path) DO UPDATE SET content_hash = excluded.content_hash, mtime = excluded.mtime, size = excluded.size, indexed_at = excluded.indexed_at, code_rowid = excluded.code_rowid"
     );
     const touchIdx = this.db.prepare("UPDATE file_index SET mtime = @mtime WHERE path = @path");
     const delNodes = this.db.prepare("DELETE FROM nodes WHERE path = ?");
@@ -539,6 +793,7 @@ export class Store {
       if (clearFile) this._clearIndexedRows();
       for (const p of deletes) {
         delDoc.run(p);
+        delSec.run(p);
         delIdx.run(p);
         delNodes.run(p);
         delEdgesOf.run(p, p);
@@ -554,16 +809,27 @@ export class Store {
             )
           : null;
         delDoc.run(u.path); // replace any prior row for this path
+        delSec.run(u.path);
         delNodes.run(u.path);
         delEdgesSrc.run(u.path); // this file's outgoing import edges are about to be re-derived
         // code-aware FTS body (§5 mechanism 3): identifier-split + path + symbol names folded
         // in by `indexBody`. Symbol names (already in body) repeated as `extra` so a file's own
         // declarations get a small term-frequency lift over names it merely references.
         const extra = /** @type {string[]} */ ((u.nodes ?? []).map((c) => c.symbol).filter(Boolean));
-        insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
-        upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt });
+        // indexed md → one `docs` row PER heading section (each with its own line range + vector, via
+        // `doc_sections`); everything else (code, md the chunker returned nothing for) stays one row per file.
+        const sectioned = u.kind === "doc" && u.format === "md" && (u.nodes?.length ?? 0) > 0;
+        const row = sectioned ? null : insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
+        upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt, code_rowid: row && u.kind !== "doc" ? Number(row.lastInsertRowid) : -1 });
+        let i = 0;
         for (const c of u.nodes ?? []) {
-          insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text, stamp });
+          const nodeId = insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text, stamp }).lastInsertRowid;
+          if (sectioned) {
+            const rid = insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: c.text, extra: [] }) }).lastInsertRowid;
+            const v = u.sectionVecs?.[i];
+            insSec.run({ rid, path: u.path, node_id: nodeId, dim: v ? v.length : null, vec: v ? Buffer.from(v.buffer, v.byteOffset, v.byteLength) : null });
+          }
+          i++;
           // slice 5a: a chunk whose (symbol, body) wasn't in the prior set is new or modified — record it.
           if (prevKeys && !prevKeys.has(chunkKey(c.symbol, c.text))) {
             insEdit.run({ path: u.path, symbol: c.symbol, kind: u.kind, ts: indexedAt });
@@ -605,15 +871,18 @@ export class Store {
     // OVERRIDES the instance owner; `undefined` (legacy single-tenant) falls back to this instance's.
     const wOwner = m.owner !== undefined ? m.owner : this.owner;
     // physical key (W4): a fact/episode folds its owner into the key (`owner\x1Fid`) so two tenants'
-    // same id are DISTINCT rows; a doc row is NOT owner-keyed (it fences on the separate `doc_scope`
-    // axis) and keeps `m.id`. The FTS body still tokenizes the PUBLIC id (`indexBody({ path: m.id })`)
-    // — folding the owner prefix into the search surface would let a query match on the tenant name.
-    const key = isMem ? memKey(wOwner, m.id) : m.id;
-    // the reserved separator is illegal in ANY written id (not just mem): `memId` decodes every returned
-    // path, so a `\x1F` in a doc/blob id would be silently mangled on the way out. Guard the owner too —
-    // a `\x1F` there could forge another tenant's mem key.
+    // same id are DISTINCT rows. A direct DOC row folds its doc `scope` in its OWN key namespace
+    // ({@link docKey}: `scope\x1Eid`; GLOBAL/unscoped = `\x1Eid`) — else tenant B's same-named upload would delete
+    // tenant A's row, and a doc would share sidecar rows with a same-id fact. The
+    // separate `doc_scope` column stays the read fence (defense-in-depth, as `mem_scope.owner` is on the
+    // memory axis). The FTS body still tokenizes the PUBLIC id (`indexBody({ path: m.id })`) — folding the
+    // prefix into the search surface would let a query match on the tenant name.
+    const key = isMem ? memKey(wOwner, m.id) : docKey(m.scope ?? null, m.id);
+    // both reserved separators are illegal in ANY written id (not just mem): `memId` decodes every returned
+    // path, so a separator in a doc/blob id would be silently mangled on the way out. Guard the owner/scope
+    // too — a separator there could forge another tenant's key.
     assertNoMemSep(m.id, "a written id");
-    if (isMem) assertNoMemSep(wOwner, "an owner/scope");
+    assertNoMemSep(isMem ? wOwner : m.scope, "an owner/scope");
     const tx = this.db.transaction(() => {
       // route by kind (§5.1): fact/episode → the stemmed `mem` table; direct `doc` → `docs`
       // (one kind = one ranking domain, so a direct FAQ ranks against file docs, unstemmed).
@@ -639,17 +908,17 @@ export class Store {
           .prepare("INSERT INTO mem_scope(path, owner, session, created_at) VALUES (?, ?, ?, ?)")
           .run(key, wOwner, sSession, m.createdAt ?? null);
       } else {
-        this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(m.id);
-        this.db
+        this._delDirectDoc(key);
+        const ins = this.db
           .prepare(
-            "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
+            "INSERT INTO doc_fts(path, kind, format, source, provenance, occurred_at, body) " +
               "VALUES (@path, @kind, @format, 'direct', @provenance, @occurred_at, @body)"
           )
-          .run({ path: m.id, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
+          .run({ path: key, kind: m.kind, format: m.format, provenance: m.provenance, occurred_at: m.occurredAt, body: indexBody({ path: m.id, body: m.text }) });
         // per-upload sidecar (R2/R5 scope/expiry + recentMemory created_at): refresh by delete-then-insert.
         // Always written for a direct doc (created_at must exist); a NULL/NULL scope/expiry row stays
         // identical to absent under the recall LEFT JOIN.
-        this.setDocScope(m.id, m.scope ?? null, m.expiresAt ?? null, m.createdAt ?? null);
+        this.setDocScope(key, m.scope ?? null, m.expiresAt ?? null, m.createdAt ?? null, ins.lastInsertRowid);
       }
       // raw text alongside the searchable surface (slice 9): the FTS body is processed
       // (indexBody) and there is no file behind a written row, so this is the only copy
@@ -685,11 +954,11 @@ export class Store {
    * recall/get LEFT JOIN (still global/forever), so the fence is unchanged; only `created_at` is new.
    * `createdAt` is the caller's write clock (threaded from the facade, like `writeStash`), refreshed on
    * every re-write so a re-ingest reads as more recent.
-   * @param {string} id @param {string|null} scope @param {number|null} expiresAt @param {number|null} createdAt
+   * @param {string} id @param {string|null} scope @param {number|null} expiresAt @param {number|null} createdAt @param {number|bigint|null} [rid] the row's doc_fts rowid
    */
-  setDocScope(id, scope, expiresAt, createdAt = null) {
+  setDocScope(id, scope, expiresAt, createdAt = null, rid = null) {
     this.db.prepare("DELETE FROM doc_scope WHERE path = ?").run(id);
-    this.db.prepare("INSERT INTO doc_scope(path, scope, expires_at, created_at) VALUES (?, ?, ?, ?)").run(id, scope, expiresAt, createdAt);
+    this.db.prepare("INSERT INTO doc_scope(path, scope, expires_at, created_at, rid) VALUES (?, ?, ?, ?, ?)").run(id, scope, expiresAt, createdAt, rid);
   }
 
   /**
@@ -703,24 +972,26 @@ export class Store {
    */
   writeBlob(b) {
     assertNoMemSep(b.id, "a written id"); // reserved separator illegal in any id (memId decodes every returned path)
+    assertNoMemSep(b.scope, "an owner/scope");
+    const key = docKey(b.scope ?? null, b.id); // scope-qualified doc key, exactly as a written doc (see writeMemory)
     const bytes = Buffer.isBuffer(b.bytes) ? b.bytes : Buffer.from(b.bytes);
     const tx = this.db.transaction(() => {
-      this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'").run(b.id);
+      this._delDirectDoc(key);
       // FTS body = the FILENAME only (folded through indexBody like any other body); never the bytes.
-      this.db
+      const bi = this.db
         .prepare(
-          "INSERT INTO docs(path, kind, format, source, provenance, occurred_at, body) " +
+          "INSERT INTO doc_fts(path, kind, format, source, provenance, occurred_at, body) " +
             "VALUES (@path, 'doc', @format, 'direct', NULL, NULL, @body)"
         )
-        .run({ path: b.id, format: b.format, body: indexBody({ path: b.id, body: b.filename }) });
+        .run({ path: key, format: b.format, body: indexBody({ path: b.id, body: b.filename }) });
       this.db
         .prepare("INSERT INTO blobs(path, bytes, filename) VALUES (@path, @bytes, @filename) ON CONFLICT(path) DO UPDATE SET bytes = excluded.bytes, filename = excluded.filename")
-        .run({ path: b.id, bytes, filename: b.filename });
-      this.setDocScope(b.id, b.scope ?? null, b.expiresAt ?? null, b.createdAt ?? null);
+        .run({ path: key, bytes, filename: b.filename });
+      this.setDocScope(key, b.scope ?? null, b.expiresAt ?? null, b.createdAt ?? null, bi.lastInsertRowid);
       if (b.meta != null) {
-        this.db.prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta").run({ path: b.id, meta: b.meta });
+        this.db.prepare("INSERT INTO mem_meta(path, meta) VALUES (@path, @meta) ON CONFLICT(path) DO UPDATE SET meta = excluded.meta").run({ path: key, meta: b.meta });
       } else {
-        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(b.id);
+        this.db.prepare("DELETE FROM mem_meta WHERE path = ?").run(key);
       }
     });
     tx();
@@ -804,51 +1075,61 @@ export class Store {
    * @param {{ id?: string, idPrefix?: string, kind?: string, provenance?: string, ownerFenced?: boolean, owner?: string | null }} sel
    *   `idPrefix` matches a base id and all `<base>#<n>` rows under it — the clean-re-ingest handle
    *   for a multi-segment document ({@link LiteCtx#ingest}); still direct-rows-only.
-   *   `ownerFenced` (multis M4) routes a tenant-scoped delete on the MEMORY axis only — see
-   *   {@link forgetMemoryByOwner}.
+   *   `ownerFenced` (multis M4) routes a tenant-scoped delete (memory axis; the doc axis too for a precise
+   *   id/idPrefix or `kind:'doc'`) — see {@link forgetMemoryByOwner}.
    * @returns {number}
    */
   forgetMemory(sel) {
     if (sel.ownerFenced) return this.forgetMemoryByOwner(sel.owner ?? null, sel.kind, sel.id != null || sel.idPrefix != null ? { id: sel.id, idPrefix: sel.idPrefix } : undefined);
-    /** @type {string[]} */
-    const clauses = [];
     /** @type {Record<string, string>} */
     const params = {};
-    // W4: a fact/episode key folds in the owner (`owner\x1Fid`), so an owner-blind precise delete must
-    // match on the PUBLIC id — the substring after the separator. `instr` returns 0 for an unencoded
-    // row (a doc id, or a global/ownerless fact), and `substr(path, 1)` is then the whole path, so this
-    // one expression matches both forms; an owner-blind `forget('id')` therefore reaches every tenant's
-    // copy of that id (the same cross-tenant reach the owner-blind `{ kind }` delete already has).
-    const PUB_ID = "substr(path, instr(path, char(31)) + 1)";
-    if (sel.id != null) (clauses.push(`${PUB_ID} = @id`), (params.id = sel.id));
+    // W4: a fact/episode key folds in the owner (`owner\x1Fid`) and a direct doc key its scope (`scope\x1Eid`,
+    // `\x1Eid` global), so an owner-blind precise delete must match on the PUBLIC id (everything after the first
+    // separator — the same decode as {@link memId}). An owner-blind `forget('id')` reaches every tenant's copy of
+    // that id (the same cross-tenant reach the owner-blind `{ kind }` delete already has).
+    const PUB_ID = "CASE WHEN instr(path, char(31)) > 0 THEN substr(path, instr(path, char(31)) + 1) WHEN instr(path, char(30)) > 0 THEN substr(path, instr(path, char(30)) + 1) ELSE path END";
+    /** @returns {string[]} */
+    const build = () => {
+      /** @type {string[]} */
+      const clauses = [];
+      if (sel.id != null) clauses.push(`${PUB_ID} = @id`);
+      if (sel.idPrefix != null) clauses.push(`(${PUB_ID} = @idExact OR ${PUB_ID} LIKE @idLike ESCAPE '\\')`); // the base id OR any `<base>#<segment>` row, on the public id
+      if (sel.kind != null) clauses.push("kind = @kind");
+      if (sel.provenance != null) clauses.push("provenance = @provenance");
+      return clauses;
+    };
+    if (sel.id != null) params.id = sel.id;
     if (sel.idPrefix != null) {
-      // the base id itself OR any `<base>#<segment>` row, matched on the public id. Escape LIKE metachars.
-      clauses.push(`(${PUB_ID} = @idExact OR ${PUB_ID} LIKE @idLike ESCAPE '\\')`);
       params.idExact = sel.idPrefix;
-      params.idLike = sel.idPrefix.replace(/[\\%_]/g, "\\$&") + "#%";
+      params.idLike = sel.idPrefix.replace(/[\\%_]/g, "\\$&") + "#%"; // escape LIKE metachars
     }
-    if (sel.kind != null) (clauses.push("kind = @kind"), (params.kind = sel.kind));
-    if (sel.provenance != null) (clauses.push("provenance = @provenance"), (params.provenance = sel.provenance));
+    if (sel.kind != null) params.kind = sel.kind;
+    if (sel.provenance != null) params.provenance = sel.provenance;
+    const memClauses = build();
     // Refuse an empty selector. With no clause the `mem` condition would degrade to `1=1` and wipe
     // ALL written memory — a destructive default no caller should be able to ask for by omission.
     // The public `forget()` wrapper already guards this; enforcing it here too means a bare selector
     // is unexpressible at the store layer (defense in depth — the only "delete everything" is the
     // explicit `reset()`).
-    if (clauses.length === 0) {
+    if (memClauses.length === 0) {
       throw new Error("forgetMemory: a selector is required (id, kind, and/or provenance) — refusing to delete all memory");
     }
     // both written-memory homes (§5.1): the stemmed `mem` table (facts/episodes — all direct by
-    // construction) and `docs` rows guarded by source='direct' (directly-written docs only).
-    const docsCond = ["source = 'direct'", ...clauses].join(" AND ");
-    const memCond = clauses.join(" AND ");
+    // construction) and `doc_fts` rows guarded by source='direct' (directly-written docs only).
+    const docsCond = ["source = 'direct'", ...memClauses].join(" AND ");
+    const memCond = memClauses.join(" AND ");
+    // direct docs are reached through their sidecar's doc_fts rowid — never a scan of every body; an id selector also
+    // seeks the sidecar's public-id index (the same expression as `doc_scope_pub`)
+    this.healDocScopeRid();
+    const docRids = `SELECT rid FROM doc_scope WHERE rid > 0${sel.id != null ? " AND substr(path, instr(path, char(30)) + 1) = @id" : ""}`;
     const tx = this.db.transaction(() => {
+      const docRows = /** @type {{ rid: number, path: string }[]} */ (this.db.prepare(`SELECT rowid AS rid, path FROM doc_fts WHERE rowid IN (${docRids}) AND ${docsCond}`).all(params));
       const paths = [
-        .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM docs WHERE ${docsCond}`).all(params)),
+        ...docRows,
         .../** @type {{ path: string }[]} */ (this.db.prepare(`SELECT path FROM mem WHERE ${memCond}`).all(params)),
       ].map((r) => r.path);
-      const removed =
-        this.db.prepare(`DELETE FROM docs WHERE ${docsCond}`).run(params).changes +
-        this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
+      const delDocRid = this.db.prepare("DELETE FROM doc_fts WHERE rowid = ?");
+      const removed = docRows.reduce((n, r) => n + delDocRid.run(r.rid).changes, 0) + this.db.prepare(`DELETE FROM mem WHERE ${memCond}`).run(params).changes;
       // NB: `forget` is MEMORY-ONLY. Stash deletion lives in {@link evictStash} (R-C4 housekeeping),
       // split out so a bulk age/size sweep can never reach a durable fact — see §10.5 / CE-PRD R-G7.
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
@@ -867,8 +1148,10 @@ export class Store {
   /**
    * Tenant-fenced memory forget (multis M4) — the delete-side mirror of the {@link recallMemory} owner
    * fence. Deletes `fact`+`episode` rows for exactly ONE owner, plus their sidecars (`mem_text`/
-   * `mem_meta`/`mem_scope`/embeddings/`recall_log`). **MEM-AXIS ONLY**: never touches `docs` (a tenant's
-   * ingested docs fence on the separate `doc_scope` axis), the stash, or another owner's rows.
+   * `mem_meta`/`mem_scope`/embeddings/`recall_log`). **MEM-AXIS by default**: a bare / `kind`-narrowed-to-fact|episode
+   * tenant wipe never touches `docs`, the stash, or another owner's rows. The DOC axis (a tenant's uploaded/written docs,
+   * keyed `scope\x1Eid`, fenced on `doc_scope.scope`) is reached only by an explicit `kind:'doc'` or a precise
+   * `{id|idPrefix}` — with the same strict-owner rule, and never the indexed (`source='file'`) md rows.
    *
    * **A tenant forget is the STRICTER `s.owner = @owner`, NOT the read fence's `owner IS NULL OR owner =
    * @owner`.** A tenant reads its rows ∪ the shared tier, but must DELETE only its own — a tenant forget
@@ -916,17 +1199,43 @@ export class Store {
       params.physLike = base.replace(/[\\%_]/g, "\\$&") + "#%";
     }
     const selectSql = `SELECT m.path FROM mem m ${scopePred}${kindPred}${idPred}`;
+    // DOC axis (direct docs/ingest segments/blobs, keyed `scope\x1Eid` in their own key namespace): reached by a precise
+    // `{id|idPrefix}` delete (an id names a thing on either axis) or an explicit `kind:'doc'` wipe; a bare/`fact`/
+    // `episode` tenant wipe stays memory-only (the documented 0.22.0 contract). The same STRICT tenant rule as above:
+    // `doc_scope.scope = @owner` (never `IS NULL` too — that would wipe the shared tier), GLOBAL → `scope IS NULL`
+    // only. The key match (`docKeyPred`) and the `doc_scope` predicate are two independent locks. Indexed
+    // (`source='file'`) md rows are never selected.
+    const docAxis = kind === "doc" || (kind == null && (precise?.id != null || precise?.idPrefix != null));
+    const docScopePred = owner == null ? "WHERE d.scope IS NULL" : "WHERE d.scope = @owner";
+    // the doc key space is its own ({@link docKey}) — the fact key (`idPred`) must never be reused on the doc axis
+    let docKeyPred = "";
+    if (precise?.id != null) (docKeyPred = " AND d.path = @docId"), (params.docId = docKey(owner, precise.id));
+    else if (precise?.idPrefix != null) {
+      const dbase = docKey(owner, precise.idPrefix);
+      // the range pins the tenant's key space (`scope\x1E…`, an exact-case match — `d.scope = @owner` already demands it) so the path
+      // index can seek; LIKE stays the test on the id part, ASCII-case-insensitive exactly as before
+      docKeyPred = " AND d.path >= @docLo AND d.path < @docHi AND (d.path = @docExact OR d.path LIKE @docLike ESCAPE '\\')";
+      params.docLo = docKey(owner, "");
+      params.docHi = (owner ?? "") + "\x1f"; // one past `\x1E`
+      params.docExact = dbase;
+      params.docLike = dbase.replace(/[\\%_]/g, "\\$&") + "#%";
+    }
+    const docSql = `SELECT d.path FROM doc_scope d ${docScopePred}${docKeyPred}`; // doc_scope = one row per direct doc (path-indexed)
     const tx = this.db.transaction(() => {
       const paths = /** @type {{ path: string }[]} */ (this.db.prepare(selectSql).all(params)).map((r) => r.path);
-      if (!paths.length) return 0;
+      const docPaths = docAxis ? /** @type {{ path: string }[]} */ (this.db.prepare(docSql).all(params)).map((r) => r.path) : [];
+      if (!paths.length && !docPaths.length) return 0;
       const del = this.db.prepare("DELETE FROM mem WHERE path = ?");
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delScope = this.db.prepare("DELETE FROM mem_scope WHERE path = ?");
+      const delDocScope = this.db.prepare("DELETE FROM doc_scope WHERE path = ?");
+      const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
       let removed = 0;
       for (const p of paths) ((removed += del.run(p).changes), delText.run(p), delMeta.run(p), delScope.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of docPaths) ((removed += this._delDirectDoc(p)), delDocScope.run(p), delBlob.run(p), delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
       return removed;
     });
     return tx();
@@ -949,14 +1258,13 @@ export class Store {
         this.db.prepare("SELECT path FROM doc_scope WHERE expires_at IS NOT NULL AND expires_at <= ?").all(now)
       ).map((r) => r.path);
       if (!dead.length) return 0;
-      const delDoc = this.db.prepare("DELETE FROM docs WHERE path = ? AND source = 'direct'");
       const delDocScope = this.db.prepare("DELETE FROM doc_scope WHERE path = ?");
       const delBlob = this.db.prepare("DELETE FROM blobs WHERE path = ?");
       const delText = this.db.prepare("DELETE FROM mem_text WHERE path = ?");
       const delMeta = this.db.prepare("DELETE FROM mem_meta WHERE path = ?");
       const delEmb = this.db.prepare("DELETE FROM mem_embeddings WHERE path = ?");
       const delLog = this.db.prepare("DELETE FROM recall_log WHERE path = ?");
-      for (const p of dead) (delDoc.run(p), delDocScope.run(p), delBlob.run(p), delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
+      for (const p of dead) (this._delDirectDoc(p), delDocScope.run(p), delBlob.run(p), delText.run(p), delMeta.run(p), delEmb.run(p), delLog.run(p));
       return dead.length;
     });
     return tx();
@@ -980,10 +1288,15 @@ export class Store {
     tx();
   }
 
-  /** @returns {number} total stored items — indexed documents + written memory (both FTS tables) */
+  /**
+   * @returns {number} total stored items — indexed FILES + written memory (both FTS tables). An indexed md
+   *   file is several `docs` rows (one per heading section) but still ONE file, so file rows count distinct
+   *   paths; direct rows (written docs/blobs) are one row each.
+   */
   count() {
     return (
-      /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM docs").get()).n +
+      /** @type {{ n: number }} */ (this.db.prepare("SELECT count(DISTINCT path) AS n FROM (SELECT path FROM docs WHERE source = 'file' UNION ALL SELECT path FROM doc_fts WHERE source = 'file')").get()).n +
+      /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM doc_fts WHERE source = 'direct'").get()).n +
       /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM mem").get()).n
     );
   }
@@ -1024,8 +1337,8 @@ export class Store {
     return /** @type {{ n: number }} */ (
       this.db
         .prepare(
-          "SELECT count(*) AS n FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
-            "WHERE docs.source = 'direct' AND docs.kind = 'doc' " +
+          "SELECT count(*) AS n FROM doc_fts LEFT JOIN doc_scope ds ON ds.path = doc_fts.path " +
+            "WHERE doc_fts.source = 'direct' AND doc_fts.kind = 'doc' " +
             "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
             "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now)"
         )
@@ -1186,14 +1499,14 @@ export class Store {
     return /** @type {{ path: string, kind: string, format: string, createdAt: number|null }[]} */ (
       this.db
         .prepare(
-          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, ds.created_at AS createdAt " +
-            "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
-            "WHERE docs.source = 'direct' AND docs.kind = 'doc' " +
+          "SELECT doc_fts.path AS path, doc_fts.kind AS kind, doc_fts.format AS format, ds.created_at AS createdAt " +
+            "FROM doc_fts LEFT JOIN doc_scope ds ON ds.path = doc_fts.path " +
+            "WHERE doc_fts.source = 'direct' AND doc_fts.kind = 'doc' " +
             // same tri-state fence as search() (seeAll=0 + scope NULL = global-only, i.e. GLOBAL) …
             "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
             // … and the same live-expiry exclusion (R5).
             "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
-            "ORDER BY ds.created_at DESC, docs.path LIMIT :limit"
+            "ORDER BY ds.created_at DESC, doc_fts.path LIMIT :limit"
         )
         .all({ scope, seeAll: sa, now, limit })
     );
@@ -1302,20 +1615,45 @@ export class Store {
     // memory axis (W4): a fact/episode's physical key folds in the owner, so resolve the caller's own
     // row first (`owner\x1Fid`); an ownerless caller (GLOBAL/bare) reads the bare `id`. A tenant whose
     // own row is absent falls back to the global (ownerless) row — mirroring recall's owner∪global view
-    // — unless `globalOnly` restricts to the shared tier. docs/blob/file/stash are never owner-keyed, so
-    // they look up under the raw `id` throughout (their fence is the separate `doc_scope` axis).
+    // — unless `globalOnly` restricts to the shared tier. A direct doc/blob has its OWN key namespace
+    // ({@link docKey}, by its `doc_scope` scope: tenant key first, then the shared `\x1Eid`). A bare get stays UNFENCED (the
+    // documented legacy by-id model) and also reaches a tenant's row by its public id, shared row first.
+    // file/stash rows are never keyed and look up under the raw `id`.
     // a tenant scope names the owner; GLOBAL (globalOnly) is the shared tier (no owner); a bare fetch
     // falls back to the INSTANCE owner — so a single-tenant instance (owner set at construction) finds
     // its own encoded rows, and a global instance (owner null) reads the bare id (byte-identical legacy).
     // This mirrors the recall/recentMemory owner fence, which falls back to the instance owner too.
     const memOwner = typeof scope === "string" ? scope : globalOnly ? null : this.owner;
     const memSel = this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?");
-    const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
+    // doc axis ({@link docKey}, its own namespace): the caller's tenant key, then the shared (global) doc key;
+    // GLOBAL and a bare get have no tenant key (`tk === dk`). File rows (indexed code/md) are keyed by their path.
+    const tk = docKey(typeof scope === "string" ? scope : null, id);
+    const dk = docKey(null, id);
+    /** @typedef {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string }} GetRow */
+    // an expired tenant row must not mask the live shared row of the same id (R5 — doc axis only), so expiry
+    // is part of EVERY doc-axis lookup below, not a post-filter on the winner
+    const live = "(@now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > @now)";
+    const nowP = now ?? null;
+    // precedence: tenant fact → shared fact → ONE doc query (tenant doc key, shared doc key, then — for a bare
+    // unfenced get — a tenant's direct row by its PUBLIC id, then indexed file rows). Expiry is part of the WHERE so
+    // an expired tenant doc never masks the live shared one.
+    const docP = { tk, dk, id, bare: scope == null && !globalOnly ? 1 : 0, now: nowP };
+    // direct docs resolve through the sidecar's doc_fts rowid (tenant key, shared key, bare public-id suffix); an indexed md file through its first section row
+    const docQ = this.db.prepare(
+      "SELECT x.path, x.kind, x.format, x.source, x.provenance, x.occurred_at, x.body FROM (" +
+        "SELECT rid, path FROM doc_scope WHERE path IN (@tk, @dk) AND rid IS NOT NULL UNION ALL " +
+        "SELECT rid, path FROM doc_scope s2 WHERE @bare = 1 AND rid IS NOT NULL AND instr(s2.path, char(30)) > 0 AND substr(s2.path, instr(s2.path, char(30)) + 1) = @id UNION ALL " +
+        "SELECT doc_rowid AS rid, path FROM (SELECT doc_rowid, path FROM doc_sections WHERE path = @id ORDER BY doc_rowid LIMIT 1)" +
+        ") c JOIN doc_fts x ON x.rowid = c.rid AND x.path = c.path LEFT JOIN doc_scope ds ON ds.path = x.path " +
+        `WHERE ((x.path IN (@tk, @dk) OR (@bare = 1 AND instr(x.path, char(30)) > 0 AND substr(x.path, instr(x.path, char(30)) + 1) = @id)) AND x.source = 'direct' AND ${live}) OR (x.path = @id AND x.source = 'file') ` +
+        "ORDER BY (x.path = @tk) DESC, (x.path = @dk) DESC, (x.source = 'direct') DESC, x.path LIMIT 1"
+    );
+    const row = /** @type {GetRow | undefined} */ (
       memSel.get(memKey(memOwner, id)) ??
         (memOwner != null && !globalOnly ? memSel.get(id) : undefined) ??
-        this.db
-          .prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM docs WHERE path = ? ORDER BY (source = 'direct') DESC LIMIT 1")
-          .get(id)
+        (docQ.get(docP) ?? (this.healDocScopeRid() ? docQ.get(docP) : undefined)) ??
+        (/\.md$/i.test(id) && this.fileHash(id) != null ? this.db.prepare("SELECT x.path, x.kind, x.format, x.source, x.provenance, x.occurred_at, x.body FROM doc_fts x WHERE x.path = ? AND x.source = 'file' LIMIT 1").get(id) : undefined) ??
+        this._codeRow(id)
     );
     if (!row) {
       // stash fallback (R-C4): a parked payload lives in no FTS table, so the mem/docs lookups miss
@@ -1358,6 +1696,37 @@ export class Store {
         }
       }
     }
+    return this._itemPayload(row);
+  }
+
+  /**
+   * One stored item by its exact PHYSICAL key (`path` as a hit carries it: a fact `owner\x1Fid`, a direct doc
+   * `scope\x1Eid`, or a file path) — the body-fill read for rows a recall/recentMemory already fenced. Unlike
+   * {@link getItem} this does no id resolution and no fencing (the caller's query was the fence), so a doc and a
+   * same-id fact each resolve to their OWN row. Same payload shape as getItem; null when the key is unknown.
+   * @param {string} key
+   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null } | null}
+   */
+  getItemByKey(key) {
+    const row = /** @type {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string } | undefined} */ (
+      this.db.prepare("SELECT path, kind, format, 'direct' AS source, provenance, occurred_at, body FROM mem WHERE path = ?").get(key) ??
+        this._codeRow(key) ??
+        (() => {
+          const rid = this._docRowid(key);
+          return rid == null ? undefined : this.db.prepare("SELECT path, kind, format, source, provenance, occurred_at, body FROM doc_fts WHERE rowid = ? AND path = ?").get(rid, key);
+        })()
+    );
+    return row ? this._itemPayload(row) : null;
+  }
+
+  /**
+   * The text/bytes/meta half of an item record, shared by {@link getItem} and {@link getItemByKey}: a direct
+   * row reads its blob bytes (else raw `mem_text`, else the stored FTS body) and sealed meta by its physical
+   * key; a file row carries none (the caller reads disk).
+   * @param {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, body: string }} row
+   * @returns {{ path: string, kind: string, format: string, source: string, provenance: string|null, occurred_at: number|null, text: string|null, bytes: Buffer|null, meta: string|null }}
+   */
+  _itemPayload(row) {
     let text = null;
     /** @type {Buffer|null} */
     let bytes = null;
@@ -1375,7 +1744,6 @@ export class Store {
     }
     return { path: row.path, kind: row.kind, format: row.format, source: row.source, provenance: row.provenance, occurred_at: row.occurred_at, text, bytes, meta };
   }
-
   /**
    * Chunks for one file, in id order (insertion order).
    * @param {string} path
@@ -1464,9 +1832,47 @@ export class Store {
   vectorlessFiles() {
     return /** @type {{ path: string }[]} */ (
       this.db
-        .prepare("SELECT fi.path FROM file_index fi LEFT JOIN file_embeddings fe ON fe.path = fi.path WHERE fe.path IS NULL")
+        // an md file with section rows is embedded per SECTION (see {@link vectorlessSections}) and has no file
+        // vector by design — excluded here so it is never re-embedded whole.
+        .prepare(
+          "SELECT fi.path FROM file_index fi LEFT JOIN file_embeddings fe ON fe.path = fi.path " +
+            "WHERE fe.path IS NULL AND fi.path NOT IN (SELECT path FROM doc_sections)"
+        )
         .all()
     ).map((r) => r.path);
+  }
+
+  /**
+   * Indexed-md section rows with no stored vector (indexed while embeddings were off) — the section-level
+   * twin of {@link vectorlessFiles}. Carries the section's indexed `body` (the raw heading-section text the
+   * normal path embeds), so the backfill needs no re-chunk.
+   * @returns {{ rid: number, path: string, body: string }[]}
+   */
+  vectorlessSections() {
+    return /** @type {{ rid: number, path: string, body: string }[]} */ (
+      this.db
+        .prepare("SELECT sec.doc_rowid AS rid, sec.path AS path, n.body AS body FROM doc_sections sec JOIN nodes n ON n.id = sec.node_id WHERE sec.vec IS NULL ORDER BY sec.doc_rowid")
+        .all()
+    );
+  }
+
+  /**
+   * Write section vectors without re-chunking (the embeddings backfill) — one transaction.
+   * @param {[number, Float32Array][]} pairs  (doc_rowid, vec) tuples
+   * @returns {void}
+   */
+  putSectionEmbeddings(pairs) {
+    if (!pairs.length) return;
+    const up = this.db.prepare("UPDATE doc_sections SET dim = @dim, vec = @vec WHERE doc_rowid = @rid");
+    const tx = this.db.transaction(() => {
+      for (const [rid, vec] of pairs) up.run({ rid, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
+    });
+    tx();
+  }
+
+  /** @returns {number} number of stored section vectors (tests/introspection) */
+  sectionEmbeddingCount() {
+    return /** @type {{ n: number }} */ (this.db.prepare("SELECT count(*) AS n FROM doc_sections WHERE vec IS NOT NULL").get()).n;
   }
 
   /**
@@ -1644,6 +2050,40 @@ export class Store {
     return { memSeeAll, memOwner };
   }
 
+  /**
+   * The ranked pool for the doc kind. The fence/expiry filter must apply BEFORE the LIMIT, but it only needs the row's
+   * sidecar — so it is keyed by ROWID (no read of the matching rows' path/kind/format columns, which for a common term is
+   * most of the table), and path/kind/format/source are fetched for the winners only. doc_fts holds kind='doc' rows only,
+   * so `kind = :kind` is a tautology here.
+   * @param {string} match @param {string|null} scope @param {number} seeAll @param {number|null} now @param {number} limit
+   * @returns {any[]}
+   */
+  _docPool(match, scope, seeAll, now, limit) {
+    this.healDocScopeRid(); // O(1) probe — the fence below keys on doc_scope.rid; a row with no rid yet would read as global
+    const top = /** @type {{ rid: number, score: number }[]} */ (
+      this.db
+        .prepare(
+          "SELECT doc_fts.rowid AS rid, -bm25(doc_fts) AS score FROM doc_fts " +
+            "LEFT JOIN doc_scope ds ON ds.rid = doc_fts.rowid " +
+            "WHERE doc_fts MATCH :match " +
+            "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
+            "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
+            "ORDER BY score DESC LIMIT :limit"
+        )
+        .all({ match, scope, seeAll, now, limit })
+    );
+    if (!top.length) return [];
+    const meta = new Map(
+      /** @type {{ rid: number, path: string, kind: string, format: string, source: string }[]} */ (
+        this.db.prepare(`SELECT rowid AS rid, path, kind, format, source FROM doc_fts WHERE rowid IN (${top.map(() => "?").join(",")})`).all(...top.map((t) => t.rid))
+      ).map((m) => [m.rid, m])
+    );
+    return top.flatMap((t) => {
+      const m = meta.get(t.rid);
+      return m ? [{ rid: t.rid, path: m.path, kind: m.kind, format: m.format, source: m.source, score: t.score }] : [];
+    });
+  }
+
   search(match, kind, limit = 10, spreadWeight = 0, filter = {}) {
     const scope = filter.scope ?? null;
     // seeAll defaults to the legacy meaning of a null scope ("see everything") so any direct caller
@@ -1683,12 +2123,15 @@ export class Store {
     const pool = spreadWeight > 0 ? Math.min(Math.max(limit, 200), 400) : limit;
     // LEFT JOIN doc_scope so file rows (no sidecar row) stay visible (NULL = global/forever). bm25(docs)
     // + `docs MATCH` take the real table name, not an alias — so `docs` is unaliased and doc_scope is `ds`.
+    // one FTS table per kind-family: doc rows in `doc_fts`, code rows in `docs` (see SCHEMA) — `T` is one of two
+    // constant names, never caller input.
+    const T = kind === "doc" ? "doc_fts" : "docs";
     const rows = /** @type {Hit[]} */ (
-      this.db
+      kind === "doc" ? this._docPool(match, scope, seeAll, now, pool) : this.db
         .prepare(
-          "SELECT docs.path AS path, docs.kind AS kind, docs.format AS format, docs.source AS source, -bm25(docs) AS score " +
-            "FROM docs LEFT JOIN doc_scope ds ON ds.path = docs.path " +
-            "WHERE docs MATCH :match AND docs.kind = :kind " +
+          `SELECT ${T}.rowid AS rid, ${T}.path AS path, ${T}.kind AS kind, ${T}.format AS format, ${T}.source AS source, -bm25(${T}) AS score ` +
+            `FROM ${T} LEFT JOIN doc_scope ds ON ds.path = ${T}.path ` +
+            `WHERE ${T} MATCH :match AND ${T}.kind = :kind ` +
             // tri-state fence (multis M3 fail-closed): seeAll=1 → every row; else global rows always,
             // plus the reader's own tenant when a scope is set. seeAll=0 + scope NULL = global-only (GLOBAL).
             "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
@@ -1697,20 +2140,44 @@ export class Store {
         )
         .all({ match, kind, scope, seeAll, now, limit: pool })
     );
+    // an indexed-md SECTION row names its own chunk up front (attachChunks then leaves it alone); a legacy/whole-file row has none.
+    // Looked up for the pool only AFTER the top-N was chosen (not joined per matching row before the sort); doc_sections.doc_rowid
+    // references `doc_fts` rowids, so code rows (`docs`) never take this.
+    if (kind === "doc" && rows.length) {
+      const secs = /** @type {{ rid: number, symbol: string|null, node_type: string, start_line: number, end_line: number }[]} */ (
+        this.db
+          .prepare(
+            "SELECT sec.doc_rowid AS rid, n.symbol AS symbol, n.node_type AS node_type, n.start_line AS start_line, n.end_line AS end_line " +
+              `FROM doc_sections sec JOIN nodes n ON n.id = sec.node_id WHERE sec.doc_rowid IN (${rows.map(() => "?").join(",")})`
+          )
+          .all(...rows.map((r) => r.rid))
+      );
+      const byRid = new Map(secs.map((x) => [x.rid, x]));
+      for (const r of /** @type {any[]} */ (rows)) {
+        const x = byRid.get(r.rid);
+        if (x) r.chunk = { symbol: x.symbol, nodeType: x.node_type, startLine: x.start_line, endLine: x.end_line };
+      }
+    }
     if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(rows.slice(0, limit));
 
     // min–max normalise BM25 across the pool so it composes with the [0,1] spread term.
     const scores = rows.map((r) => r.score);
     const lo = Math.min(...scores);
     const hi = Math.max(...scores);
+    // keyed by ROW id (rid), not path: an md file is several rows, so path keys would collapse them.
+    /** @type {Map<number, number>} */
+    const norm = new Map(rows.map((r) => [Number(r.rid), hi > lo ? (r.score - lo) / (hi - lo) : 1]));
+    // a path's neighbour value = the best of its rows in the pool (adjacency itself stays path-level)
     /** @type {Map<string, number>} */
-    const norm = new Map(rows.map((r) => [r.path, hi > lo ? (r.score - lo) / (hi - lo) : 1]));
+    const pathNorm = new Map();
+    for (const r of rows) pathNorm.set(r.path, Math.max(pathNorm.get(r.path) ?? 0, norm.get(Number(r.rid)) ?? 0));
 
     // undirected adjacency restricted to the pool — every intra-pool edge has its src in the
     // pool, so filtering on src_path captures them all (one bind set, not two).
-    const ph = rows.map(() => "?").join(",");
+    const ph = [...pathNorm.keys()].map(() => "?").join(",");
+    // import edges are only ever sourced from code files, so the doc kind has none to look up
     const erows = /** @type {{src_path: string, dst_path: string}[]} */ (
-      this.db.prepare(`SELECT src_path, dst_path FROM edges WHERE type = 'import' AND src_path IN (${ph})`).all(...rows.map((r) => r.path))
+      kind === "doc" ? [] : this.db.prepare(`SELECT src_path, dst_path FROM edges WHERE type = 'import' AND src_path IN (${ph})`).all(...[...pathNorm.keys()])
     );
     /** @type {Map<string, Set<string>>} */
     const adj = new Map();
@@ -1720,7 +2187,7 @@ export class Store {
       else adj.set(a, new Set([b]));
     };
     for (const e of erows) {
-      if (!norm.has(e.dst_path)) continue; // neighbour outside the pool — irrelevant to re-rank
+      if (!pathNorm.has(e.dst_path)) continue; // neighbour outside the pool — irrelevant to re-rank
       link(e.src_path, e.dst_path);
       link(e.dst_path, e.src_path);
     }
@@ -1729,8 +2196,8 @@ export class Store {
     const blended = rows.map((r) => {
       let spread = 0;
       const ns = adj.get(r.path);
-      if (ns) for (const nb of ns) spread = Math.max(spread, norm.get(nb) ?? 0);
-      return { ...r, score: (norm.get(r.path) ?? 0) + w * spread }; // additive boost, never a tax
+      if (ns) for (const nb of ns) spread = Math.max(spread, pathNorm.get(nb) ?? 0);
+      return { ...r, score: (norm.get(Number(r.rid)) ?? 0) + w * spread }; // additive boost, never a tax
     });
     blended.sort((a, b) => b.score - a.score);
     return this.attachGit(blended.slice(0, limit));
@@ -1763,6 +2230,7 @@ export class Store {
     /** @type {(r: {start_line:number,end_line:number}) => number} */
     const span = (r) => r.end_line - r.start_line;
     for (const h of hits) {
+      if (h.chunk) continue; // an indexed-md section hit already IS one chunk — keep its own range
       h.chunk = null;
       if (!terms.length) continue;
       const rows = /** @type {{ symbol: string|null, node_type: string, start_line: number, end_line: number, body: string }[]} */ (sel.all(h.path));
@@ -1923,7 +2391,7 @@ export class Store {
    * POSITIONALLY (aligned to `cands`) so a file-doc and a written-doc that share a path each keep their
    * own vector. A missing vector (or a candidate lacking `source`, which a docs-sourced hit never is)
    * yields `undefined` at that position — `cosine()` treats it as 0.
-   * @param {{ path: string, source?: string }[]} cands
+   * @param {{ path: string, source?: string, rid?: number }[]} cands
    * @returns {(Float32Array | undefined)[]}
    */
   docCandidateVectors(cands) {
@@ -1931,9 +2399,26 @@ export class Store {
     const file = new Map();
     /** @type {Map<string, Float32Array>} */
     const mem = new Map();
-    this._readVecs("file_embeddings", cands.filter((c) => c.source !== "direct").map((c) => c.path), file);
+    // a file hit that is an indexed-md SECTION row (`rid` has a doc_sections row) carries its OWN vector;
+    // one with no section row (code, or a legacy whole-file md row) falls back to its path's file vector.
+    /** @type {Map<number, Float32Array | null>} */
+    const sec = new Map();
+    const rids = cands.filter((c) => c.source !== "direct" && c.rid != null).map((c) => Number(c.rid));
+    for (let i = 0; i < rids.length; i += 500) {
+      const chunk = rids.slice(i, i + 500);
+      const rows = /** @type {{ doc_rowid: number, vec: Buffer | null }[]} */ (
+        this.db.prepare(`SELECT doc_rowid, vec FROM doc_sections WHERE doc_rowid IN (${chunk.map(() => "?").join(",")})`).all(...chunk)
+      );
+      for (const r of rows) sec.set(r.doc_rowid, r.vec ? blobToVec(r.vec) : null);
+    }
+    const needFile = cands.filter((c) => c.source !== "direct" && !(c.rid != null && sec.has(Number(c.rid))));
+    this._readVecs("file_embeddings", needFile.map((c) => c.path), file);
     this._readVecs("mem_embeddings", cands.filter((c) => c.source === "direct").map((c) => c.path), mem);
-    return cands.map((c) => (c.source === "direct" ? mem : file).get(c.path));
+    return cands.map((c) => {
+      if (c.source === "direct") return mem.get(c.path);
+      if (c.rid != null && sec.has(Number(c.rid))) return sec.get(Number(c.rid)) ?? undefined;
+      return file.get(c.path);
+    });
   }
 
   /** @returns {number} number of stored file embeddings (slice 6 — for tests/introspection) */

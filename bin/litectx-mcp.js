@@ -7,7 +7,7 @@
 // which is below the external-dependency bar. POC-validated against a real client
 // (Claude Code via --mcp-config) before this was built.
 //
-//   litectx-mcp [--root <dir>] [--no-embeddings]   # embeddings (semantic recall) ON by default
+//   litectx-mcp [--root <dir>] [--no-embeddings]   # embeddings (meaning re-rank) ON by default
 //
 // Client config (claude code, cursor, etc.):
 //   { "mcpServers": { "litectx": { "command": "litectx-mcp", "args": ["--root", "/path/to/repo"] } } }
@@ -50,7 +50,7 @@ const TOOLS = [
   {
     name: "recall",
     description:
-      "Ranked search over the indexed repo + written memory (BM25 + import-graph spreading). Returns scored POINTERS — paths/ids with a chunk locator — not bodies; follow up with `get` on a hit's path to read one. Omit `kind` to get top hits grouped per kind (code/doc/fact/episode). Written-memory hits also carry `provenance` (human = a person signed off; agent = your own past assertion, maybe worth re-verifying — NOT a quality rank), `use` (how often recalled; 0 can be a fresh win, not a demerit), and `occurredAt` (episodes). Ranking is pure relevance — these columns are for YOU to weigh, never a thumb on the scale.",
+      "Ranked search over indexed code/docs + written memory. Matches on query words (BM25 + import-graph spreading), re-ranked by meaning when embeddings are on; a code/doc hit must share a query word. Use it to find WHERE to look, especially when you don't know the exact term, then read the returned section with `get` or grep inside that file. Returns scored POINTERS — paths/ids with a chunk locator — not bodies; follow up with `get` on a hit's path to read one. Omit `kind` to get top hits grouped per kind (code/doc/fact/episode). Written-memory hits also carry `provenance` (human = a person signed off; agent = your own past assertion, maybe worth re-verifying — NOT a quality rank), `use` (how often recalled; 0 can be a fresh win, not a demerit), and `occurredAt` (episodes). Ranking is pure relevance — these columns are for YOU to weigh, never a thumb on the scale.",
     inputSchema: {
       type: "object",
       properties: {
