@@ -13,6 +13,7 @@ All notable changes to this project are documented here, following
 - **Per-section embeddings.** With embeddings on, each md section gets its own vector (`doc_sections.vec`); backfill fills vectorless sections. Embeddings only re-rank doc hits — they never nominate doc candidates (KNN nomination stays fact/episode only).
 - **Doc rows live in a separate FTS table, `doc_fts`** (same unstemmed tokenizer). The `docs` table is now code-only, so md content no longer perturbs code BM25 statistics (a mixed repo ranks code identically to a code-only one).
 - **`.eml`** is ingested as plain text (chunked), like `txt`.
+- **Docs wording corrected.** README, `litectx.context.md` and the MCP `recall` description no longer imply doc/code recall "finds by meaning": it is word-gated (a hit must share a query word), embeddings only re-rank (they nominate for fact/episode memory only). Added the measured docs-search result (pre-registered, 24 questions, about 50 and about 1,500 docs: as good or better than grep alone at roughly 25-35% lower cost) and the MCP description now says to use recall to find where to look, then `get` or grep.
 
 ### Performance
 

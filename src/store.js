@@ -146,10 +146,10 @@ const SCHEMA = [
   // `PRAGMA user_version` stamp structurally cannot (a foreign writer never touches user_version).
   "CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, format TEXT NOT NULL, symbol TEXT, node_type TEXT NOT NULL, start_line INTEGER NOT NULL, end_line INTEGER NOT NULL, body TEXT NOT NULL, stamp INTEGER NOT NULL DEFAULT 0)",
   "CREATE INDEX IF NOT EXISTS nodes_path ON nodes(path)",
-  // directed graph edges (slice 4): `type` discriminates 'import' (recall spreading, shipped
-  // now) from 'call' (impact view, slice 5) so both ride one table. File-granularity src→dst;
+  // directed graph edges (slice 4): `type` is always 'import' today (recall spreading); call
+  // relationships are computed on demand by impact(), never stored. File-granularity src→dst;
   // owned by `src_path` (refreshed when the importer is re-indexed). Indexed both ways so
-  // recall can read neighbours and the impact view can read callers/callees off the same rows.
+  // recall can read neighbours off the same rows.
   "CREATE TABLE IF NOT EXISTS edges(id INTEGER PRIMARY KEY, type TEXT NOT NULL, src_path TEXT NOT NULL, dst_path TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS edges_src ON edges(type, src_path)",
   "CREATE INDEX IF NOT EXISTS edges_dst ON edges(type, dst_path)",
@@ -240,7 +240,7 @@ const SCHEMA = [
   // on the unstemmed `docs` table — porter-everywhere was measured and REJECTED (in code, word-forms
   // are distinct symbols; aurora gate broke, gitdone P@1 collapsed). Kinds never share a ranking, so
   // a kind routes to exactly one table and BM25 scores never merge across the two. Direct-written
-  // `doc` rows stay in `docs` (one kind = one ranking domain).
+  // `doc` rows live in `doc_fts` (one kind = one ranking domain).
   "CREATE VIRTUAL TABLE IF NOT EXISTS mem USING fts5(path UNINDEXED, kind UNINDEXED, format UNINDEXED, provenance UNINDEXED, occurred_at UNINDEXED, body, tokenize='porter unicode61')",
   // chunk-level edit history (slice 5a, §14 #4 view #3): one row each time index() OBSERVES a chunk's
   // body change — added or modified vs the previously-stored `nodes.body`. This is litectx's own

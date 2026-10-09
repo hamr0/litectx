@@ -1,6 +1,6 @@
 // R-C7 — `compress()`: the rank-tiered render primitive (CE PRD §8.1). Given a graph node (a code
 // chunk) and a level, return its text at one of three fidelities: `verbatim` (the full body),
-// `signature` (header + doc, body elided — saves ~95–98% bytes per the POC), or `drop` (a name-only
+// `signature` (header + doc, body elided — saves ~82% bytes with the doc kept), or `drop` (a name-only
 // marker). A caller / `assemble()` picks the level by rank: top-N verbatim, next tier signature, the
 // long tail dropped. This is a pure render VIEW over the chunk text — no DB, no ranking, no weights;
 // it composes with recall (which hands you the ranked nodes) but owns none of recall's logic.

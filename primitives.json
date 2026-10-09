@@ -71,7 +71,7 @@
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.impact(symbol: string) => Promise<Impact | null>",
       "fails": "Throws `RipgrepMissingError` when `rg` is not on PATH (rather than silently under-counting to a false \"isolated\"); returns `null` when the symbol isn't in the index.",
-      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst view = await ctx.impact('parseConfig')\nif (view) console.log(view.risk, view.callers.length) // 'low' | 'med' | 'high'"
+      "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst view = await ctx.impact('parseConfig')\nif (view) console.log(view.risk, view.callers.length) // 'low' | 'medium' | 'high'"
     },
     {
       "name": "index",
@@ -85,7 +85,7 @@
     {
       "name": "ingest",
       "category": "ingest",
-      "when": "Store an uploaded document (pdf/docx/md/txt/csv → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",
+      "when": "Store an uploaded document (pdf/docx/md/txt/csv/eml → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.ingest(buffer: Uint8Array, opts?: { filename?, format?, id?, scope?, expiresAt? }) => Promise<{ id, kind, format, mode, chunks }>",
       "fails": "Throws when a required optional peer dep is missing (pdf → `pdfjs-dist`, docx → `mammoth`) or input exceeds `maxSize`/`maxPages`; under `strictScope`, throws when `scope` is omitted.",
@@ -215,7 +215,7 @@
       "import": "import { summaryWindow } from 'litectx'",
       "signature": "summaryWindow(units: Unit[], ctx?: SummaryWindowCtx) => Promise<{ units, dropped, tokens }>",
       "fails": "Never throws; falls back to a plain `assemble` when unwired, when everything fits, or when there are < 2 older turns to fold — never worse than FIT.",
-      "example": "import { summaryWindow } from 'litectx'\nconst out = await summaryWindow(transcript, { budget: 8000, keepRecent: 6, summarize: async (t) => callModel(t) })"
+      "example": "import { summaryWindow } from 'litectx'\nconst out = await summaryWindow(transcript, { budget: 8000, summaryKeep: 6, summarize: async (t) => callModel(t) })"
     },
     {
       "name": "toWriteAction",

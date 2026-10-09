@@ -2,7 +2,7 @@
 // Thin CLI over the library — the in-repo consumption surface (PRD §14 #5).
 // `index` builds (incrementally re-indexes) the index; `recall` queries it.
 //
-//   Embeddings (semantic recall) are ON by default; pass --no-embeddings for the BM25-only base.
+//   Embeddings (meaning re-rank) are ON by default; pass --no-embeddings for the BM25-only base.
 //   litectx index [root] [--force] [--no-embeddings]
 //   litectx recall <query...> [--root <dir>] [--kind <code|doc|fact|episode>] [-n <n>] [--no-embeddings] [--no-log]
 //   litectx get <id> [--lines <A-B>] [--root <dir>] [--no-log]

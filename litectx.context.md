@@ -22,18 +22,24 @@ but everything you need to *use* litectx is here.
 
 ## What this is
 
-litectx is a local, searchable **memory across kinds** for AI agents, in one
-**SQLite** file. Content enters two ways — **`index()`** reads a repository
-(code + markdown) from disk, and **`remember()`** writes knowledge that isn't a
-file (facts, episodes, runtime docs/FAQs). Over that one store it serves ranked
-**recall** (search, kind-scoped) and **impact** (called-by/calling →
-blast-radius + risk bucket). It is an `import`-able library that runs **in your
-process** against a file on disk — no daemon, no service, no network, no
-telemetry. The views read **one** graph built by a single `index()` pass —
-`impact()` is computed on demand and never re-extracts, so a symbol you
+litectx is a local search + memory layer for coding agents, in one **SQLite** file —
+`import`-able, running **in your process**: no daemon, no service, no network, no telemetry, no
+LLM inside. It does three jobs, each returning addresses rather than text dumps:
+
+- **"What breaks if I change this?"** — `impact()`: called-by/calling, blast radius, and a
+  risk bucket (code only; tree-sitter + ripgrep, no LSP). See *Public API → impact*.
+- **"Where in the docs is this decided?"** — `recall()` returns doc sections (and code chunks)
+  as `file:lines`; `get()` fetches one. Matching is word-gated, with an optional re-rank by
+  meaning. See *Public API → recall* and the measured result under *Gotchas*.
+- **"What did we learn last time?"** — `remember()` / `recall()` facts and episodes across
+  sessions, found by meaning when embeddings are on; `promotions` flags candidates, a human
+  confirms. See *Public API → remember*.
+
+Content enters two ways — **`index()`** reads a repository (code + markdown) from disk, and
+**`remember()`** writes knowledge that isn't a file. The views read **one** graph built by a
+single `index()` pass — `impact()` is computed on demand and never re-extracts, so a symbol you
 surface with `recall()` is the same node `impact()` assesses (pinned by
-`test/composing.test.js`). The graph is built to grow further (ACT-R-style
-activation signals scored on the recall log) under that same one-graph contract.
+`test/composing.test.js`).
 
 **The entry path decides the available kinds:** files via `index()` →
 `code`/`doc` (by extension — you cannot index a file *as* a fact; distilling a
@@ -1352,16 +1358,17 @@ On fresh real questions this put the right section in the top 5 for 22/30 (barel
 
 ## Architecture
 
-One SQLite file holds two FTS5 tables — `docs` (code + all docs, keyword-exact;
-indexed files and direct-written docs share it, discriminated by a `source`
-column) and `mem` (facts + episodes, porter-stemmed) — plus a `file_index` table
+One SQLite file holds three FTS5 tables — `docs` (code only, keyword-exact),
+`doc_fts` (docs, same unstemmed tokenizer; file-indexed and direct-written docs
+share it, discriminated by a `source` column) and `mem` (facts + episodes,
+porter-stemmed) — plus a `file_index` table
 for incremental change detection, a `nodes` table for the symbol substrate,
 `edges` (imports → spreading; impact), `git_sig` (activity metadata),
 `file_embeddings` (the opt-in tier), `recall_log` (the slice-7 audit/access
 log), and two **non-FTS sidecars** for written memory — `mem_text` (verbatim
 text) and `mem_meta` (the sealed opaque-metadata passthrough, RT-3): both live
 outside every FTS table by design, so they're returned but never searched. A `kind` routes to exactly one FTS table, and kinds never share a ranking,
-so BM25 scores never merge across the two. Indexing is **routed by file
+so BM25 scores never merge across tables. Indexing is **routed by file
 extension** (never by content) and
 prefers `git ls-files` (tracked files, respects `.gitignore`), falling back to a
 filesystem walk that skips the usual noise directories. The whole thing runs
@@ -1404,10 +1411,27 @@ synchronously against the file except parsing, which uses an async WASM runtime.
 
 ## Gotchas
 
+- **Doc and code recall is word-gated; meaning only re-ranks.** A `code`/`doc` hit must share a
+  query word (BM25 is the gate). Embeddings re-rank that pool but never nominate into it, so a
+  paraphrase with no shared word will not surface a doc or code hit. Only `fact`/`episode` memory
+  is nominated by meaning (the KNN union). Use recall to find *where* to look, then `get` the
+  section or grep inside that file.
+- **Measured docs-search result (2026-10-09, pre-registered).** 24 fresh questions (12 plain, 12
+  reworded) about two projects' md docs, 2 runs each, at about 50 and about 1,500 docs. An agent
+  with litectx + grep answered as well as grep alone (correct 45 vs 36 at the small
+  size, 42 vs 42 at the large; the small-size edge is largely the neighbour-section reads below) at about 25-35% lower total cost (cost ratio 0.65 small, 0.75 large).
+  Tokens: about a third fewer when the question's wording differs from the docs (ratio 0.67 at
+  both sizes), about 7% fewer when it matches (0.93); across all questions the median-token ratio
+  was 0.88 / 0.92, which missed the pre-registered 0.75 bar. The saving held as docs grew about
+  30x. Limits: one owner's two repos, a padded (not naturally grown) corpus at the large size,
+  small n (24 questions, k = 2), and the edge comes partly from reading a section together with
+  its neighbours rather than from ranking alone. Grep-only's dominant failure was reading too
+  narrowly and missing facts.
+
 - **`index()` and `recall()` are async; `size()`/`close()` are sync.** `await` index and
   recall; don't `await` size/close.
-- **Recall is BM25 + spreading** (kind-scoped), plus **semantic cosine** when the embeddings
-  tier is on. **recency** effects (base-level activation) remain the access-log tier and
+- **Recall is BM25 + spreading** (kind-scoped), plus a **semantic-cosine re-rank** when the embeddings
+  tier is on (it nominates only for fact/episode). **recency** effects (base-level activation) remain the access-log tier and
   won't appear from git history alone — the POC showed git-seeded recency is repo-dependent,
   so git ships as grounding metadata, not ranking weight.
 - **Unscoped `get(id)` across tenants.** When several tenants share an id, an unscoped non-strict

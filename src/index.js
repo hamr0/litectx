@@ -968,7 +968,7 @@ export class LiteCtx {
    * import { LiteCtx } from 'litectx'
    * const ctx = new LiteCtx({ root: process.cwd() })
    * const view = await ctx.impact('parseConfig')
-   * if (view) console.log(view.risk, view.callers.length) // 'low' | 'med' | 'high'
+   * if (view) console.log(view.risk, view.callers.length) // 'low' | 'medium' | 'high'
    */
   async impact(symbol) {
     return computeImpact(this.store, this.root, this.include, symbol);
@@ -1296,7 +1296,7 @@ export class LiteCtx {
    *   untrusted-input bounds (defaults 10 MB / 2000 / 30 s; `maxSize` also caps a blob).
    * @returns {Promise<{ id: string, kind: "doc", format: string, mode: "chunked" | "blob", chunks: number }>}
    * @category ingest
-   * @when Store an uploaded document (pdf/docx/md/txt/csv → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.
+   * @when Store an uploaded document (pdf/docx/md/txt/csv/eml → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.
    * @fails Throws when a required optional peer dep is missing (pdf → `pdfjs-dist`, docx → `mammoth`) or input exceeds `maxSize`/`maxPages`; under `strictScope`, throws when `scope` is omitted.
    * @signature liteCtx.ingest(buffer: Uint8Array, opts?: { filename?, format?, id?, scope?, expiresAt? }) => Promise<{ id, kind, format, mode, chunks }>
    * @example
