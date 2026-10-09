@@ -1081,3 +1081,17 @@ Replayed the 41 E `get` calls under five fetch policies (`poc/tinymem-step2-fetc
 ### Next (owner-approved 2026-10-09)
 
 Paraphrase questions: wording differs from the docs, so grep needs exact terms. Written blind, audited, then a roughly $3 validation run.
+
+## Step 3 — paraphrase validation (2026-10-09)
+
+### Audit and freeze
+- 16 paraphrase questions written blind; audit verdict 9 OK / 6 FIX / 1 dropped. Fixes: bareloop p01 (wording "tolerated", added CHANGELOG:54 and :3742 as accepted framings), p03 (added workflow-governance.md:100; two stale docs still say PARKED), p04 (removed leaked "out of memory"), p05 (30 s floor on the timeout, added metering-design:377-379), p07 (corroborating PRD:1017), p08 ("one paid trial", dropped the superseded last gold sentence; later state in CHANGELOG:1390-1395 and CLOSE-INTEGRITY-BUILD:84). bareagent p01 (dropped the time-span ask, docs disagree), p06 (reworded "decorated"). Dropped bareagent p03 (grep-easy). Kept bareagent p02 as easy-control. Final: bareloop 8, bareagent 7. Each fix notes "audit-fix 2026-10-09" in the question's notes; pre-fix copies are `*.prefix.json`. Sources are corpus-relative.
+- FROZEN sha256: `bareloop.json` 6df121f58bb8451f8932504e1b6c164aaa8a44be1aec4b98f1607c3dcc945087, `bareagent.json` 953565cca50c9ab1a0abd2c3a71f3d39baacbec0b7e4c7001f3e3385c3909f6e.
+
+### Validation run (docs-only, arms E and B, k = 2, x1, embeddings on)
+- Picked 13 (all but bareagent-p02 and bareloop-p03). All 52 runs were made (pilot r1 kept; same config), but run cost was $2.88, so full grading would have broken the $4 stop. Graded the first 10 of the list (bareagent-p06/07/08 runs set aside in `m3/ungraded`, not graded): 40 runs, one blind pool, same grader, second-grade rule fired once (a partial, agreed), no third.
+- Wins: E 19/20, B 20/20. Only miss: bareagent-p01 E r2 (partial). All other cells 2/2 vs 2/2. Ceiling again; no separation, paraphrase wording did not make grep fail.
+- Median tokens: E 23.7k, B 39.9k. Median lines read: E 136, B 132.5 (bytes 12.0k vs 20.2k).
+- Finding cost (the point of the test): E's first recall listed a gold file in 15/20 runs (median rank 2; rank 1 in 6; top 5 in 12); with the section range overlapping a gold range 12/20 (median rank 1.5). B's greps to first touch of a gold file: touched 16/20, median 1.5 greps (mean 1.81; 1 grep in 8; 3 or more in 3); median total 2 greps/run. So grep found the files about as fast as litectx's first recall, with the agent's own wording.
+- Spend: runs $2.877 + grading $0.963 = $3.84 (under the $4 stop).
+- Caveat: validation only, k = 2, 13 questions picked (10 graded), one grader; at the ceiling it cannot show a difference in accuracy. The reliable difference is cost: B used about 1.7x E's tokens here.
