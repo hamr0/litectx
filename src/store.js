@@ -73,6 +73,7 @@ function scaleScores(rows) {
  * @property {string} kind
  * @property {string} format
  * @property {number} score   the value the list is ordered by: BM25 (scaled per query) + import spreading; with embeddings on, that plus `embedWeight` × the query↔hit cosine (each scaled per query). Higher = more relevant. Comparable within one result list only, not across queries.
+ * @property {boolean} keyword  true = the hit matched at least one query term lexically (FTS/BM25 pool); false = added by meaning only (a KNN nominee, embeddings on, fact/episode). Use this, not `score > 0`, to tell a word match from a meaning-only hit.
  * @property {number} [cosine]  raw query↔hit semantic similarity in [-1,1] (fact/episode, embeddings
  *                            mode only; absent in BM25-only mode). The KNN cosine litectx already
  *                            computes for ranking, surfaced verbatim (raw; `score` carries its scaled form when embeddings are on).
@@ -2485,7 +2486,7 @@ export class Store {
       .filter((c) => c.cos > 0)
       .sort((a, b) => b.cos - a.cos)
       .slice(0, k)
-      .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, git: null }));
+      .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, keyword: false, git: null }));
   }
 
   close() {

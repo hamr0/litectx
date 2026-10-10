@@ -831,9 +831,9 @@ export class LiteCtx {
    * fresh from disk (matching {@link get}'s freshness). `null` when the file is gone, drifted, or the id
    * is unknown. Mutates in place; bounded disk reads (≤ hits, file-kind only). Note: does NOT log a
    * fetch — body-fill is part of recall, not a `get`, so it never pollutes the demand signal.
-   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   * @param {Omit<import("./store.js").Hit, "score" | "keyword">[]} hits  any hit-like row (recall's `Hit`, or
    *   `recentMemory`'s unranked scoreless row) — reads `path`/`chunk`, writes `body`; `score` unused
-   * @returns {Omit<import("./store.js").Hit, "score">[]}
+   * @returns {Omit<import("./store.js").Hit, "score" | "keyword">[]}
    */
   _attachBodies(hits) {
     const cache = new Map();
@@ -870,9 +870,9 @@ export class LiteCtx {
    * sealed passthrough. One batched lookup; a hit whose path carries no metadata (every file, and
    * memory written without meta) is left untouched, so this is a no-op on pure-code recall. Parsed
    * here because the facade owns the JSON boundary; the store only ever holds/returns the raw string.
-   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   * @param {Omit<import("./store.js").Hit, "score" | "keyword">[]} hits  any hit-like row (recall's `Hit`, or
    *   `recentMemory`'s unranked scoreless row) — reads `path`, writes `meta`; `score` unused
-   * @returns {Omit<import("./store.js").Hit, "score">[]}
+   * @returns {Omit<import("./store.js").Hit, "score" | "keyword">[]}
    */
   _attachMeta(hits) {
     if (!hits.length) return hits;
@@ -907,6 +907,7 @@ export class LiteCtx {
     if (!qvec) {
       const hits = match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path — BM25-only, no `cosine` field (a hit has no query vector to compare against)
       dropSource(hits); // `source` is an internal routing field; never surface it
+      for (const h of hits) h.keyword = true; // every BM25-only hit matched a query word
       return hits;
     }
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
@@ -939,10 +940,10 @@ export class LiteCtx {
     const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
     const cN = minmax(raw);
     return cand
-      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
+      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i], k: i < pool.length })) // k = came from the FTS pool (matched a query word), not a KNN nominee
       .sort((a, b) => b.f - a.f)
       .slice(0, n)
-      .map((x) => ({ ...x.h, score: x.f })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
+      .map((x) => ({ ...x.h, score: x.f, keyword: x.k })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
   }
 
   /**
@@ -1587,7 +1588,7 @@ export class LiteCtx {
    * `use` for whatever is newest.
    *
    * @param {{ scope?: string | symbol, kind?: string | string[], n?: number, body?: boolean }} [opts]
-   * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null, occurredAt?: number|null })[]}
+   * @returns {(Omit<import("./store.js").Hit, "score" | "keyword"> & { createdAt: number|null, occurredAt?: number|null })[]}
    * @category memory
    * @when Ground on the latest written memory when a query has no rankable term (all-stopword "what did I say") and `recall` returns `[]`. Exposed to the model via MCP.
    * @fails Under `strictScope`, throws when `scope` is omitted; throws if one call mixes the doc axis with fact/episode (distinct scope stores). Logs no recall (recency is not demand).

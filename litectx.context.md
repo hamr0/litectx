@@ -315,6 +315,7 @@ return shape follows the `kind` argument:
   kind: string,    // "code" | "doc" | "fact" | "episode"
   format: string,  // "ts" | "js" | "py" | "md" | "text" | ...
   score: number,   // the value the list is ordered by: BM25 + import-spreading (+ embedWeight × cosine with embeddings on), each scaled per query; higher = more relevant; comparable within one list only
+  keyword: boolean, // true = matched a query word (FTS/BM25 pool); false = added by meaning only (KNN nominee, embeddings on, fact/episode)
   git: { commits: number, lastCommit: number|null } | null,  // activity metadata; null = no history
   chunk: { symbol: string|null, nodeType: string,            // the best-matching chunk INSIDE the
            startLine: number, endLine: number } | null,      // hit — a function pointer, not just a file
@@ -327,6 +328,11 @@ return shape follows the `kind` argument:
   body?: string | null,            // the hit's content — ONLY when called with { body: true } (see above)
   meta?: Record<string, unknown> } // opaque caller metadata (RT-3), verbatim; written memory only
 ```
+> `keyword` tells a word match from a meaning-only hit: `true` = the hit shares at least one query
+> term (it came from the lexical pool); `false` = a KNN nominee added by meaning alone. Use `keyword`,
+> **not `score > 0`** — `score` is the fused ordering value, so a meaning-only nominee scores > 0 too.
+> BM25-only mode: always `true`.
+>
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
 > from one `git log` pass at index time. It never affects ranking; `null` means no commit history
 > (a non-git tree, or a tracked-but-uncommitted file).
