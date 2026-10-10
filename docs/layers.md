@@ -91,12 +91,12 @@ the harness (the program driving the model). litectx only offers tools for manag
 
 | Tool | What it does | Where |
 |---|---|---|
-| `stash(id, text)` / `peek(id)` / `evict(sel)` | Park a big payload, keep a handle, preview its head and tail, delete it later. | `src/index.js:1390,1420,1446` |
+| `stash(id, text)` / `peek(id)` / `evict(sel)` | Park a big payload, keep a handle, preview its head and tail, delete it later. | `src/index.js:1389,1419,1445` |
 | `get(id)` on a stash id | Bring the whole payload back. | `src/store.js:1678-1684` |
 | `assemble(units, {budget})` | Keep pinned units and the newest, drop the oldest, never split a tool-call/result pair. | `src/assemble.js:88` |
 | `compress(node, {level})` | Render a code chunk as full text, signature only, or a name marker. | `src/compress.js:38` |
 | `summaryWindow` / `trim` | Fold old turns into a summary the *host* writes; or evict by size or count. | `src/assemble.js:201,293` |
-| `get(path, {startLine, endLine})` | Fetch one chunk instead of a whole file. | `src/index.js:1066-1097` |
+| `get(path, {startLine, endLine})` | Fetch one chunk instead of a whole file. | `src/index.js:1065-1097` |
 
 **How it gets in.** The caller hands litectx a list of "units" (`{id, role, content, ...}`); litectx never
 reads the transcript itself. `src/assemble.js:32`.
@@ -130,7 +130,7 @@ reads the transcript itself. `src/assemble.js:32`.
 - `ingest(buffer, {filename})` routes by extension (`src/docparse.js:59-70`): `md pdf docx txt text log csv eml`
   are **chunked** into ~800-char segments (`src/docparse.js:26`) and stored as `doc` rows with ids `<id>#<n>`
   (`src/index.js:1340-1342`). Any other type is stored **byte-exact** in `blobs`, with only the filename
-  searchable (`src/index.js:1318-1329`, `src/store.js:992-1009`).
+  searchable (`src/index.js:1317-1328`, `src/store.js:992-1009`).
 
 **How long it lives.** Until `index()` sees the file change (rows are replaced) or vanish (rows are deleted)
 (`src/store.js:813-820`). Written docs and blobs live until `forget`, or until their optional `expiresAt` passes and
@@ -155,13 +155,13 @@ instead of reporting "0 callers" (`src/impact.js:29`, `src/impact.js:66`). Only 
 **Holds.** Short "this happened" notes the agent writes, e.g. "deploy failed on missing env var".
 
 **How it gets in.** `remember(id, text, {kind:"episode"})`. The write stamps `occurred_at` (default now)
-(`src/index.js:1169`) and records the instance's `session` in `mem_scope` (`src/store.js:924-928`). Optionally embeds the
-text first (`src/index.js:1173`).
+(`src/index.js:1168`) and records the instance's `session` in `mem_scope` (`src/store.js:924-928`). Optionally embeds the
+text first (`src/index.js:1172`).
 
 **How long it lives.** A rolling window, default 30 days, set by `episodeWindowDays`
 (`src/index.js:50,286`; a non-positive value is rejected at `src/index.js:282-285`). Old episodes are deleted
 **on the next episode write**, before the new row is inserted, so a write never evicts itself
-(`src/index.js:1179-1180`, `src/store.js:1461-1481`). The delete cascades to the text, meta, scope, embedding, and
+(`src/index.js:1178-1179`, `src/store.js:1461-1481`). The delete cascades to the text, meta, scope, embedding, and
 recall-log rows of those episodes. There is no timer; nothing prunes if nobody writes an episode.
 
 **How it is found.** `recall({kind:"episode"})`, `recentMemory({kind:"episode"})`, `enumerate({kind:"episode"})`.
@@ -179,7 +179,7 @@ Episodes are also fenced by `session`: a reader with a session set sees its own 
 (`src/store.js:909`, key built at `src/store.js:899`).
 
 **How long it lives.** Until `forget`. Facts are never pruned by time. A per-fact `expiresAt` is silently ignored
-for facts; expiry exists on the doc axis only (`src/index.js:1180` passes it, but `src/store.js:908-929` never reads it for `mem`).
+for facts; expiry exists on the doc axis only (`src/index.js:1179` passes it, but `src/store.js:908-929` never reads it for `mem`).
 
 **How it is found.** `recall({kind:"fact"})`. With embeddings on, the 8 stored vectors nearest the query are
 added to the candidate pool even if they share no word with it (`src/index.js:40,913`; `src/store.js:2469-2489`).
@@ -194,8 +194,8 @@ added to the candidate pool even if they share no word with it (`src/index.js:40
 | Consumer acts | writes a new fact (`remember`), or re-`remember`s with `by:"human"`, or `forget`s | caller's job |
 
 The count uses only `action='recall'` rows. A `get` writes a separate `'fetch'` row that these two lists ignore
-(`src/store.js:1409,1442`; `src/index.js:1096`), so reading a hit after finding it does not double-count.
-The window is the same value for pruning and for promotion eligibility (`src/index.js:1525`), so a window shorter than the
+(`src/store.js:1409,1442`; `src/index.js:1095`), so reading a hit after finding it does not double-count.
+The window is the same value for pruning and for promotion eligibility (`src/index.js:1524`), so a window shorter than the
 time an episode needs to earn 10 recalls starves promotion.
 
 **Tables.** Same as episodes.
@@ -211,11 +211,11 @@ time an episode needs to earn 10 recalls starves promotion.
 
 What **is** used for ranking, in full:
 
-1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2115-2158`), min-max scaled per query to [0,1] (top lexical hit = 1; a lone hit = 1) by one helper, `scaleScores`, for every kind.
+1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2115-2137` for fact/episode, `src/store.js:2147-2160` for code/doc), min-max scaled per query to [0,1] (top lexical hit = 1; a lone hit = 1) by one helper, `scaleScores`, for every kind.
 2. For code only: `+0.3 x` the best normalised score among the file's import neighbours in the same result pool
    (`src/index.js:85`, `src/store.js:2180-2217`). Docs have no import edges, so nothing is added (`src/store.js:2196`).
 3. Only if embeddings are on: a cosine term, `norm(score) + weight x norm(cosine)`, weight 1.0
-   (`src/index.js:33,939-946`).
+   (`src/index.js:33,939-945`).
 
 `chunk_edits` is only written on an incremental pass over an existing index; a cold build or full rebuild writes
 none (`src/index.js:497` passes `prev.size > 0`).
@@ -234,7 +234,7 @@ Two separate fences, one per axis, plus a switch that makes forgetting a scope a
 write, so a tenant cannot forge another tenant's key (`src/store.js:344-346`, used at `src/store.js:903-904`).
 
 - **Tenant view.** `ctx.scoped("tenant:a")` returns a `ScopedView` that injects that scope into every call
-  (`src/index.js:663-668`, `src/index.js:1735-1801`). Reads see `tenant ∪ shared`.
+  (`src/index.js:663-668`, `src/index.js:1734-1800`). Reads see `tenant ∪ shared`.
 - **`GLOBAL`.** A symbol meaning "the shared tier only" (`src/index.js:118`). Reads see rows with no scope; writes
   go to the shared tier (`src/index.js:569-575`).
 - **Omitted scope.** Falls back to the instance's `owner` (memory axis) or sees everything (doc axis).
@@ -431,13 +431,13 @@ flowchart TD
 2. For an indexed file with a range, `_chunkState` reads the file, hashes it, and compares to the hash recorded at
    index time (`src/index.js:806-818`).
 3. **Gone from disk** returns `null`. **Changed** throws `StalePointerError`, because the same line range would now be
-   different code (`src/index.js:1089`). **Same** serves the stored body unchanged (`src/index.js:1091`,
+   different code (`src/index.js:1088`). **Same** serves the stored body unchanged (`src/index.js:1090`,
    `src/store.js:1786`).
 4. The range is an **address, not an instruction**: it must match a stored chunk's start and end exactly, or the
    answer is `null`. It never falls back to the whole file (`src/store.js:1786-1791`).
 5. `recall({body:true})` uses the same `_chunkState` check, but nulls a single drifted hit instead of throwing, and
    still serves a chunk whose file was deleted (`src/index.js:838-850`).
-6. A successful `get` writes a `'fetch'` log row; `log:false` skips it (`src/index.js:1096`).
+6. A successful `get` writes a `'fetch'` log row; `log:false` skips it (`src/index.js:1095`).
 
 ### 4.4 `remember()` to prune to promotion candidates
 
@@ -467,11 +467,11 @@ sequenceDiagram
   S-->>C: [{path, hits}] - a flag, not an action
 ```
 
-1. Validate kind and `by` (`src/index.js:1142-1148`). Resolve the scope for the right axis (`src/index.js:1153-1154`).
+1. Validate kind and `by` (`src/index.js:1142-1146`). Resolve the scope for the right axis (`src/index.js:1152-1153`).
 2. A wired write gate can deny before anything happens, so a denied write embeds nothing and prunes nothing
-   (`src/index.js:1157-1167`).
-3. Embed if the tier is on (`src/index.js:1173`).
-4. For an episode, delete episodes older than the window **first** (`src/index.js:1179`), then insert (`src/index.js:1180`).
+   (`src/index.js:1161-1166`).
+3. Embed if the tier is on (`src/index.js:1172`).
+4. For an episode, delete episodes older than the window **first** (`src/index.js:1178`), then insert (`src/index.js:1179`).
 5. `writeMemory` replaces the row for the same `(scope, id)` and writes all sidecar rows in one transaction
    (`src/store.js:887-976`).
 6. Later recalls fill `recall_log`. `promotionCandidates` and `reviewCandidates` read it with the same owner/session
