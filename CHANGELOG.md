@@ -5,6 +5,20 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.35.0] — 2026-10-10
+
+### Changed
+
+- **Breaking-ish: `score` values changed.** `recall()` hits now carry the value the list is ordered by. With embeddings on, `score` was the pre-fusion BM25 while the list was ordered by the fused value, so printed scores could contradict the order; now `score` is the fused value. `score` is scaled per query: the weakest BM25 hit scores 0 and a lone hit scores 1 (with embeddings on, a lone hit scores 1 plus the embed weight). With embeddings off, single-hit and fact/episode lists used to return raw BM25 (a lone top hit could print 0.00); every kind is now scaled the same way. Ordering is unchanged (benches byte-identical). **Never filter on `score` or `score > 0`**: in BM25-only mode the weakest hit scores 0, and with embeddings on a meaning-only nominee scores above 0. Use `keyword` (below).
+
+### Added
+
+- **`Hit.keyword` (boolean) on `recall()` hits** (single-kind, grouped, scoped, `body: true`, and MCP). `true` = the hit matched the keyword (FTS) index, including id/path tokens and, for fact/episode, stemmed forms. `false` = a meaning-only KNN nominee (fact/episode, embeddings on). With embeddings off it is always `true`. Use `keyword`, not `score > 0`, to tell a word match from a meaning-only hit. Not present on `recentMemory`, `enumerate` or `get`; the `liteCtxAsStore` shape and the CLI line format are unchanged.
+
+### Fixed
+
+- A word-matching fact/episode ranked past the 400-row lexical pool could re-enter as a KNN nominee and read `keyword: false`; it now reads `keyword: true`.
+
 ## [0.34.0] — 2026-10-10
 
 ### Changed

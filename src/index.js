@@ -831,9 +831,9 @@ export class LiteCtx {
    * fresh from disk (matching {@link get}'s freshness). `null` when the file is gone, drifted, or the id
    * is unknown. Mutates in place; bounded disk reads (≤ hits, file-kind only). Note: does NOT log a
    * fetch — body-fill is part of recall, not a `get`, so it never pollutes the demand signal.
-   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   * @param {Omit<import("./store.js").Hit, "score" | "keyword">[]} hits  any hit-like row (recall's `Hit`, or
    *   `recentMemory`'s unranked scoreless row) — reads `path`/`chunk`, writes `body`; `score` unused
-   * @returns {Omit<import("./store.js").Hit, "score">[]}
+   * @returns {Omit<import("./store.js").Hit, "score" | "keyword">[]}
    */
   _attachBodies(hits) {
     const cache = new Map();
@@ -870,9 +870,9 @@ export class LiteCtx {
    * sealed passthrough. One batched lookup; a hit whose path carries no metadata (every file, and
    * memory written without meta) is left untouched, so this is a no-op on pure-code recall. Parsed
    * here because the facade owns the JSON boundary; the store only ever holds/returns the raw string.
-   * @param {Omit<import("./store.js").Hit, "score">[]} hits  any hit-like row (recall's `Hit`, or
+   * @param {Omit<import("./store.js").Hit, "score" | "keyword">[]} hits  any hit-like row (recall's `Hit`, or
    *   `recentMemory`'s unranked scoreless row) — reads `path`, writes `meta`; `score` unused
-   * @returns {Omit<import("./store.js").Hit, "score">[]}
+   * @returns {Omit<import("./store.js").Hit, "score" | "keyword">[]}
    */
   _attachMeta(hits) {
     if (!hits.length) return hits;
@@ -886,7 +886,7 @@ export class LiteCtx {
 
   /**
    * Rank one kind. Dual path (BM25 + spreading) when `qvec` is null; tri-hybrid when it's the query
-   * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)`, then sliced to
+   * vector — a wider BM25-gated pool re-ranked by `norm(dual) + weight·norm(cosine)` (that fused value becomes each hit's `score`), then sliced to
    * `n`. Cosine runs on the pool plus at most {@link KNN_K} nominees, so it stays O(pool), never
    * O(corpus) for files.
    *
@@ -907,16 +907,23 @@ export class LiteCtx {
     if (!qvec) {
       const hits = match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path — BM25-only, no `cosine` field (a hit has no query vector to compare against)
       dropSource(hits); // `source` is an internal routing field; never surface it
+      for (const h of hits) h.keyword = true; // every BM25-only hit came from the FTS index
       return hits;
     }
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
+    for (const h of pool) h.keyword = true;
+    // a nominee can still contain the query word (it ranked past the pool's row cap) — ask the same FTS index
+    if (match && knn.length) {
+      const hit = this.store.memMatches(match, kind, knn.map((h) => h.path));
+      for (const h of knn) h.keyword = hit.has(h.path);
+    }
     const cand = pool.concat(knn);
     if (!cand.length) return cand;
     // The raw query↔hit cosine — computed ONCE, both surfaced on the hit (Feature A) and fused below.
     // `cosine` here is the UNBLESSED semantic similarity in [-1,1]: separable in aggregate but NOT a
     // per-query threshold (R-S8 — no usable cut), so it is surfaced as a raw signal, never a label; the
-    // consumer owns any threshold. `score` (blended BM25 + spreading) is untouched. 0 for an un-embedded
+    // consumer owns any threshold. 0 for an un-embedded
     // row (a fact written before the tier was on) — `cosine()` guards a missing vector, never throws.
     // `doc` is the one recall kind whose rows span BOTH vector tables — a file `.md` (file_embeddings) and
     // a written doc (mem_embeddings) can even share a path — so route each candidate to the table its own
@@ -934,16 +941,15 @@ export class LiteCtx {
     // to re-rank internally (below), but the doctrine gates it there (a code query shares identifiers with
     // its answer, so cosine is a weaker, gated signal), so it is not surfaced as a per-hit score.
     if (MEM_KINDS.has(kind)) cand.forEach((h, i) => (h.cosine = raw[i]));
-    if (cand.length < 2) return cand.slice(0, n);
     // nominees carry no lexical score — they enter at the pool floor and rank on cosine alone
     const floor = pool.length ? Math.min(...pool.map((h) => h.score)) : 0;
     const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
     const cN = minmax(raw);
     return cand
-      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
+      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] })) // keyword: matched the FTS index (pool, or a nominee the FTS check confirmed), else meaning-only
       .sort((a, b) => b.f - a.f)
       .slice(0, n)
-      .map((x) => x.h);
+      .map((x) => ({ ...x.h, score: x.f })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
   }
 
   /**
@@ -1588,7 +1594,7 @@ export class LiteCtx {
    * `use` for whatever is newest.
    *
    * @param {{ scope?: string | symbol, kind?: string | string[], n?: number, body?: boolean }} [opts]
-   * @returns {(Omit<import("./store.js").Hit, "score"> & { createdAt: number|null, occurredAt?: number|null })[]}
+   * @returns {(Omit<import("./store.js").Hit, "score" | "keyword"> & { createdAt: number|null, occurredAt?: number|null })[]}
    * @category memory
    * @when Ground on the latest written memory when a query has no rankable term (all-stopword "what did I say") and `recall` returns `[]`. Exposed to the model via MCP.
    * @fails Under `strictScope`, throws when `scope` is omitted; throws if one call mixes the doc axis with fact/episode (distinct scope stores). Logs no recall (recency is not demand).

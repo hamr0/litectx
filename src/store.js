@@ -18,6 +18,25 @@ const STASH_HEAD = 160;
 const STASH_TAIL = 80;
 
 /**
+ * The one definition of a BM25-only `score`: raw -bm25 min-max scaled to [0,1] across the list (top
+ * lexical hit = 1; a lone hit, or all-equal scores, = 1). Raw bm25 magnitudes are corpus-dependent and
+ * can print as 0.00 for a top hit, so every kind (code/doc/fact/episode) is scaled here, once.
+ * @template {{ score: number }} T
+ * @param {T[]} rows
+ * @returns {T[]}
+ */
+function scaleScores(rows) {
+  if (!rows.length) return rows;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const r of rows) {
+    if (r.score < lo) lo = r.score;
+    if (r.score > hi) hi = r.score;
+  }
+  return rows.map((r) => ({ ...r, score: hi > lo ? (r.score - lo) / (hi - lo) : 1 }));
+}
+
+/**
  * @typedef {Object} DocRow
  * @property {string} path    repo-relative file path
  * @property {string} kind    "code" | "doc"
@@ -53,10 +72,11 @@ const STASH_TAIL = 80;
  * @property {string} path
  * @property {string} kind
  * @property {string} format
- * @property {number} score   higher = more relevant
+ * @property {number} score   the value the list is ordered by: BM25 (scaled per query) + import spreading; with embeddings on, that plus `embedWeight` × the query↔hit cosine (each scaled per query). Higher = more relevant. Comparable within one result list only, not across queries.
+ * @property {boolean} keyword  true = the hit matched the keyword (FTS) index (it also covers id/path tokens and, for fact/episode, stemmed forms: "refunded" matches "refund"); false = added by meaning only (a KNN nominee that doesn't match, embeddings on, fact/episode). Use this, not `score > 0`, to tell a word match from a meaning-only hit.
  * @property {number} [cosine]  raw query↔hit semantic similarity in [-1,1] (fact/episode, embeddings
  *                            mode only; absent in BM25-only mode). The KNN cosine litectx already
- *                            computes for ranking, surfaced verbatim — NOT re-normalized into `score`.
+ *                            computes for ranking, surfaced verbatim (raw; `score` carries its scaled form when embeddings are on).
  *                            An UNBLESSED signal: it separates related from unrelated in aggregate but
  *                            has no reliable per-query threshold (R-S8), so the caller owns any cut.
  * @property {import("./gitsig.js").GitSig | null} [git]  file-level git activity (grounding, not scored)
@@ -2115,7 +2135,7 @@ export class Store {
           )
           .all({ match, kind, memSeeAll, memOwner, sid: this.session, limit })
       );
-      return this.attachGit(rows);
+      return this.attachGit(scaleScores(rows));
     }
     // Pull a pool wider than `limit` so spreading can pull a graph-adjacent file up into the
     // top results. 200 covers the validated bench depth; bounded so the neighbour query's
@@ -2158,15 +2178,13 @@ export class Store {
         if (x) r.chunk = { symbol: x.symbol, nodeType: x.node_type, startLine: x.start_line, endLine: x.end_line };
       }
     }
-    if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(rows.slice(0, limit));
+    if (spreadWeight <= 0 || rows.length < 2) return this.attachGit(scaleScores(rows).slice(0, limit));
 
     // min–max normalise BM25 across the pool so it composes with the [0,1] spread term.
-    const scores = rows.map((r) => r.score);
-    const lo = Math.min(...scores);
-    const hi = Math.max(...scores);
+    const scaled = scaleScores(rows).map((r) => r.score);
     // keyed by ROW id (rid), not path: an md file is several rows, so path keys would collapse them.
     /** @type {Map<number, number>} */
-    const norm = new Map(rows.map((r) => [Number(r.rid), hi > lo ? (r.score - lo) / (hi - lo) : 1]));
+    const norm = new Map(rows.map((r, i) => [Number(r.rid), scaled[i]]));
     // a path's neighbour value = the best of its rows in the pool (adjacency itself stays path-level)
     /** @type {Map<string, number>} */
     const pathNorm = new Map();
@@ -2468,7 +2486,26 @@ export class Store {
       .filter((c) => c.cos > 0)
       .sort((a, b) => b.cos - a.cos)
       .slice(0, k)
-      .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, git: null }));
+      .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, keyword: false, git: null }));
+  }
+
+  /**
+   * Which of these written-memory rows match the FTS expression — the same `mem` table + MATCH string the
+   * lexical pool used. For KNN nominees that fell outside the pool's row cap: a row containing the query
+   * word must still read `keyword:true`. `paths` are physical keys (as `search`/`knnCandidates` return them).
+   * @param {string} match
+   * @param {string} kind
+   * @param {string[]} paths
+   * @returns {Set<string>}
+   */
+  memMatches(match, kind, paths) {
+    if (!paths.length) return new Set();
+    const rows = /** @type {{ path: string }[]} */ (
+      this.db
+        .prepare(`SELECT mem.path AS path FROM mem WHERE mem MATCH ? AND mem.kind = ? AND mem.path IN (${paths.map(() => "?").join(",")})`)
+        .all(match, kind, ...paths)
+    );
+    return new Set(rows.map((r) => r.path));
   }
 
   close() {

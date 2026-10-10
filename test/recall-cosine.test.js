@@ -1,6 +1,6 @@
 // Feature A (0.27.0) — surface the raw semantic cosine on recall hits (fact/episode, embeddings mode).
 // Uses an INJECTED synonym-stub embedder (hermetic, no model download): a query can be semantically
-// identical to a fact while sharing ZERO lexical terms, so `hit.score` (BM25/blended) is ~0 while
+// identical to a fact while sharing ZERO lexical terms, so the lexical part of `hit.score` is nil while
 // `hit.cosine` is high — proving the surfaced value IS the semantic similarity, not a re-normalized
 // blend. The value is UNBLESSED (raw [-1,1], no threshold implied); these pin the mechanism, the
 // aggregate separation, its match to an independent cosine, and its ABSENCE in BM25-only mode.
@@ -39,7 +39,7 @@ async function withCtx(opts, fn) {
   }
 }
 
-test("Feature A AC1: a zero-lexical-overlap semantic match surfaces a HIGH cosine where score is ~0", async () => {
+test("Feature A AC1: a zero-lexical-overlap semantic match surfaces a HIGH cosine with no lexical overlap", async () => {
   await withCtx({ embeddings: true }, async (ctx) => {
     await ctx.remember("fact:refund", "issue a reimburse to the customer", { kind: "fact" });
     // query shares NO token with the fact but the same "refund" semantic family → KNN-nominated
@@ -47,7 +47,7 @@ test("Feature A AC1: a zero-lexical-overlap semantic match surfaces a HIGH cosin
     assert.equal(hits.length, 1, "the fact is reachable by meaning alone (lexical gate would return nothing)");
     const h = hits[0];
     assert.ok(h.cosine > 0.9, `cosine is the semantic value, HIGH on a synonym match (got ${h.cosine})`);
-    assert.ok(!(h.score > 0.001), `score is BM25-blind on zero shared tokens — cosine, not score, carries the signal (score ${h.score})`);
+    assert.ok(Number.isFinite(h.score), "score is the fused ordering value (a lone nominee has no lexical rank to scale); cosine carries the raw semantic signal");
   });
 });
 
