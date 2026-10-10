@@ -907,11 +907,17 @@ export class LiteCtx {
     if (!qvec) {
       const hits = match ? this.store.search(match, kind, n, SPREAD_WEIGHT, filter) : []; // dual path — BM25-only, no `cosine` field (a hit has no query vector to compare against)
       dropSource(hits); // `source` is an internal routing field; never surface it
-      for (const h of hits) h.keyword = true; // every BM25-only hit matched a query word
+      for (const h of hits) h.keyword = true; // every BM25-only hit came from the FTS index
       return hits;
     }
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
+    for (const h of pool) h.keyword = true;
+    // a nominee can still contain the query word (it ranked past the pool's row cap) — ask the same FTS index
+    if (match && knn.length) {
+      const hit = this.store.memMatches(match, kind, knn.map((h) => h.path));
+      for (const h of knn) h.keyword = hit.has(h.path);
+    }
     const cand = pool.concat(knn);
     if (!cand.length) return cand;
     // The raw query↔hit cosine — computed ONCE, both surfaced on the hit (Feature A) and fused below.
@@ -940,10 +946,10 @@ export class LiteCtx {
     const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
     const cN = minmax(raw);
     return cand
-      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i], k: i < pool.length })) // k = came from the FTS pool (matched a query word), not a KNN nominee
+      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] })) // keyword: matched the FTS index (pool, or a nominee the FTS check confirmed), else meaning-only
       .sort((a, b) => b.f - a.f)
       .slice(0, n)
-      .map((x) => ({ ...x.h, score: x.f, keyword: x.k })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
+      .map((x) => ({ ...x.h, score: x.f })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25
   }
 
   /**

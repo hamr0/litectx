@@ -73,7 +73,7 @@ function scaleScores(rows) {
  * @property {string} kind
  * @property {string} format
  * @property {number} score   the value the list is ordered by: BM25 (scaled per query) + import spreading; with embeddings on, that plus `embedWeight` × the query↔hit cosine (each scaled per query). Higher = more relevant. Comparable within one result list only, not across queries.
- * @property {boolean} keyword  true = the hit matched at least one query term lexically (FTS/BM25 pool); false = added by meaning only (a KNN nominee, embeddings on, fact/episode). Use this, not `score > 0`, to tell a word match from a meaning-only hit.
+ * @property {boolean} keyword  true = the hit matched the keyword (FTS) index (it also covers id/path tokens and, for fact/episode, stemmed forms: "refunded" matches "refund"); false = added by meaning only (a KNN nominee that doesn't match, embeddings on, fact/episode). Use this, not `score > 0`, to tell a word match from a meaning-only hit.
  * @property {number} [cosine]  raw query↔hit semantic similarity in [-1,1] (fact/episode, embeddings
  *                            mode only; absent in BM25-only mode). The KNN cosine litectx already
  *                            computes for ranking, surfaced verbatim (raw; `score` carries its scaled form when embeddings are on).
@@ -2487,6 +2487,25 @@ export class Store {
       .sort((a, b) => b.cos - a.cos)
       .slice(0, k)
       .map(({ r }) => ({ path: r.path, kind: r.kind, format: r.format, score: 0, keyword: false, git: null }));
+  }
+
+  /**
+   * Which of these written-memory rows match the FTS expression — the same `mem` table + MATCH string the
+   * lexical pool used. For KNN nominees that fell outside the pool's row cap: a row containing the query
+   * word must still read `keyword:true`. `paths` are physical keys (as `search`/`knnCandidates` return them).
+   * @param {string} match
+   * @param {string} kind
+   * @param {string[]} paths
+   * @returns {Set<string>}
+   */
+  memMatches(match, kind, paths) {
+    if (!paths.length) return new Set();
+    const rows = /** @type {{ path: string }[]} */ (
+      this.db
+        .prepare(`SELECT mem.path AS path FROM mem WHERE mem MATCH ? AND mem.kind = ? AND mem.path IN (${paths.map(() => "?").join(",")})`)
+        .all(match, kind, ...paths)
+    );
+    return new Set(rows.map((r) => r.path));
   }
 
   close() {

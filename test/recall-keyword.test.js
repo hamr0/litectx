@@ -95,3 +95,18 @@ test("recentMemory / enumerate / get do NOT carry keyword", async () => {
     assert.equal("keyword" in (await ctx.get("f:lex")), false);
   });
 });
+
+test("regression: a word-matching nominee ranked past the 400-row BM25 pool is still keyword:true", async () => {
+  const ctx = new LiteCtx({ root: mkdtempSync(join(tmpdir(), "litectx-keyword-")), dbPath: ":memory:", embeddings: true, embedder: stub });
+  try {
+    for (let i = 0; i < 450; i++) await ctx.remember(`f:c${i}`, "refund refund refund weather login login login", { kind: "fact" });
+    // matches "refund" once among filler → BM25 rank > 400 (outside the pool), but KNN still nominates it
+    await ctx.remember("f:late", "refund " + "filler ".repeat(30) + "cash money", { kind: "fact" });
+    const hits = await ctx.recall("refund", { kind: "fact", n: 10 });
+    const late = by(hits, "f:late");
+    assert.ok(late, "late row returned");
+    assert.equal(late.keyword, true);
+  } finally {
+    ctx.close();
+  }
+});
