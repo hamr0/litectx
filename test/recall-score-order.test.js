@@ -110,3 +110,34 @@ for (const kind of ["code", "doc", "fact", "episode"]) {
     else await withCtx(false, run);
   });
 }
+
+// Embeddings ON, ONE candidate: minmax of a single element is 1 for both the lexical and the cosine
+// term, so the fused score is exactly 1 + embedWeight (2 in withCtx → 3). A `cand.length < 2`
+// early return used to hand back the raw pre-fusion score here.
+const EMBED_WEIGHT = 2; // embedWeight in withCtx
+
+for (const kind of ["code", "doc", "fact"]) {
+  test(`a single lexical hit scores exactly 1 + embedWeight, ${kind} kind, embeddings on`, async () => {
+    await withCtx(true, async (ctx) => {
+      const hits = await ctx.recall("sprocket", { kind }); // only beta carries "sprocket"; alpha's cosine is 0 so no KNN nominee
+      assert.equal(hits.length, 1, "exactly one candidate");
+      assert.equal(hits[0].score, 1 + EMBED_WEIGHT);
+    });
+  });
+}
+
+test("a lone KNN nominee (no lexical match) scores exactly 1 + embedWeight, fact kind, embeddings on", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-scoreorder-"));
+  const ctx = new LiteCtx({ root, dbPath: ":memory:", embeddings: true, embedder: stub, embedWeight: EMBED_WEIGHT });
+  try {
+    await ctx.remember("f:only", "lorem ipsum", { kind: "fact" }); // embeds [0,1]
+    const hits = await ctx.recall("gizmo", { kind: "fact" }); // no shared term; [0,1] query → cosine 1 → nominated
+    assert.equal(hits.length, 1, "the nominee is the only candidate");
+    assert.equal(hits[0].path, "f:only");
+    // empty pool → floor 0, sN = minmax([0]) = [1]; cN = minmax([1]) = [1] → 1 + embedWeight
+    assert.equal(hits[0].score, 1 + EMBED_WEIGHT);
+  } finally {
+    ctx.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
