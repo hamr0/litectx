@@ -1336,3 +1336,46 @@ Source: `out/step8/getreplay/report.txt` and `results.json`. Offline replay of t
 
 - Closed as a measurable success. The claim, with litectx an agent answers docs questions as well as or better than grep alone, at about 25 to 35% lower total cost (F/B 0.65 at 1x, 0.75 at big) and about one third fewer tokens when the question's wording differs from the docs (F/B 0.67), about 7% fewer when it matches (0.93). The saving held from about 50 to about 1,500 docs (reworded 0.67 at both sizes; the pre-registered scale bar passed).
 - Honest limits to keep with the claim: the pre-registered 0.75 token bar failed overall (0.883 and 0.916); the correctness lead leans on a non-shipped widened `get`; k = 2 and 24 questions; one grader; the 1,500-doc corpus is padded with other projects' docs, not a naturally grown corpus; "finds by meaning" is still unproven for docs (recall is word-gated).
+
+## Embedding index speed (2026-10-09/10)
+
+Source: POC scripts in `poc/`: `embed-speed-profile.mjs`, `embed-speed-knobs.mjs`, `embed-speed-threads.mjs`, `embed-speed-batch.mjs` (superseded, noisy, its numbers are invalid), `embed-dupes.mjs`, `embed-cos.mjs`, and `embed-speed-parallel.mjs` (written, never run). Machine: i7-8665U, 4 physical cores / 8 threads, Node 22. Corpus: bareloop's 71 md files, 2,347 sections. Question: why is the embedding index slow, and is there a safe speed-up?
+
+### Where the time goes
+
+- Cold `index()` with embeddings on: 116 s and 118 s on quiet starts. A third run took 142 s. Earlier runs on a loaded machine took 130 s and 147 s. With embeddings off: 0.65 s.
+- Embedding is about 99.5% of the time. Parsing and SQLite are negligible. Model load is 0.2 to 0.5 s.
+- About 55 ms per section on average. Cost rises with section length up to about 2,000 chars, then flattens near 100 ms because the tokenizer caps input at 512 tokens. Tiny sections take about 6 ms.
+- Section lengths: mean 1,686 chars, p50 926, p95 4,525, max 89,765. 79 sections exceed the 6,000-char head cut. About 529 exceed 2,000 chars.
+
+### Ruled out
+
+- Batching (same pipeline, q8): slower, 0.55x unsorted and about 0.8 to 0.9x length-sorted. It also changes the vectors (min cosine against sequential about 0.98, mean about 0.993). Cause: padding plus q8 quantization. Batches of identical text give cosine 1.0, and fp32 batches are padding-invariant (cosine 1.0).
+- Dedupe: 18 of 2,347 sections are duplicates (0.8%), about 0% of the characters (17 within one file, 1 across files). Nothing to save.
+- Thread tuning: 15 interleaved runs at default, 1, 2, 4 and 8 intra-op threads on 1,178 sections. Process CPU was 3.97 to 3.99 cores in every run, including "1 thread". The setting does not take effect through the transformers.js pipeline. onnxruntime's default is one intra-op thread per physical core (4 here, per the onnxruntime threading docs). Throughput was 21 to 31 sections/s with no consistent difference between settings. Run-to-run noise (about 40%) is larger than any setting effect.
+- An earlier single-run inference that the model "effectively runs single-core" was wrong. Corrected here.
+- Parallel embedders: not run, inferred. One process already saturates the 4 physical cores.
+
+### The token cap
+
+- The tokenizer truncates at 512 tokens (`model_max_length`). The reference model card (sentence-transformers/all-MiniLM-L6-v2) says "By default, input text longer than 256 word pieces is truncated" and that training used a sequence length of 128 tokens. So litectx embeds up to 512 tokens, twice the reference default.
+- Measured: a 256 cap is about 1.8x faster (30 to 33 against 17 to 19 sections/s). A 128 cap is about 3.0x faster.
+- The vectors change. Against the current 512 vectors: 256 gives min cosine 0.659, mean 0.931; 128 gives min 0.561, mean 0.817. Cosine to the current vectors measures difference, not which is better.
+- Truncation options passed to the pipeline call are ignored (the pipeline hard-codes truncation). The POC changed the tokenizer's `model_max_length` instead.
+
+### Measurement lessons
+
+- The first run was on a heavily loaded machine (load 3 to 23). Absolute timings from it are unreliable. Directions and vector maths are fine.
+- An embedding run raises the load average itself (about 2.5 to 3). A "start only below load 1.0" rule made each run wait for the previous one: about 2 h of waiting for about 12 min of runs. Judge contamination by other processes' CPU, not by the load at the end.
+
+### External comparison (web, 2026-10-10)
+
+- No clean public CPU benchmark of all-MiniLM-L6-v2 at long inputs was found. Published high throughput figures (hundreds of texts/s) are for short texts. That matches our own about 6 ms (about 150/s) for sections under 200 chars.
+- A different route exists: static embeddings (Model2Vec "potion" models) claim up to 500x faster on CPU. On retrieval they score about 82% of all-MiniLM-L6-v2 (potion-retrieval-32M 35.06 against 42.92 MTEB retrieval). That is a quality trade and a model change.
+
+### Conclusion
+
+- No safe speed-up exists for the current model on this CPU. A cold index costs about 2 minutes for 71 md files. It is one-time, because indexing is incremental.
+- The one promising lever is a 256-token cap. It matches the reference model's own default truncation and is about 1.8x faster. It changes stored vectors, so it needs a recall bench first (memory paraphrase MRR, floor 0.574, via `poc/memory-bench.mjs --embeddings`, plus doc recall) and a one-time re-embed on upgrade.
+- A static-embedding model is a second, bigger quality trade.
+- Trigger to revisit: a consumer reports the cold index as a blocker, or the owner picks the 256-cap bench.

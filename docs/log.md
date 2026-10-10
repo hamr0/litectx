@@ -8,3 +8,4 @@
 ## [2026-09-28] index-flat | 15 row(s) (13 product, 0 logs, 2 archive)
 ## [2026-10-05] index-flat | 17 row(s) (15 product, 0 logs, 2 archive)
 ## [2026-10-09] index-flat | 17 row(s) (15 product, 0 logs, 2 archive)
+## [2026-10-10] investigation | embedding index speed: embedding is ~99.5% of cold index time; batching, dedupe, thread tuning ruled out; 256-token cap is the one lever (needs recall bench); written up in product/tinymem-learnings.md
