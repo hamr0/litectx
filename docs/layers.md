@@ -17,7 +17,7 @@ back out: `recall` (ranked search), `get` (fetch by id or by line range), `impac
 `recentMemory` / `enumerate` / `count` (list without a query), and `assemble` (fit a transcript to a token budget).
 
 There is no model inside. Ranking is keyword relevance, plus a small boost for files that import each other,
-plus meaning-similarity only if you switch the embeddings tier on (`src/index.js:733-737`, `src/index.js:906-946`).
+plus meaning-similarity only if you switch the embeddings tier on (`src/index.js:733-737`, `src/index.js:906-953`).
 
 ```mermaid
 flowchart LR
@@ -68,8 +68,8 @@ flowchart LR
   GE -.->|"caller feeds units"| AS
 ```
 
-Sources for the diagram: schema `src/store.js:146-288`; write routing `src/store.js:887-976`; file routing
-`src/store.js:840-855`; recall logging `src/index.js:762,778`; stash fallback in `get` `src/store.js:1678-1684`.
+Sources for the diagram: schema `src/store.js:147-289`; write routing `src/store.js:888-977`; file routing
+`src/store.js:841-856`; recall logging `src/index.js:762,778`; stash fallback in `get` `src/store.js:1679-1685`.
 
 ## 2. The layers, in plain memory terms
 
@@ -91,18 +91,18 @@ the harness (the program driving the model). litectx only offers tools for manag
 
 | Tool | What it does | Where |
 |---|---|---|
-| `stash(id, text)` / `peek(id)` / `evict(sel)` | Park a big payload, keep a handle, preview its head and tail, delete it later. | `src/index.js:1389,1419,1445` |
-| `get(id)` on a stash id | Bring the whole payload back. | `src/store.js:1678-1684` |
+| `stash(id, text)` / `peek(id)` / `evict(sel)` | Park a big payload, keep a handle, preview its head and tail, delete it later. | `src/index.js:1396,1426,1452` |
+| `get(id)` on a stash id | Bring the whole payload back. | `src/store.js:1679-1685` |
 | `assemble(units, {budget})` | Keep pinned units and the newest, drop the oldest, never split a tool-call/result pair. | `src/assemble.js:88` |
 | `compress(node, {level})` | Render a code chunk as full text, signature only, or a name marker. | `src/compress.js:38` |
 | `summaryWindow` / `trim` | Fold old turns into a summary the *host* writes; or evict by size or count. | `src/assemble.js:201,293` |
-| `get(path, {startLine, endLine})` | Fetch one chunk instead of a whole file. | `src/index.js:1065-1097` |
+| `get(path, {startLine, endLine})` | Fetch one chunk instead of a whole file. | `src/index.js:1072-1104` |
 
 **How it gets in.** The caller hands litectx a list of "units" (`{id, role, content, ...}`); litectx never
 reads the transcript itself. `src/assemble.js:32`.
 
-**How long it lives.** A stash row lives until `evict` (`src/store.js:1073`). It is never pruned and never indexed
-(`src/store.js:274-280`). `assemble` stores nothing; it returns a fitted view and a list of what it dropped
+**How long it lives.** A stash row lives until `evict` (`src/store.js:1074`). It is never pruned and never indexed
+(`src/store.js:275-281`). `assemble` stores nothing; it returns a fitted view and a list of what it dropped
 (`src/assemble.js:150-160`).
 
 **How it is found.** A stash is found by exact id only. It sits in no FTS table, so `recall` can never return it.
@@ -115,7 +115,7 @@ reads the transcript itself. `src/assemble.js:32`.
 
 - **Code** (`.ts .js .mjs .cjs .py`): one FTS row per file, many `nodes` rows (one per function/class, plus
   a "preamble" chunk for what is left). Default extensions: `src/index.js:26`.
-- **Docs**: `.md` files get **one FTS row per heading section** (`src/store.js:840-855`). Uploads via `ingest()`
+- **Docs**: `.md` files get **one FTS row per heading section** (`src/store.js:841-856`). Uploads via `ingest()`
   are stored as direct doc rows (below).
 
 **How it gets in.**
@@ -129,13 +129,13 @@ reads the transcript itself. `src/assemble.js:32`.
   (`src/chunker.js:204`).
 - `ingest(buffer, {filename})` routes by extension (`src/docparse.js:59-70`): `md pdf docx txt text log csv eml`
   are **chunked** into ~800-char segments (`src/docparse.js:26`) and stored as `doc` rows with ids `<id>#<n>`
-  (`src/index.js:1340-1342`). Any other type is stored **byte-exact** in `blobs`, with only the filename
-  searchable (`src/index.js:1317-1328`, `src/store.js:992-1009`).
+  (`src/index.js:1347-1349`). Any other type is stored **byte-exact** in `blobs`, with only the filename
+  searchable (`src/index.js:1324-1335`, `src/store.js:993-1010`).
 
 **How long it lives.** Until `index()` sees the file change (rows are replaced) or vanish (rows are deleted)
-(`src/store.js:813-820`). Written docs and blobs live until `forget`, or until their optional `expiresAt` passes and
-`purge()` reclaims them (`src/store.js:1274-1291`). Expired rows are hidden from `recall`/`get` immediately,
-before `purge` runs (`src/store.js:2088-2089`).
+(`src/store.js:814-821`). Written docs and blobs live until `forget`, or until their optional `expiresAt` passes and
+`purge()` reclaims them (`src/store.js:1275-1292`). Expired rows are hidden from `recall`/`get` immediately,
+before `purge` runs (`src/store.js:2089-2090`).
 
 **How it is found.** `recall(q, {kind:"code"})` or `{kind:"doc"}`: keyword match, then a small boost from import
 neighbours for code. See flow 4.2. `get(path)` reads the file fresh from disk. `impact(symbol)` for callers.
@@ -148,25 +148,25 @@ walk of the symbol's body; callers come from `rg -w` (ripgrep, whole-word) confi
 (`src/impact.js:131-200`). Risk is `low` for 2 or fewer references, `medium` for 3-10, `high` for 11+
 (`src/impact.js:92-96`), using the larger of confirmed calls and raw text mentions. A missing `rg` throws
 instead of reporting "0 callers" (`src/impact.js:29`, `src/impact.js:66`). Only **import** edges are persisted
-(`src/store.js:796`); call relationships are never stored.
+(`src/store.js:797`); call relationships are never stored.
 
 ### 2.3 Episodic memory (episodes)
 
 **Holds.** Short "this happened" notes the agent writes, e.g. "deploy failed on missing env var".
 
 **How it gets in.** `remember(id, text, {kind:"episode"})`. The write stamps `occurred_at` (default now)
-(`src/index.js:1168`) and records the instance's `session` in `mem_scope` (`src/store.js:924-928`). Optionally embeds the
-text first (`src/index.js:1172`).
+(`src/index.js:1175`) and records the instance's `session` in `mem_scope` (`src/store.js:925-929`). Optionally embeds the
+text first (`src/index.js:1179`).
 
 **How long it lives.** A rolling window, default 30 days, set by `episodeWindowDays`
 (`src/index.js:50,286`; a non-positive value is rejected at `src/index.js:282-285`). Old episodes are deleted
 **on the next episode write**, before the new row is inserted, so a write never evicts itself
-(`src/index.js:1178-1179`, `src/store.js:1461-1481`). The delete cascades to the text, meta, scope, embedding, and
+(`src/index.js:1185-1186`, `src/store.js:1462-1482`). The delete cascades to the text, meta, scope, embedding, and
 recall-log rows of those episodes. There is no timer; nothing prunes if nobody writes an episode.
 
 **How it is found.** `recall({kind:"episode"})`, `recentMemory({kind:"episode"})`, `enumerate({kind:"episode"})`.
 Episodes are also fenced by `session`: a reader with a session set sees its own episodes plus session-less ones
-(`src/store.js:2131`).
+(`src/store.js:2132`).
 
 **Tables.** `mem` (stemmed FTS), `mem_scope`, `mem_text`, `mem_meta`, `mem_embeddings`.
 
@@ -176,26 +176,26 @@ Episodes are also fenced by `session`: a reader with a session set sees its own 
 
 **How it gets in.** `remember(id, text, {kind:"fact", by:"human"|"agent"})`. `by` is stored as `provenance`
 (who asserted it). Re-`remember`ing the same id under the same scope **replaces** the row in place
-(`src/store.js:909`, key built at `src/store.js:899`).
+(`src/store.js:910`, key built at `src/store.js:900`).
 
 **How long it lives.** Until `forget`. Facts are never pruned by time. A per-fact `expiresAt` is silently ignored
-for facts; expiry exists on the doc axis only (`src/index.js:1179` passes it, but `src/store.js:908-929` never reads it for `mem`).
+for facts; expiry exists on the doc axis only (`src/index.js:1186` passes it, but `src/store.js:909-930` never reads it for `mem`).
 
 **How it is found.** `recall({kind:"fact"})`. With embeddings on, the 8 stored vectors nearest the query are
-added to the candidate pool even if they share no word with it (`src/index.js:40,913`; `src/store.js:2469-2489`).
+added to the candidate pool even if they share no word with it (`src/index.js:40,914`; `src/store.js:2470-2490`).
 
 **The ladder: litectx flags, a human or the host decides.** There is no code that turns an episode into a fact.
 
 | Step | What litectx does | Where |
 |---|---|---|
-| Every recall hit is logged | one `recall_log` row per hit | `src/index.js:762`, `src/store.js:1301` |
-| An agent episode recalled 10+ times inside the window | listed by `promotionCandidates()` | `src/store.js:1435-1459`, threshold `src/index.js:51` |
-| An agent fact recalled 5+ times | listed by `reviewCandidates()` | `src/store.js:1400-1419` |
+| Every recall hit is logged | one `recall_log` row per hit | `src/index.js:762`, `src/store.js:1302` |
+| An agent episode recalled 10+ times inside the window | listed by `promotionCandidates()` | `src/store.js:1436-1460`, threshold `src/index.js:51` |
+| An agent fact recalled 5+ times | listed by `reviewCandidates()` | `src/store.js:1401-1420` |
 | Consumer acts | writes a new fact (`remember`), or re-`remember`s with `by:"human"`, or `forget`s | caller's job |
 
 The count uses only `action='recall'` rows. A `get` writes a separate `'fetch'` row that these two lists ignore
-(`src/store.js:1409,1442`; `src/index.js:1095`), so reading a hit after finding it does not double-count.
-The window is the same value for pruning and for promotion eligibility (`src/index.js:1524`), so a window shorter than the
+(`src/store.js:1410,1443`; `src/index.js:1102`), so reading a hit after finding it does not double-count.
+The window is the same value for pruning and for promotion eligibility (`src/index.js:1531`), so a window shorter than the
 time an episode needs to earn 10 recalls starves promotion.
 
 **Tables.** Same as episodes.
@@ -204,18 +204,18 @@ time an episode needs to earn 10 recalls starves promotion.
 
 | Signal | Table | Written by | Read by | Used in ranking? |
 |---|---|---|---|---|
-| Demand: one row per recall hit; `get` adds a `'fetch'` row | `recall_log` (`src/store.js:207`) | `logRecall` `src/store.js:1301` | review/promotion lists; the `use` count on memory hits (`src/store.js:2316-2335`) | **No** |
-| Edits: a chunk's body changed between index passes | `chunk_edits` (`src/store.js:271`) | `applyChanges` `src/store.js:825,854` | `recentActivity()` `src/store.js:1491` | **No** |
-| Git: commits and last-commit time per file | `git_sig` (`src/store.js:177`) | `applyChanges`, from `collectGitSig` `src/index.js:465` | attached to hits for display `src/store.js:2293` | **No** |
+| Demand: one row per recall hit; `get` adds a `'fetch'` row | `recall_log` (`src/store.js:208`) | `logRecall` `src/store.js:1302` | review/promotion lists; the `use` count on memory hits (`src/store.js:2317-2336`) | **No** |
+| Edits: a chunk's body changed between index passes | `chunk_edits` (`src/store.js:272`) | `applyChanges` `src/store.js:826,855` | `recentActivity()` `src/store.js:1492` | **No** |
+| Git: commits and last-commit time per file | `git_sig` (`src/store.js:178`) | `applyChanges`, from `collectGitSig` `src/index.js:465` | attached to hits for display `src/store.js:2294` | **No** |
 | Trust: `provenance`, `use`, `occurredAt` | columns on `mem`, derived `use` | `remember`, `recall_log` | shown on memory hits | **No** (display only) |
 
 What **is** used for ranking, in full:
 
-1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2115-2137` for fact/episode, `src/store.js:2147-2160` for code/doc), min-max scaled per query to [0,1] (top lexical hit = 1; a lone hit = 1) by one helper, `scaleScores`, for every kind.
+1. BM25 keyword score from the FTS5 table of that kind (`src/store.js:2116-2138` for fact/episode, `src/store.js:2148-2161` for code/doc), min-max scaled per query to [0,1] (top lexical hit = 1; a lone hit = 1) by one helper, `scaleScores`, for every kind.
 2. For code only: `+0.3 x` the best normalised score among the file's import neighbours in the same result pool
-   (`src/index.js:85`, `src/store.js:2180-2217`). Docs have no import edges, so nothing is added (`src/store.js:2196`).
+   (`src/index.js:85`, `src/store.js:2181-2218`). Docs have no import edges, so nothing is added (`src/store.js:2197`).
 3. Only if embeddings are on: a cosine term, `norm(score) + weight x norm(cosine)`, weight 1.0
-   (`src/index.js:33,939-945`).
+   (`src/index.js:33,946-952`).
 
 `chunk_edits` is only written on an incremental pass over an existing index; a cold build or full rebuild writes
 none (`src/index.js:497` passes `prev.size > 0`).
@@ -226,83 +226,83 @@ Two separate fences, one per axis, plus a switch that makes forgetting a scope a
 
 | Axis | Applies to | Fence column | Key shape in the table |
 |---|---|---|---|
-| Memory | `fact`, `episode` | `mem_scope.owner` (+ `session` for episodes) | `owner<US>id`, or bare `id` for the shared tier (`src/store.js:309-311`) |
-| Doc | `doc`, blobs (and ingest) | `doc_scope.scope`, `expires_at` | `scope<RS>id`, or `<RS>id` for the shared tier (`src/store.js:325-327`) |
+| Memory | `fact`, `episode` | `mem_scope.owner` (+ `session` for episodes) | `owner<US>id`, or bare `id` for the shared tier (`src/store.js:310-312`) |
+| Doc | `doc`, blobs (and ingest) | `doc_scope.scope`, `expires_at` | `scope<RS>id`, or `<RS>id` for the shared tier (`src/store.js:326-328`) |
 | Code | files | none (repo-wide) | the file path |
 
-`<US>` is ASCII 0x1F and `<RS>` is 0x1E (`src/store.js:302,319`). They are rejected in any caller id, owner, or scope on
-write, so a tenant cannot forge another tenant's key (`src/store.js:344-346`, used at `src/store.js:903-904`).
+`<US>` is ASCII 0x1F and `<RS>` is 0x1E (`src/store.js:303,320`). They are rejected in any caller id, owner, or scope on
+write, so a tenant cannot forge another tenant's key (`src/store.js:345-347`, used at `src/store.js:904-905`).
 
 - **Tenant view.** `ctx.scoped("tenant:a")` returns a `ScopedView` that injects that scope into every call
-  (`src/index.js:663-668`, `src/index.js:1734-1800`). Reads see `tenant ∪ shared`.
+  (`src/index.js:663-668`, `src/index.js:1741-1807`). Reads see `tenant ∪ shared`.
 - **`GLOBAL`.** A symbol meaning "the shared tier only" (`src/index.js:118`). Reads see rows with no scope; writes
   go to the shared tier (`src/index.js:569-575`).
 - **Omitted scope.** Falls back to the instance's `owner` (memory axis) or sees everything (doc axis).
 - **`strictScope: true`.** An omitted scope **throws** on read and write instead of falling back
   (`src/index.js:278`, `src/index.js:569-575,613-620`).
 - **Defense in depth on memory.** A tenant's rows are excluded by the physical key *and* by the `mem_scope.owner`
-  join; breaking one does not leak (`src/store.js:2115-2134` joins the owner column; keys are owner-prefixed at `src/store.js:899`).
+  join; breaking one does not leak (`src/store.js:2116-2135` joins the owner column; keys are owner-prefixed at `src/store.js:900`).
 - **Delete is stricter than read.** A tenant `forget({scope})` removes only that owner's rows, not the shared tier
-  (`src/store.js:1198-1269`).
+  (`src/store.js:1199-1270`).
 
 ## 3. The index, table by table
 
-All tables are created at open (`src/store.js:381`) and migrated forward additively (`src/store.js:382-418`). WAL mode is on (`src/store.js:376`).
+All tables are created at open (`src/store.js:382`) and migrated forward additively (`src/store.js:383-419`). WAL mode is on (`src/store.js:377`).
 
 | Table | Kind | Key | Written by | Read by |
 |---|---|---|---|---|
-| `docs` | FTS5, unstemmed | rowid; `path` is not searchable | `applyChanges` for code files (`src/store.js:767-770`) | `recall` kind `code` (`src/store.js:2147-2158`) |
-| `doc_fts` | FTS5, unstemmed | rowid; `path` | `applyChanges` for md sections (`src/store.js:772`), `writeMemory` for direct docs (`src/store.js:933`), `writeBlob` (`src/store.js:1002`) | `recall` kind `doc` via `_docPool` (`src/store.js:2080`) |
-| `mem` | FTS5, **porter-stemmed** | `path` = `owner<US>id` | `writeMemory` (`src/store.js:909-912`) | `recall` kind `fact`/`episode` (`src/store.js:2115`) |
-| `file_index` | regular | `path` | `applyChanges` (`src/store.js:776-781`) | `loadIndex` for change detection (`src/store.js:717`); `fileHash` for drift checks (`src/store.js:1799`) |
-| `nodes` | regular | `id`; indexed on `path` | `applyChanges` (`src/store.js:782`) | `attachChunks`, `get` chunk fetch, `impact` (`src/store.js:2242`, `1786`, `1924`) |
-| `edges` | regular | `(type, src_path)` and `(type, dst_path)` | `applyChanges`, only `type='import'` (`src/store.js:796`) | recall spreading, `related` (`src/store.js:2196`, `1991`) |
-| `git_sig` | regular | `path` | `applyChanges` (`src/store.js:798-801`) | `attachGit` (`src/store.js:2293`) |
-| `file_embeddings` | vector BLOB | `path` | `applyChanges` (`src/store.js:803-806`), backfill `putEmbeddings` (`src/store.js:1905`) | code recall re-rank (`src/store.js:2372`) |
-| `mem_embeddings` | vector BLOB | `path` (the physical key) | `writeMemory` (`src/store.js:957-963`) | fact/episode re-rank and KNN (`src/store.js:2469`); direct-doc re-rank |
-| `doc_sections` | regular + optional vector BLOB | `doc_rowid` = the `doc_fts` rowid | `applyChanges` (`src/store.js:849`) | `search` (`src/store.js:2166`), `docCandidateVectors` (`src/store.js:2414`) |
-| `recall_log` | regular, append-only | `id` | `logRecall` (`src/store.js:1301`) | `reviewCandidates`, `promotionCandidates`, `attachMemMeta` |
-| `chunk_edits` | regular, append-only | `id` | `applyChanges` (`src/store.js:854`) | `recentActivity` (`src/store.js:1491`) |
-| `mem_text` | regular | `path` | `writeMemory` (`src/store.js:946`) | `get` and `recall({body:true})` return the verbatim text (`src/store.js:1748-1764`) |
-| `mem_meta` | regular | `path` | `writeMemory` (`src/store.js:950-956`) | `_attachMeta` (`src/index.js:877`); sealed JSON, never searched |
-| `mem_scope` | regular | `path` | `writeMemory` (`src/store.js:924-928`) | the owner/session fence in every memory query |
-| `doc_scope` | regular | `path`; `rid` = the `doc_fts` rowid | `setDocScope` (`src/store.js:978`) | the doc fence, expiry, and `created_at` for `recentMemory` |
-| `blobs` | regular, BLOB column | `path` | `writeBlob` (`src/store.js:1007`) | `get(id).bytes` (`src/store.js:1754-1764`) |
-| `stash` | regular | `path` | `writeStash` (`src/store.js:1028`) | `get` fallback, `peekStash` (`src/store.js:1049`) |
+| `docs` | FTS5, unstemmed | rowid; `path` is not searchable | `applyChanges` for code files (`src/store.js:768-771`) | `recall` kind `code` (`src/store.js:2148-2159`) |
+| `doc_fts` | FTS5, unstemmed | rowid; `path` | `applyChanges` for md sections (`src/store.js:773`), `writeMemory` for direct docs (`src/store.js:934`), `writeBlob` (`src/store.js:1003`) | `recall` kind `doc` via `_docPool` (`src/store.js:2081`) |
+| `mem` | FTS5, **porter-stemmed** | `path` = `owner<US>id` | `writeMemory` (`src/store.js:910-913`) | `recall` kind `fact`/`episode` (`src/store.js:2116`) |
+| `file_index` | regular | `path` | `applyChanges` (`src/store.js:777-782`) | `loadIndex` for change detection (`src/store.js:718`); `fileHash` for drift checks (`src/store.js:1800`) |
+| `nodes` | regular | `id`; indexed on `path` | `applyChanges` (`src/store.js:783`) | `attachChunks`, `get` chunk fetch, `impact` (`src/store.js:2243`, `1787`, `1925`) |
+| `edges` | regular | `(type, src_path)` and `(type, dst_path)` | `applyChanges`, only `type='import'` (`src/store.js:797`) | recall spreading, `related` (`src/store.js:2197`, `1992`) |
+| `git_sig` | regular | `path` | `applyChanges` (`src/store.js:799-802`) | `attachGit` (`src/store.js:2294`) |
+| `file_embeddings` | vector BLOB | `path` | `applyChanges` (`src/store.js:804-807`), backfill `putEmbeddings` (`src/store.js:1906`) | code recall re-rank (`src/store.js:2373`) |
+| `mem_embeddings` | vector BLOB | `path` (the physical key) | `writeMemory` (`src/store.js:958-964`) | fact/episode re-rank and KNN (`src/store.js:2470`); direct-doc re-rank |
+| `doc_sections` | regular + optional vector BLOB | `doc_rowid` = the `doc_fts` rowid | `applyChanges` (`src/store.js:850`) | `search` (`src/store.js:2167`), `docCandidateVectors` (`src/store.js:2415`) |
+| `recall_log` | regular, append-only | `id` | `logRecall` (`src/store.js:1302`) | `reviewCandidates`, `promotionCandidates`, `attachMemMeta` |
+| `chunk_edits` | regular, append-only | `id` | `applyChanges` (`src/store.js:855`) | `recentActivity` (`src/store.js:1492`) |
+| `mem_text` | regular | `path` | `writeMemory` (`src/store.js:947`) | `get` and `recall({body:true})` return the verbatim text (`src/store.js:1749-1765`) |
+| `mem_meta` | regular | `path` | `writeMemory` (`src/store.js:951-957`) | `_attachMeta` (`src/index.js:877`); sealed JSON, never searched |
+| `mem_scope` | regular | `path` | `writeMemory` (`src/store.js:925-929`) | the owner/session fence in every memory query |
+| `doc_scope` | regular | `path`; `rid` = the `doc_fts` rowid | `setDocScope` (`src/store.js:979`) | the doc fence, expiry, and `created_at` for `recentMemory` |
+| `blobs` | regular, BLOB column | `path` | `writeBlob` (`src/store.js:1008`) | `get(id).bytes` (`src/store.js:1755-1765`) |
+| `stash` | regular | `path` | `writeStash` (`src/store.js:1029`) | `get` fallback, `peekStash` (`src/store.js:1050`) |
 
 ### 3.1 Why there are two FTS tables for text, and a third for docs
 
 - **`docs` vs `mem`: stemming.** `mem` uses `porter unicode61` so "refund policy" finds a fact saying "refunds"
-  (`src/store.js:263`). `docs` and `doc_fts` use the default tokenizer, because stemming was measured to hurt code
-  and doc recall (comment at `src/store.js:255-262`).
+  (`src/store.js:264`). `docs` and `doc_fts` use the default tokenizer, because stemming was measured to hurt code
+  and doc recall (comment at `src/store.js:256-263`).
 - **`docs` vs `doc_fts`: statistics.** BM25 uses table-wide statistics, so mixing docs into the code table shifted
-  code ranking. Code stays in `docs`; every `kind='doc'` row lives in `doc_fts` (`src/store.js:147-152`).
+  code ranking. Code stays in `docs`; every `kind='doc'` row lives in `doc_fts` (`src/store.js:148-153`).
 - **One kind, one table, one ranking.** Recall runs one query per kind, so scores from different tables are never
   compared (`src/index.js:766-776`).
 
 ### 3.2 `source`: file vs direct
 
 Every `docs`/`doc_fts` row has `source` = `'file'` (from `index()`) or `'direct'` (from `remember`/`ingest`)
-(`src/store.js:146`). `index()`'s delete step only touches `file_index` keys and `source='file'` rows, so
-written memory survives every index pass, including `force` (`src/index.js:442`, `src/store.js:749-750`, `src/index.js:403-411`). Rows in
+(`src/store.js:147`). `index()`'s delete step only touches `file_index` keys and `source='file'` rows, so
+written memory survives every index pass, including `force` (`src/index.js:442`, `src/store.js:750-751`, `src/index.js:403-411`). Rows in
 `mem` are always written, never file-derived.
 
 ### 3.3 Row-number pointers
 
 `docs.path` and `doc_fts.path` are not searchable columns, so finding a row by path would scan every body. To avoid
-that, `file_index.code_rowid` points at a file's `docs` row (`src/store.js:156`), `doc_sections.doc_rowid` points at
-each md section's `doc_fts` row (`src/store.js:194`), and `doc_scope.rid` points at each direct doc's `doc_fts` row
-(`src/store.js:252`). A pointer that went missing (older or foreign writer) is repaired on open and on use
-(`src/store.js:586,604`).
+that, `file_index.code_rowid` points at a file's `docs` row (`src/store.js:157`), `doc_sections.doc_rowid` points at
+each md section's `doc_fts` row (`src/store.js:195`), and `doc_scope.rid` points at each direct doc's `doc_fts` row
+(`src/store.js:253`). A pointer that went missing (older or foreign writer) is repaired on open and on use
+(`src/store.js:587,605`).
 
 ### 3.4 Embeddings: file vs mem
 
 Two vector tables with the same shape but different key spaces, so a `remember()` whose id equals a file path can
-never overwrite that file's vector (`src/store.js:182-189`). Code gets one vector per file from the first 6000
+never overwrite that file's vector (`src/store.js:183-190`). Code gets one vector per file from the first 6000
 characters (`src/embedder.js:11,57-58`). Markdown gets one vector **per section** in `doc_sections.vec`, and no
 file-level vector (`src/index.js:476-486`). Written memory vectors live in `mem_embeddings`. Doc recall routes
-each candidate to the right table by its `source` (`src/store.js:2414-2437`). Vectors are float32 BLOBs, not a vector
-index; cosine runs by brute force over the candidate pool only (`src/store.js:179-182`).
+each candidate to the right table by its `source` (`src/store.js:2415-2438`). Vectors are float32 BLOBs, not a vector
+index; cosine runs by brute force over the candidate pool only (`src/store.js:180-183`).
 
 ### 3.5 Stamps and self-heal
 
@@ -310,15 +310,15 @@ An index goes stale when *litectx itself* changes how it chunks. Two independent
 
 | Stamp | Where | Catches | On mismatch |
 |---|---|---|---|
-| Whole-index | `PRAGMA user_version` (`src/store.js:1817-1827`) | this repo's litectx was upgraded | full re-chunk of every file (`src/index.js:405-406`) |
-| Per-chunk | `nodes.stamp` (`src/store.js:166`) | a *different-version* litectx wrote some chunks | re-chunk just those files (`src/index.js:436-438`, `src/store.js:1839`) |
+| Whole-index | `PRAGMA user_version` (`src/store.js:1818-1828`) | this repo's litectx was upgraded | full re-chunk of every file (`src/index.js:405-406`) |
+| Per-chunk | `nodes.stamp` (`src/store.js:167`) | a *different-version* litectx wrote some chunks | re-chunk just those files (`src/index.js:436-438`, `src/store.js:1840`) |
 
 The stamp value is a hash of all `src/*.js`, not the package version (`src/indexer.js:32-44`). `0` is reserved to mean
 "never stamped, rebuild me", and the hash is forced non-zero (`src/indexer.js:42`).
 
 A scoped pass (`index({paths})`) never wipes files outside its scope and never sets the whole-index stamp
 (`src/index.js:403-404,498`). A full rebuild clears file rows *inside* the same transaction as the re-insert, so a
-reader never sees an empty index (`src/store.js:812`). A no-op `index()` re-reads nothing: it only stats files.
+reader never sees an empty index (`src/store.js:813`). A no-op `index()` re-reads nothing: it only stats files.
 
 ## 4. Flows
 
@@ -355,7 +355,7 @@ sequenceDiagram
    across the whole current file list (`src/index.js:459-460`).
 4. Optionally embed (`src/index.js:474-492`).
 5. Apply everything in one transaction: delete gone files, replace changed files' rows, nodes, edges, git row,
-   vector, and log `chunk_edits` for chunks whose body changed (`src/index.js:497`, `src/store.js:742-877`).
+   vector, and log `chunk_edits` for chunks whose body changed (`src/index.js:497`, `src/store.js:743-878`).
 6. Stamp the index if this was a full pass (`src/index.js:498`). Then backfill missing vectors (`src/index.js:506-541`).
 
 ### 4.2 `recall()`: doc and code path vs fact and episode path
@@ -394,17 +394,18 @@ flowchart TD
 2. Kinds are ranked **separately**. A single `kind` string returns a flat list; no `kind` or an array returns
    `{kind: hits[]}` (`src/index.js:757-779`).
 3. Code/doc: BM25 from the kind's table with the scope and expiry fence inside the SQL
-   (`src/store.js:2080-2091,2147-2158`). Code then gets the import-neighbour boost (`src/store.js:2180-2217`).
-4. With embeddings on, the pool is widened to 400 (`SEMANTIC_POOL`, `src/index.js:32,912`), and cosine re-ranks it.
+   (`src/store.js:2081-2092,2148-2159`). Code then gets the import-neighbour boost (`src/store.js:2181-2218`).
+4. With embeddings on, the pool is widened to 400 (`SEMANTIC_POOL`, `src/index.js:32,913`), and cosine re-ranks it.
    Code and doc are **BM25-gated**: cosine only reorders words-matched candidates, it never adds new ones
-   (`src/store.js:2470`).
+   (`src/store.js:2471`).
 5. Fact/episode: the same, plus up to 8 KNN nominees whose cosine is above 0 and that are not already in the pool
-   (`src/index.js:40,913`, `src/store.js:2469-2489`). Nominees get the pool's lowest keyword score and compete on
-   cosine alone (`src/index.js:938-940`).
-6. The raw cosine is attached to **fact/episode hits only** (`src/index.js:936`). The returned `score` is the fused
-   value the list is ordered by (`src/index.js:941-945`), comparable within one result list only.
+   (`src/index.js:40,914`, `src/store.js:2470-2490`). Nominees get the pool's lowest keyword score and compete on
+   cosine alone (`src/index.js:945-947`).
+6. The raw cosine is attached to **fact/episode hits only** (`src/index.js:943`). The returned `score` is the fused
+   value the list is ordered by (`src/index.js:948-952`), comparable within one result list only. Each hit also carries `keyword`: `true` if it matched the keyword index (the pool, or a nominee the same index
+   confirms through `memMatches`, `src/store.js:2492-2509`), `false` if it entered by meaning alone (`src/index.js:915-920`).
 7. A section hit already names its chunk; a code hit gets the smallest chunk containing the most query terms, never
-   a container that wins only by wrapping a matching method (`src/store.js:2242-2290`).
+   a container that wins only by wrapping a matching method (`src/store.js:2243-2291`).
 8. Every returned hit is logged to `recall_log` (`src/index.js:762,778`).
 
 ### 4.3 `get(path, {startLine, endLine})`: fetching one chunk safely
@@ -427,17 +428,17 @@ flowchart TD
 ```
 
 1. The id is looked up as written memory, then a direct doc, then an indexed file, then a stash
-   (`src/store.js:1633-1684`).
+   (`src/store.js:1634-1685`).
 2. For an indexed file with a range, `_chunkState` reads the file, hashes it, and compares to the hash recorded at
    index time (`src/index.js:806-818`).
 3. **Gone from disk** returns `null`. **Changed** throws `StalePointerError`, because the same line range would now be
-   different code (`src/index.js:1088`). **Same** serves the stored body unchanged (`src/index.js:1090`,
-   `src/store.js:1786`).
+   different code (`src/index.js:1095`). **Same** serves the stored body unchanged (`src/index.js:1097`,
+   `src/store.js:1787`).
 4. The range is an **address, not an instruction**: it must match a stored chunk's start and end exactly, or the
-   answer is `null`. It never falls back to the whole file (`src/store.js:1786-1791`).
+   answer is `null`. It never falls back to the whole file (`src/store.js:1787-1792`).
 5. `recall({body:true})` uses the same `_chunkState` check, but nulls a single drifted hit instead of throwing, and
    still serves a chunk whose file was deleted (`src/index.js:838-850`).
-6. A successful `get` writes a `'fetch'` log row; `log:false` skips it (`src/index.js:1095`).
+6. A successful `get` writes a `'fetch'` log row; `log:false` skips it (`src/index.js:1102`).
 
 ### 4.4 `remember()` to prune to promotion candidates
 
@@ -467,15 +468,15 @@ sequenceDiagram
   S-->>C: [{path, hits}] - a flag, not an action
 ```
 
-1. Validate kind and `by` (`src/index.js:1142-1146`). Resolve the scope for the right axis (`src/index.js:1152-1153`).
+1. Validate kind and `by` (`src/index.js:1149-1153`). Resolve the scope for the right axis (`src/index.js:1159-1160`).
 2. A wired write gate can deny before anything happens, so a denied write embeds nothing and prunes nothing
-   (`src/index.js:1161-1166`).
-3. Embed if the tier is on (`src/index.js:1172`).
-4. For an episode, delete episodes older than the window **first** (`src/index.js:1178`), then insert (`src/index.js:1179`).
+   (`src/index.js:1168-1173`).
+3. Embed if the tier is on (`src/index.js:1179`).
+4. For an episode, delete episodes older than the window **first** (`src/index.js:1185`), then insert (`src/index.js:1186`).
 5. `writeMemory` replaces the row for the same `(scope, id)` and writes all sidecar rows in one transaction
-   (`src/store.js:887-976`).
+   (`src/store.js:888-977`).
 6. Later recalls fill `recall_log`. `promotionCandidates` and `reviewCandidates` read it with the same owner/session
-   fence as recall (`src/store.js:1400,1435`).
+   fence as recall (`src/store.js:1401,1436`).
 7. litectx stops at the list. Distilling an episode into a fact is the consumer's job.
 
 ### 4.5 `impact(symbol)`
@@ -494,7 +495,7 @@ flowchart TD
   RB --> HG["hedges: never a bare 'isolated'"]
 ```
 
-1. Definitions are read from `nodes` (`src/store.js:1924`, `src/impact.js:132-133`).
+1. Definitions are read from `nodes` (`src/store.js:1925`, `src/impact.js:132-133`).
 2. Callees: walk each definition body and keep names that are indexed symbols (`src/impact.js:139-146`).
 3. Callers: `rg -F -w --json` for the name (`src/impact.js:239-241`), minus hits inside the definition itself
    (`src/impact.js:155-156`), then tree-sitter confirms real call sites in up to 300 files (`src/impact.js:85,167-181`).
@@ -511,11 +512,11 @@ flowchart TD
 | No LLM inside | Writes and ranking are deterministic; the only model is the optional embedder, and it is injected or lazy-loaded (`src/index.js:289-297`, `src/embedder.js:1-7`). The summary in `summaryWindow` is written by a function the host passes in (`src/assemble.js:164-168`). |
 | No LSP | Callers come from `rg -w` plus tree-sitter (`src/impact.js:1-9`). Over-count is accepted. |
 | No auto-injecting memory into context | `assemble` fits what the caller hands it; it never runs `recall` for you (`src/assemble.js:19-24`). |
-| No ranking on activity | `recall_log`, `chunk_edits`, `git_sig`, provenance and `use` are recorded or displayed only (`src/store.js:1424-1425,1486,2308`). |
-| No automatic fact promotion | Only candidate lists (`src/store.js:1400,1435`). |
-| No time-based fact expiry | Facts are durable; `expiresAt` is doc-axis only (`src/store.js:252`). |
+| No ranking on activity | `recall_log`, `chunk_edits`, `git_sig`, provenance and `use` are recorded or displayed only (`src/store.js:1425-1426,1487,2309`). |
+| No automatic fact promotion | Only candidate lists (`src/store.js:1401,1436`). |
+| No time-based fact expiry | Facts are durable; `expiresAt` is doc-axis only (`src/store.js:253`). |
 | Embeddings off by default | The library keeps the install lean and offline-capable (`src/index.js:289-291`). With the tier unavailable, calls fall back to keyword-only with one warning (`src/index.js:323-337`). |
-| No call-edge storage | Only `import` edges are written (`src/store.js:796`); call relationships are computed per `impact()` call. |
+| No call-edge storage | Only `import` edges are written (`src/store.js:797`); call relationships are computed per `impact()` call. |
 
 **Parked.** Deferred and retired work is tracked in `docs/product/tinymem.md` (section "Out of scope and deferred").
 Nothing there is built, so none of it is described above.

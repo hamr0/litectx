@@ -123,7 +123,7 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
 const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-// hits: [{ path, kind, format, score, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; git: activity, not scored)
+// hits: [{ path, kind, format, score, keyword, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; keyword: matched a query word vs added by meaning only; git: activity, not scored)
 
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
@@ -332,6 +332,9 @@ return shape follows the `kind` argument:
 > (id/path tokens count, and fact/episode match stemmed forms: "refunded" matches "refund"); `false` = a KNN nominee added by meaning alone. Use `keyword`,
 > **not `score > 0`** — `score` is the fused ordering value, so a meaning-only nominee scores > 0 too.
 > BM25-only mode: always `true`.
+>
+> `score` is scaled per query, so it carries no absolute strength: a lone hit always scores 1, and with BM25 only
+> the list's weakest hit scores 0 — never filter on `score` to decide whether something matched.
 >
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
 > from one `git log` pass at index time. It never affects ranking; `null` means no commit history
