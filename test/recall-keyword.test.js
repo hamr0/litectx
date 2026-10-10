@@ -110,3 +110,54 @@ test("regression: a word-matching nominee ranked past the 400-row BM25 pool is s
     ctx.close();
   }
 });
+
+// Past-the-pool-cap variants: 450 fillers outrank the late row (BM25 rank > 400), so it can only arrive as a KNN
+// nominee — keyword must still be true when it contains the query word. `scope` binds the writes/recall to a tenant.
+async function lateNominee({ kind, lateText, query = "refund", tenant }) {
+  const ctx = new LiteCtx({ root: mkdtempSync(join(tmpdir(), "litectx-keyword-")), dbPath: ":memory:", embeddings: true, embedder: stub });
+  try {
+    const now = Date.now(); // episodes: relative-to-now, inside the 30d window
+    const w = (id, text, extra = {}) => ctx.remember(id, text, { kind, ...(kind === "episode" ? { occurredAt: now } : {}), ...(tenant ? { scope: tenant } : {}), ...extra });
+    for (let i = 0; i < 450; i++) await w(`f:c${i}`, "refund refund refund weather login login login");
+    await w("f:late", lateText);
+    const view = tenant ? ctx.scoped(tenant) : ctx;
+    return { ctx, hits: await view.recall(query, { kind, n: 10 }) };
+  } catch (e) {
+    ctx.close();
+    throw e;
+  }
+}
+const LATE = "refund " + "filler ".repeat(30) + "cash money";
+const LATE_STEMMED = "refunded " + "filler ".repeat(30) + "cash money";
+
+test("regression: episode kind — word-matching nominee past the 400-row pool is keyword:true", async () => {
+  const { ctx, hits } = await lateNominee({ kind: "episode", lateText: LATE });
+  try {
+    assert.equal(by(hits, "f:late")?.keyword, true);
+  } finally {
+    ctx.close();
+  }
+});
+
+test("regression: stemmed word-match (query 'refund', row 'refunded') past the pool is keyword:true", async () => {
+  const { ctx, hits } = await lateNominee({ kind: "fact", lateText: LATE_STEMMED });
+  try {
+    assert.equal(by(hits, "f:late")?.keyword, true);
+  } finally {
+    ctx.close();
+  }
+});
+
+test("regression: scoped recall — tenant A's late word-match is keyword:true and tenant B's row never appears", async () => {
+  const { ctx, hits } = await lateNominee({ kind: "fact", lateText: LATE, tenant: "A" });
+  try {
+    await ctx.remember("f:b-only", "refund cash money for tenant b", { kind: "fact", scope: "B" });
+    const again = await ctx.scoped("A").recall("refund", { kind: "fact", n: 10 });
+    assert.equal(by(hits, "f:late")?.keyword, true);
+    assert.equal(by(again, "f:late")?.keyword, true);
+    assert.equal(by(again, "f:b-only"), undefined);
+    assert.equal(by(hits, "f:b-only"), undefined);
+  } finally {
+    ctx.close();
+  }
+});
