@@ -1043,7 +1043,7 @@ E is D with only the tool output changed. The prompt is byte-identical.
 
 **Limits.** Seen questions, k = 2, 9 questions, not significant. This shows the mechanism, not a result.
 
-**Score-column finding (display issue, not a ranking bug).** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`). `LiteCtx.recall` re-sorts by the fused minmax(score) + embedWeight x minmax(cosine) (`src/index.js` about 938-946). So the printed score can disagree with the printed order. To fix separately.
+**Score-column finding (display issue, not a ranking bug).** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`). `LiteCtx.recall` re-sorts by the fused minmax(score) + embedWeight x minmax(cosine) (`src/index.js` about 938-946). So the printed score can disagree with the printed order. Fixed on branch fix/recall-score-order (2026-10-10): `score` is now the fused value the list is ordered by.
 
 ### C. Owner direction (2026-10-08)
 
