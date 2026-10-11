@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LiteCtx } from "../src/index.js";
+import { chunkFile } from "../src/chunker.js";
 
 const SERVER = fileURLToPath(new URL("../bin/litectx-mcp.js", import.meta.url));
 
@@ -211,5 +212,43 @@ test("audit-log parity over MCP: recall writes demand, get writes a tagged fetch
   );
   assert.deepEqual(Object.fromEntries(rows.map((r) => [r.action, r.n])), { recall: 1, fetch: 1 });
   ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("get over MCP with line ranges: single section, adjacent run, non-boundary, half-range", async (t) => {
+  const md = "# Top\n\nintro text\n\n## One\n\nfirst body\nline two\n\n## Two\n\nsecond body\n\n## Three\n\nthird body\n";
+  const root = mkdtempSync(join(tmpdir(), "litectx-mcp-range-"));
+  writeFileSync(join(root, "a.md"), md);
+  const chunks = await chunkFile("a.md", md);
+  assert.ok(chunks.length >= 4, "fixture chunks into top + 3 sections");
+  const lines = (/** @type {number} */ a, /** @type {number} */ b) => md.split("\n").slice(a, b + 1).join("\n");
+  const c = client(root, t);
+  await c.init();
+  toolText(await c.request("tools/call", { name: "index", arguments: {} }), "index");
+  const get = (/** @type {any} */ args) => c.request("tools/call", { name: "get", arguments: { id: "a.md", ...args } });
+
+  // (i) a single section → exactly its text
+  const one = JSON.parse(toolText(await get({ startLine: chunks[1].startLine, endLine: chunks[1].endLine }), "single"));
+  assert.equal(one.text, lines(chunks[1].startLine, chunks[1].endLine));
+  assert.match(one.text, /first body/);
+  assert.doesNotMatch(one.text, /second body/);
+
+  // (ii) an adjacent 2-section run → the joined text
+  const run = JSON.parse(toolText(await get({ startLine: chunks[1].startLine, endLine: chunks[2].endLine }), "run"));
+  assert.equal(run.text, lines(chunks[1].startLine, chunks[2].endLine));
+  assert.match(run.text, /first body[\s\S]*second body/);
+
+  // (iii) a span that is not on chunk boundaries → tool error, never a widened/guessed range
+  const off = await get({ startLine: chunks[1].startLine + 1, endLine: chunks[1].endLine });
+  assert.equal(off.result.isError, true);
+  assert.match(off.result.content[0].text, /no chunk at/);
+
+  // (iv) only startLine → tool error (not a protocol error)
+  const half = await get({ startLine: chunks[1].startLine });
+  assert.equal(half.error, undefined);
+  assert.equal(half.result.isError, true);
+  assert.match(half.result.content[0].text, /startLine and endLine must be passed together/);
+
+  await c.close();
   rmSync(root, { recursive: true, force: true });
 });
