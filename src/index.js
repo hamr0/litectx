@@ -926,6 +926,7 @@ export class LiteCtx {
     }
     const pool = match ? this.store.search(match, kind, Math.max(n, SEMANTIC_POOL), SPREAD_WEIGHT, filter) : [];
     const knn = this.store.knnCandidates(kind, qvec, KNN_K, new Set(pool.map((h) => h.path)), filter);
+    // keyword: matched the FTS index (pool, or a nominee the FTS check confirmed), else meaning-only
     for (const h of pool) h.keyword = true;
     // a nominee can still contain the query word (it ranked past the pool's row cap) — ask the same FTS index
     if (match && knn.length) {
@@ -960,7 +961,7 @@ export class LiteCtx {
     const sN = minmax(cand.map((h, i) => (i < pool.length ? h.score : floor)));
     const cN = minmax(raw);
     return cand
-      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] })) // keyword: matched the FTS index (pool, or a nominee the FTS check confirmed), else meaning-only
+      .map((h, i) => ({ h, f: sN[i] + this.embedWeight * cN[i] }))
       .sort((a, b) => b.f - a.f)
       .slice(0, n)
       .map((x) => ({ ...x.h, score: x.f })); // `score` = the value the list is ordered by (fused), never the pre-fusion BM25

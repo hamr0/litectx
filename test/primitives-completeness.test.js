@@ -122,7 +122,10 @@ test("every JS export subpath resolves through the package name", async () => {
   const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   const targetOf = (v) => (typeof v === "string" ? v : v?.default ?? v?.import ?? "");
   const jsSubpaths = Object.entries(pkg.exports || {})
-    .filter(([, v]) => !String(targetOf(v)).endsWith(".json"))
+    .filter(([k, v]) => {
+      assert.ok(targetOf(v), `export subpath "${k}" has a shape targetOf() does not handle — extend targetOf`);
+      return !String(targetOf(v)).endsWith(".json");
+    })
     .map(([k]) => k);
   assert.ok(jsSubpaths.includes("."), "expected the main '.' export to be present in the exports map");
   for (const sub of jsSubpaths) {
