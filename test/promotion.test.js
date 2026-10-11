@@ -214,3 +214,18 @@ test("promotion counts each recall→fetch cycle once", async () => {
   assert.deepEqual(c.promotionCandidates(), [{ path: "ep:b", hits: 10 }], "only the 10-cycle episode clears the default threshold");
   done(c);
 });
+
+test("promotion: same-ts ties order by insertion id — fetch logged before its recall does NOT count; recall then fetch does", async () => {
+  const c = ctx();
+  await c.remember("ep:fr", "fetch inserted first", { kind: "episode", by: "agent" });
+  await c.remember("ep:rf", "recall inserted first", { kind: "episode", by: "agent" });
+  const ts = Date.now() - 1000;
+  c.store.logRecall([{ path: "ep:fr", kind: "episode" }], ts, "fetch"); // lower id, same ts
+  c.store.logRecall([{ path: "ep:fr", kind: "episode" }], ts, "recall");
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "recall"); // lower id, same ts
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "fetch");
+  const at = (id) => c.promotionCandidates(1).find((r) => r.path === id)?.hits ?? 0;
+  assert.equal(at("ep:fr"), 0, "a same-ts fetch inserted before the recall precedes it");
+  assert.equal(at("ep:rf"), 1, "a same-ts recall inserted before the fetch is followed by it");
+  done(c);
+});

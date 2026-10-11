@@ -1421,7 +1421,7 @@ export class Store {
    * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s with at least `threshold`
    * distinct recall→fetch cycles (an AND, not a sum — the old recall-only count is now only `reviewCandidates`'):
    * a cycle is one 'recall' row q of the path that has a 'fetch' r after it, before the NEXT recall of
-   * that path (order = (ts, id): ts first, insertion id breaks same-ms ties, so a body:true recall+fetch logged at one ts
+   * that path (computed in one ordered window pass per path, not a per-recall correlated scan; order = (ts, id): ts first, insertion id breaks same-ms ties, so a body:true recall+fetch logged at one ts
    * pairs recall-then-fetch). Each recall counts at most once, however many
    * fetches follow it; a fetch with no prior recall counts nothing. Candidates are those whose `occurred_at` falls in the rolling active window `[since, now]`
    * (older episodes have decayed out of the active set). Mirrors {@link reviewCandidates} exactly —
@@ -1443,15 +1443,18 @@ export class Store {
     return /** @type {{ path: string, hits: number }[]} */ (
       this.db
         .prepare(
-          "SELECT m.path AS path, count(DISTINCT q.id) AS hits FROM mem m JOIN recall_log q ON q.path = m.path AND q.action = 'recall' " +
-            "LEFT JOIN mem_scope s ON s.path = m.path " +
+          // One ordered pass per path: `cyc` = running count of recalls up to and including this row, so every
+          // fetch carries the number of the recall it follows (0 = fetch before any recall). A cycle = a
+          // distinct `cyc` among fetches with cyc > 0. Candidates are fenced FIRST so only their rows are windowed.
+          "WITH cand AS (SELECT m.path AS path FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
             "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since " +
-            "AND EXISTS (SELECT 1 FROM recall_log r WHERE r.path = q.path AND r.action = 'fetch' AND (r.ts, r.id) > (q.ts, q.id) " +
-            "AND NOT EXISTS (SELECT 1 FROM recall_log q2 WHERE q2.path = q.path AND q2.action = 'recall' " +
-            "AND (q2.ts, q2.id) > (q.ts, q.id) AND (q2.ts, q2.id) < (r.ts, r.id))) " +
             "AND (@memSeeAll = 1 OR s.owner IS NULL OR (@memOwner IS NOT NULL AND s.owner = @memOwner)) " +
-            "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid) " +
-            "GROUP BY m.path HAVING hits >= @threshold ORDER BY hits DESC, m.path"
+            "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid)), " +
+            "ord AS (SELECT l.path AS path, l.action AS action, " +
+            "SUM(CASE WHEN l.action = 'recall' THEN 1 ELSE 0 END) OVER (PARTITION BY l.path ORDER BY l.ts, l.id ROWS UNBOUNDED PRECEDING) AS cyc " +
+            "FROM recall_log l WHERE l.action IN ('recall', 'fetch') AND l.path IN (SELECT path FROM cand)) " +
+            "SELECT path, count(DISTINCT cyc) AS hits FROM ord WHERE action = 'fetch' AND cyc > 0 " +
+            "GROUP BY path HAVING hits >= @threshold ORDER BY hits DESC, path"
         )
         .all({ since, threshold, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session })
     );
