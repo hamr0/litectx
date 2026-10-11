@@ -455,7 +455,11 @@ try {
 > plus the hash address every chunk in every language, exactly once.
 
 A line range matching **no chunk** returns `null` — never a silent fallback to the whole file, which
-would reintroduce the bloat invisibly. Written memory is stored whole and has no chunks, so asking it
+would reintroduce the bloat invisibly. One extension, markdown only: a range that is an **exact run of
+2+ adjacent whole sections** (the first starts at `startLine`, the last ends at `endLine`, each starts on
+the line after the previous ends) is served as those section bodies joined with `\n` — same hash gate,
+one `fetch` logged. A partial edge or a gap still returns `null`; code ranges must still equal a single
+chunk (code chunks nest — a class contains its methods). Written memory is stored whole and has no chunks, so asking it
 for a range also returns `null`. Both `startLine` and `endLine` are required together.
 
 `recall({ body: true })` serves bodies from the same gate: a hit whose file has drifted comes back with

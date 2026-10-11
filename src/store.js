@@ -1792,6 +1792,27 @@ export class Store {
   }
 
   /**
+   * The joined stored body of a RUN of adjacent whole `doc` (md) chunks that exactly spans
+   * `startLine..endLine`: chunks c1..ck (k >= 2), c1.start == startLine, ck.end == endLine, and each
+   * next.start == prev.end + 1. md chunks tile a file (no gap, no overlap), so the join of the bodies
+   * with "\n" reads as the file's lines. Code chunks nest (a class contains its methods), so a `code`
+   * file is never served this way. Any partial edge or gap -> `null`: the range is never widened.
+   * @param {string} path
+   * @param {number} startLine  0-based, inclusive
+   * @param {number} endLine    0-based, inclusive
+   * @returns {string | null}
+   */
+  chunkRunBodyAt(path, startLine, endLine) {
+    const rows = /** @type {{ start_line: number, end_line: number, body: string }[]} */ (
+      this.db.prepare("SELECT start_line, end_line, body FROM nodes WHERE path = ? AND kind = 'doc' AND start_line >= ? AND end_line <= ? ORDER BY start_line, id").all(path, startLine, endLine)
+    );
+    if (rows.length < 2 || rows[0].start_line !== startLine) return null;
+    for (let i = 1; i < rows.length; i++) if (rows[i].start_line !== rows[i - 1].end_line + 1) return null;
+    if (rows[rows.length - 1].end_line !== endLine) return null;
+    return rows.map((r) => r.body).join("\n");
+  }
+
+  /**
    * The content hash recorded for an indexed file — the arbiter of whether the index still describes
    * what is on disk. `null` if the path was never indexed.
    * @param {string} path

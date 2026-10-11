@@ -817,7 +817,8 @@ export class LiteCtx {
     }
     if (f.disk === null) return { ok: false, reason: "missing" };
     if (!f.current) return { ok: false, reason: "drifted" };
-    return { ok: true, body: this.store.chunkBodyAt(path, startLine, endLine) };
+    // no single chunk at that range -> an exact run of adjacent whole md chunks (docs only) is served joined
+    return { ok: true, body: this.store.chunkBodyAt(path, startLine, endLine) ?? this.store.chunkRunBodyAt(path, startLine, endLine) };
   }
 
   /**
@@ -1049,7 +1050,10 @@ export class LiteCtx {
    * hash is the only anchor that holds for every chunk in every language.
    *
    * Recover by re-running {@link index} (a no-op pass is ~6ms) and re-`recall`ing for a fresh pointer.
-   * A line range that matches no chunk returns `null` — never a silent fallback to the whole file.
+   * A line range that matches no chunk returns `null` — never a silent fallback to the whole file. The one
+   * exception to "exactly one chunk": for a markdown doc, a range that is an exact run of 2+ adjacent whole
+   * section chunks (first starts at `startLine`, last ends at `endLine`, no gap) is served as those bodies
+   * joined — same hash gate. Code chunks nest, so a code range must still equal a single chunk.
    *
    * Sync (no embedder involved). Returns `null` for an unknown id.
    *
@@ -1059,8 +1063,8 @@ export class LiteCtx {
    * @returns {Item | null}
    * @throws {StalePointerError} when a chunk is requested from a file that changed since indexing
    * @category recall
-   * @when Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range. The model calls this directly via MCP.
-   * @fails Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk.
+   * @when Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range (md: or an exact run of adjacent sections). The model calls this directly via MCP.
+   * @fails Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk (or no exact run of adjacent md sections).
    * @signature liteCtx.get(id: string, opts?: { startLine?, endLine?, scope? }) => Item | null
    * @example
    * import { LiteCtx } from 'litectx'

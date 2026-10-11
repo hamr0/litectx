@@ -64,7 +64,7 @@ const TOOLS = [
   {
     name: "get",
     description:
-      "Fetch the body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk. To read ONE chunk instead of the whole file, pass startLine/endLine copied verbatim from that hit's `chunk` — a recall hit points at a symbol, and this is how you read just that symbol without dragging its whole file through context. Copy the numbers; never compute or widen them.",
+      "Fetch the body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk. To read ONE chunk instead of the whole file, pass startLine/endLine copied verbatim from that hit's `chunk` — a recall hit points at a symbol, and this is how you read just that symbol without dragging its whole file through context. Copy the numbers; never compute or widen them. (Markdown: an exact run of adjacent sections — first start to last end, no gap — is also served.)",
     inputSchema: {
       type: "object",
       properties: {
