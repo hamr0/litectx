@@ -79,7 +79,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
-| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file; content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.1) |
+| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file (md: also an exact run of adjacent sections); content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.1) |
 | **Index self-heals on upgrade** — the index is stamped with the litectx source that built it; a mismatch forces a re-chunk (file rows only; written memory survives) | ✅ shipped (v0.29.1) |
 | **`recall(q, {body:true})`** — inline each hit's content (verbatim memory / localized chunk / whole-file fallback); off by default | ✅ shipped (v0.10.0 — RT-3) |
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
@@ -496,7 +496,8 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   the audit log. A fetch is a **tagged weak signal, not demand**: you fetch what recall
   just returned, so counting fetches as demand would double-count every retrieval (the
   fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
-  scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
+  scores the fetch tag, and its one reader is `promotionCandidates` (episodes), which counts a fetch only
+  as the second half of a recall→fetch cycle, never as demand on its own. Set
   `log: false` for non-demand consumers, same as `recall`.
 - `opts.scope?: string | typeof GLOBAL` (multis M3 R2 / M4) — **fences the direct handle**, the same way
   `recall({ scope })` fences discovery, on **both** per-tenant axes: a `get` for a `doc`/blob tagged with a
@@ -1475,7 +1476,8 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   files may fall back to a file-level chunk. They are not in the default `include`.
 - **`recall()` and `get()` write — unless you opt out.** Since slice 7, every recall appends
   its hits to the `recall_log` audit table, and since slice 9 every `get` appends a fetch row
-  (tagged `action: 'fetch'`, kept apart from recall's demand signal) — so by default both need
+  (tagged `action: 'fetch'`, kept apart from recall's demand signal; `recall({ body: true })` also logs one
+  for each fact/episode hit returned with a body) — so by default both need
   a writable db, and the log grows with use (append-only; small rows, but unbounded — pruning
   policy is yours until the access-log tier defines one). Pass `{ log: false }` for read-only
   opens and for any consumer whose queries aren't real demand (dashboards, CI, batch tooling)

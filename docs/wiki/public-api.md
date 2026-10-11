@@ -131,7 +131,9 @@ Every `recall()` hit is logged as an audit row (the access log), and every writt
 (litectx-prd.md:536-543). Promotion is **earned by use**: an agent-asserted fact that crosses a
 recall-hit threshold (default 5) becomes a review candidate via `reviewCandidates(threshold=5)`
 (`by="agent" ∧ hits ≥ threshold`); a human either promotes it (`remember(id, text, {by:"human"})`)
-or invalidates it (`forget(id)`) — this gates *review*, not ranking, so it isn't the
+or invalidates it (`forget(id)`); the agent-side rung, `promotionCandidates(threshold=10)` for episodes,
+counts distinct recall→fetch cycles (a `get` following a recall; `recall({body:true})` logs the fetch itself),
+not bare recalls — this gates *review*, not ranking, so it isn't the
 rich-get-richer loop the design otherwise forbids (litectx-prd.md:545-556). fact/episode ranking
 in v1 is BM25(+embeddings) only — no import/call edges, so graph-spreading does not apply; the
 decay/reinforcement behavior that would make it "cognitively" work is deferred to the access-log
@@ -229,7 +231,8 @@ only fetch what recall already returned (litectx-prd.md:619).
 lc.get(path, { startLine, endLine });
 ```
 
-Redeems the exact pointer `recall()` issued, returning one chunk (code + its leading doc-comment)
+Redeems the exact pointer `recall()` issued, returning one chunk (code + its leading doc-comment; for markdown, also an exact run of 2+ adjacent
+whole sections, joined)
 instead of a whole file — a caller that previously re-read a 117 KB file nine times can fetch the
 7-line function directly (litectx-prd.md:658-663). Resolution is by **(lines, content hash), never
 by symbol name** — names are duplicated, renamed, and absent on ~40% of chunks, so name-lookup can
