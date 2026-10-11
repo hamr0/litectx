@@ -159,7 +159,7 @@ async function main() {
     const rows = opts.threshold ? ctx.promotionCandidates(opts.threshold) : ctx.promotionCandidates();
     ctx.close();
     if (!rows.length) {
-      console.error("litectx: no promotion candidates — agent episodes recalled then fetched past the threshold (default 10) within the last 30 days; distil hot ones into facts");
+      console.error("litectx: no promotion candidates — agent episodes with distinct recall→fetch cycles past the threshold (default 10) within the last 30 days; distil hot ones into facts");
       return;
     }
     // hits \t episode-id — the agent reads each (get <id>) and distils a fact via remember

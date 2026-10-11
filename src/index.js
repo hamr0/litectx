@@ -1522,8 +1522,9 @@ export class LiteCtx {
    * rank higher (that would be the feedback loop §4 forbids). Threshold defaults higher than facts'
    * review (10 vs 5): episodes are noisier and more numerous.
    *
-   * `hits` counts distinct `get` fetches of the episode that have an earlier-or-equal recall of the same id
-   * (an AND, not a sum: a fetch with no prior recall does not count, and recalls alone never count).
+   * `hits` counts distinct recall→fetch cycles: each recall of the id counts at most once, and only if a `get`
+   * follows it before the next recall (an AND, not a sum: one recall + ten gets is 1; a fetch with no prior
+   * recall counts nothing, and recalls alone never count).
    * `recall({ body: true })` hands bodies back without a `get`, so it also logs a fetch per fact/episode hit
    * returned with a body — for those callers the signal is "returned with body", no stronger than before.
    * `reviewCandidates` (facts) is unchanged: it still counts recalls.
@@ -1540,7 +1541,7 @@ export class LiteCtx {
    * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
    * @category memory
-   * @when Find episodes recalled and then fetched often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.
+   * @when Find episodes with enough distinct recall→fetch cycles to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.
    * @fails Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).
    * @signature liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]
    * @example

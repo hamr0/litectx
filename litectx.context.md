@@ -927,10 +927,12 @@ bound `ctx.scoped(tenant).reviewCandidates(threshold)` so the scope can't be for
 ### `ctx.promotionCandidates(threshold = 10, opts?)` → `{ path, hits }[]`
 The **episode promotion query** — the agent-side first rung of the ladder (`reviewCandidates`
 is the human-side second rung). Returns **agent-written `episode`s** **recalled, then fetched** (`get`)
-at least `threshold` times within the **30-day rolling active window**, most-fetched first. `hits` counts
-distinct `get` fetches of the episode that have an earlier-or-equal recall of the same id — an **AND, not
-a sum**: a fetch with no prior recall does not count, and recalls alone never count (an episode
-that was only ever *returned* in results is not "used"). `recall({ body: true })` hands bodies back with
+at least `threshold` times within the **30-day rolling active window**, most-used first. `hits` counts
+**distinct recall→fetch cycles**: each recall of the id counts at most once, and only if a `get` follows it
+before the next recall (one recall + ten gets = 1) — an **AND, not a sum**: a fetch with no prior recall
+counts nothing, and recalls alone never count (an episode that was only ever *returned* in results is not
+"used"). Upgrading from ≤0.35.0: counts are not backfilled — episodes that qualified on recall count alone
+drop out until recalled-then-fetched again. `recall({ body: true })` hands bodies back with
 no `get`, so it also logs a fetch per fact/episode hit returned with a body — **for those callers the
 signal is "returned with body", no stronger than the old recall count**. `reviewCandidates` (facts) is
 unchanged and still counts recalls. Episodes are

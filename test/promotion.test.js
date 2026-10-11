@@ -34,9 +34,10 @@ function done(c) {
 /** Inject `n` recall-demand events for a written id (cheaper than driving recall() n times). */
 function hit(c, path, kind, n) {
   for (let i = 0; i < n; i++) {
-    c.store.logRecall([{ path, kind }], Date.now(), "recall");
-    // promotion counts "recalled, then fetched" (episodes); facts (reviewCandidates) still count recalls only
-    if (kind === "episode") c.store.logRecall([{ path, kind }], Date.now(), "fetch");
+    const ts = Date.now(); // one ts per cycle (as _logRecall does) so a ms tick can't split recall from its fetch
+    c.store.logRecall([{ path, kind }], ts, "recall");
+    // promotion counts recall→fetch cycles (episodes); facts (reviewCandidates) still count recalls only
+    if (kind === "episode") c.store.logRecall([{ path, kind }], ts, "fetch");
   }
 }
 /** Backdate a written row's occurred_at WITHOUT triggering the write-time prune. */
@@ -165,8 +166,8 @@ test("promotion: 10 fetches with NO prior recall do not count; the AND is per fe
   assert.deepEqual(c.promotionCandidates(), []);
   log(c, "ep:blind", "recall", 1, t + 1000);
   assert.deepEqual(c.promotionCandidates(1), [], "a recall AFTER the fetches does not retro-count them");
-  log(c, "ep:blind", "fetch", 3, t + 2000); // after the recall: these count
-  assert.deepEqual(c.promotionCandidates(1), [{ path: "ep:blind", hits: 3 }]);
+  log(c, "ep:blind", "fetch", 3, t + 2000); // after the recall: they count, but as ONE cycle (one recall)
+  assert.deepEqual(c.promotionCandidates(1), [{ path: "ep:blind", hits: 1 }]);
   done(c);
 });
 
@@ -184,5 +185,32 @@ test("promotion: without body:true, recall alone never promotes (no fetch row is
   for (let i = 0; i < 10; i++) await c.recall("retry storms cold cache", { kind: "episode" });
   assert.deepEqual(c.promotionCandidates(), []);
   assert.equal(c.store.db.prepare("SELECT count(*) n FROM recall_log WHERE action='fetch'").get().n, 0);
+  done(c);
+});
+
+/** Log a recall→fetch timeline for an episode with explicit, strictly increasing timestamps. */
+function timeline(c, path, steps) {
+  let ts = Date.now() - 10_000;
+  for (const a of steps) c.store.logRecall([{ path, kind: "episode" }], (ts += 10), a);
+}
+
+test("promotion counts each recall→fetch cycle once", async () => {
+  const c = ctx();
+  for (const id of ["ep:a", "ep:b", "ep:c", "ep:d"]) await c.remember(id, `note for ${id}`, { kind: "episode", by: "agent" });
+  // (a) one recall + ten gets = ONE cycle
+  timeline(c, "ep:a", ["recall", ...Array(10).fill("fetch")]);
+  // (b) ten × (recall then get) = ten cycles
+  timeline(c, "ep:b", Array.from({ length: 10 }, () => ["recall", "fetch"]).flat());
+  // (c) a get with no prior recall counts nothing
+  timeline(c, "ep:c", ["fetch", "fetch"]);
+  // (d) recall, get, recall, recall, get = 2 cycles (the middle recall is superseded by the next)
+  timeline(c, "ep:d", ["recall", "fetch", "recall", "recall", "fetch"]);
+
+  const at = (id) => c.promotionCandidates(1).find((r) => r.path === id)?.hits ?? 0;
+  assert.equal(at("ep:a"), 1);
+  assert.equal(at("ep:b"), 10);
+  assert.equal(at("ep:c"), 0);
+  assert.equal(at("ep:d"), 2);
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:b", hits: 10 }], "only the 10-cycle episode clears the default threshold");
   done(c);
 });
