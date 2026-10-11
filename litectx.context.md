@@ -123,7 +123,7 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
 const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-// hits: [{ path, kind, format, score, keyword, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; keyword: matched a query word vs added by meaning only; git: activity, not scored)
+// hits: [{ path, kind, format, score, keyword, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; keyword: true = matched the keyword (FTS) index (incl. id/path tokens; stemmed forms for fact/episode), false = added by meaning only; git: activity, not scored)
 
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });

@@ -1,6 +1,6 @@
 # tinymem — long-term organized memory for agents, inside litectx (preliminary PRD)
 
-> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. Re-scoped by the owner 2026-10-08: docs-only, litectx as a compass (see Goal); measurement order M1–M3 under "Next".** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); the docs-compass work was closed out 2026-10-09 (see "Conclusion so far"); everything under "Next, in order" other than the close-out list is not built. A line marked **(proposed)**
+> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. Re-scoped by the owner 2026-10-08: docs-only, litectx as a compass (see Goal); measurement order M1–M3 under "Next".** The retrieval change (md sections as rows) was released in 0.34.0 (0.35.0 is current); the docs-compass work was closed out 2026-10-09 (see "Conclusion so far"); everything under "Next, in order" other than the close-out list is not built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
 > Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
@@ -190,11 +190,11 @@ Settled by the owner, 2026-10-02.
 
 *Close-out list (owner decision 2026-10-09; replaces the pending pilot/scale items):*
 1. DONE: record learnings (pilot, scale run, B autopsy, `get` replay, close-out decision) in [learnings](tinymem-learnings.md#pilot-at-big-scale-step-7-2026-10-09).
-2. PENDING (owner): put the honest claim wording into the shipped docs: README, `litectx.context.md`, and the MCP `recall` tool description.
-3. PENDING (owner): release the built sections retrieval (0.34.0, unreleased).
+2. DONE: honest claim wording is in the shipped docs: README (line 20) and the MCP `recall` tool description.
+3. DONE: sections retrieval released in 0.34.0 (published; 0.35.0 is current).
 (Done earlier: fresh question set and free confirmation of grouped output; description A/B, step 6; pilot, step 7; scale run, step 8. Grouping with section names moved to Deferred.)
 
-*Status 2026-10-09: M1 done, M2 done (ceiling, 20/20 both arms). Next is a paraphrase-question validation run before M3.*
+*Status 2026-10-09: M1 done, M2 done (ceiling, 20/20 both arms), the paraphrase validation run (step 3) done. The docs-compass work is closed out (see the close-out list above); M3 is parked, not planned.*
 
 **Old steps below are ON HOLD or retired (2026-10-08).** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started. Session-feed steps (5 and 6) are parked with sessions.
 
