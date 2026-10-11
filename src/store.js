@@ -1421,8 +1421,7 @@ export class Store {
    * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s with at least `threshold`
    * distinct recall→fetch cycles (an AND, not a sum — the old recall-only count is now only `reviewCandidates`'):
    * a cycle is one 'recall' row q of the path that has a 'fetch' r after it, before the NEXT recall of
-   * that path (computed in one ordered window pass per path, not a per-recall correlated scan; order = (ts, id): ts first, insertion id breaks same-ms ties, so a body:true recall+fetch logged at one ts
-   * pairs recall-then-fetch). Each recall counts at most once, however many
+   * that path. Each recall counts at most once, however many
    * fetches follow it; a fetch with no prior recall counts nothing. Candidates are those whose `occurred_at` falls in the rolling active window `[since, now]`
    * (older episodes have decayed out of the active set). Mirrors {@link reviewCandidates} exactly —
    * same `recall_log` demand join, `'recall'`-only, same `{ path, hits }` shape — with two deltas:
@@ -1445,7 +1444,9 @@ export class Store {
         .prepare(
           // One ordered pass per path: `cyc` = running count of recalls up to and including this row, so every
           // fetch carries the number of the recall it follows (0 = fetch before any recall). A cycle = a
-          // distinct `cyc` among fetches with cyc > 0. Candidates are fenced FIRST so only their rows are windowed.
+          // distinct `cyc` among fetches with cyc > 0. Order is (ts, id): insertion id breaks same-ms ties, so a
+          // body:true recall+fetch logged at one ts pairs recall-then-fetch. Candidates are fenced FIRST so only
+          // their rows are windowed.
           "WITH cand AS (SELECT m.path AS path FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
             "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since " +
             "AND (@memSeeAll = 1 OR s.owner IS NULL OR (@memOwner IS NOT NULL AND s.owner = @memOwner)) " +
