@@ -50,7 +50,7 @@ const TOOLS = [
   {
     name: "recall",
     description:
-      "Ranked search over indexed code/docs + written memory. Matches on query words (BM25 + import-graph spreading), re-ranked by meaning when embeddings are on; a code/doc hit must share a query word. Use it to find WHERE to look, especially when you don't know the exact term, then read the returned section with `get` or grep inside that file. Returns scored POINTERS (`score` = the value the list is ordered by, higher = more relevant, comparable within one list only; `keyword` = true if the hit shares a query word, false if added by meaning only) — paths/ids with a chunk locator — not bodies; follow up with `get` on a hit's path to read one. Omit `kind` to get top hits grouped per kind (code/doc/fact/episode). Written-memory hits also carry `provenance` (human = a person signed off; agent = your own past assertion, maybe worth re-verifying — NOT a quality rank), `use` (how often recalled; 0 can be a fresh win, not a demerit), and `occurredAt` (episodes). Ranking is pure relevance — these columns are for YOU to weigh, never a thumb on the scale.",
+      "Ranked search over indexed code/docs + written memory. Matches on query words (BM25 + import-graph spreading), re-ranked by meaning when embeddings are on; a code/doc hit must share a query word. Use it to find WHERE to look, especially when you don't know the exact term, then read the returned section with `get` or grep inside that file. Returns scored POINTERS (`score` = the value the list is ordered by, higher = more relevant, comparable within one list only; `keyword` = true if the hit matched the keyword (FTS) index, which includes id/path tokens and, for fact/episode, stemmed forms; false = added by meaning only) — paths/ids with a chunk locator — not bodies; follow up with `get` on a hit's path to read one. Omit `kind` to get top hits grouped per kind (code/doc/fact/episode). Written-memory hits also carry `provenance` (human = a person signed off; agent = your own past assertion, maybe worth re-verifying — NOT a quality rank), `use` (how often recalled; 0 can be a fresh win, not a demerit), and `occurredAt` (episodes). Ranking is pure relevance — these columns are for YOU to weigh, never a thumb on the scale.",
     inputSchema: {
       type: "object",
       properties: {
@@ -64,7 +64,7 @@ const TOOLS = [
   {
     name: "get",
     description:
-      "Fetch the body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk. To read ONE chunk instead of the whole file, pass startLine/endLine copied verbatim from that hit's `chunk` — a recall hit points at a symbol, and this is how you read just that symbol without dragging its whole file through context. Copy the numbers; never compute or widen them.",
+      "Fetch the body for an id returned by recall — a written-memory id verbatim as remembered, or an indexed file's repo-relative path read fresh from disk. To read ONE chunk instead of the whole file, pass startLine/endLine copied verbatim from that hit's `chunk` — a recall hit points at a symbol, and this is how you read just that symbol without dragging its whole file through context. Copy the numbers; never compute or widen them. (Markdown: an exact run of adjacent sections — first start to last end, no gap — is also served.)",
     inputSchema: {
       type: "object",
       properties: {
@@ -90,10 +90,10 @@ const TOOLS = [
   {
     name: "promotions",
     description:
-      "Episode promotion candidates — agent-written episodes recalled past a threshold (default 10) within the last 30 days, i.e. the scratchpad notes worth distilling into durable facts. The intended loop is YOURS: read each (get its id), then write a distilled fact with remember(kind:'fact', by:'agent'). litectx only flags; it never summarizes. Returns { path, hits }; hits gates distillation, never ranking.",
+      "Episode promotion candidates — agent-written episodes with at least a threshold number of distinct recall→fetch cycles (default 10; recall then get, each recall counts once) within the last 30 days, i.e. the scratchpad notes worth distilling into durable facts. The intended loop is YOURS: read each (get its id), then write a distilled fact with remember(kind:'fact', by:'agent'). litectx only flags; it never summarizes. Returns { path, hits }; hits (distinct recall→fetch cycles) gates distillation, never ranking.",
     inputSchema: {
       type: "object",
-      properties: { threshold: { type: "number", description: "min recall hits to flag an episode (default 10)" } },
+      properties: { threshold: { type: "number", description: "min distinct recall→fetch cycles to flag an episode (default 10)" } },
     },
   },
   {

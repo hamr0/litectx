@@ -100,7 +100,7 @@ async function main() {
       // A miss here means the range is not a chunk boundary — almost always a range that was typed or
       // computed rather than copied. Say so: the bare "no chunk at 7-10" is a dead end, and the MCP
       // surface already tells its caller where the numbers come from. Never widen to the whole file.
-      if (range) die(`no chunk at ${opts.lines} in '${id}' — copy the range exactly as \`litectx recall\` printed it (\`→ symbol:6-10\`); it is a chunk boundary, not any span of lines`);
+      if (range) die(`no chunk at ${opts.lines} in '${id}' — copy the range exactly as \`litectx recall\` printed it (\`→ symbol:6-10\`); it is a chunk boundary (or, for markdown, an exact run of adjacent sections), not any span of lines`);
       die(`'${id}' is not in the index`);
     }
     // metadata to stderr, body to stdout — so `litectx get <id>` pipes clean text
@@ -159,7 +159,7 @@ async function main() {
     const rows = opts.threshold ? ctx.promotionCandidates(opts.threshold) : ctx.promotionCandidates();
     ctx.close();
     if (!rows.length) {
-      console.error("litectx: no promotion candidates — agent episodes recalled past the threshold (default 10) within the last 30 days; distil hot ones into facts");
+      console.error("litectx: no promotion candidates — agent episodes with distinct recall→fetch cycles past the threshold (default 10) within the last 30 days; distil hot ones into facts");
       return;
     }
     // hits \t episode-id — the agent reads each (get <id>) and distils a fact via remember

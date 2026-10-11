@@ -118,3 +118,23 @@ test("grouped recall attaches body across kinds", async () => {
   ctx.close();
   rmSync(root, { recursive: true, force: true });
 });
+
+test("body:true logs fetch rows only for fact/episode — never code/doc", async () => {
+  const root = fixtureRepo();
+  writeFileSync(join(root, "notes.md"), "# Decay notes\n\nApply decay to the activation value over days.\n");
+  const ctx = await indexed(root);
+  const fetches = () => ctx.store.db.prepare("SELECT count(*) AS n FROM recall_log WHERE action = 'fetch'").get().n;
+
+  const code = await ctx.recall("computeActivation", { kind: "code", body: true });
+  const doc = await ctx.recall("decay activation", { kind: "doc", body: true });
+  assert.ok(code.length > 0 && typeof code[0].body === "string", "code recall returned a body");
+  assert.ok(doc.length > 0 && typeof doc[0].body === "string", "doc recall returned a body");
+  assert.equal(fetches(), 0, "code/doc bodies log no fetch row");
+
+  await ctx.remember("fact:decay", "Decay subtracts log10(days) from the value.", { kind: "fact" });
+  const fact = await ctx.recall("decay value days", { kind: "fact", body: true });
+  assert.ok(fact.length > 0 && typeof fact[0].body === "string", "fact recall returned a body");
+  assert.equal(fetches(), 1, "a fact body logs exactly one fetch row");
+  ctx.close();
+  rmSync(root, { recursive: true, force: true });
+});

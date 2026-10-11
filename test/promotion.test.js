@@ -33,7 +33,12 @@ function done(c) {
 
 /** Inject `n` recall-demand events for a written id (cheaper than driving recall() n times). */
 function hit(c, path, kind, n) {
-  for (let i = 0; i < n; i++) c.store.logRecall([{ path, kind }], Date.now(), "recall");
+  for (let i = 0; i < n; i++) {
+    const ts = Date.now(); // one ts per cycle (as _logRecall does) so a ms tick can't split recall from its fetch
+    c.store.logRecall([{ path, kind }], ts, "recall");
+    // promotion counts recall→fetch cycles (episodes); facts (reviewCandidates) still count recalls only
+    if (kind === "episode") c.store.logRecall([{ path, kind }], ts, "fetch");
+  }
 }
 /** Backdate a written row's occurred_at WITHOUT triggering the write-time prune. */
 function backdate(c, path, ageMs) {
@@ -122,8 +127,118 @@ test("promotion is isolated from ranking — recall order is identical no matter
   assert.deepEqual(after, before, "recall ranking ignores recall-hit count — no rich-get-richer feedback");
   assert.equal(
     /** @type {{ n: number }} */ (c.store.db.prepare("SELECT count(*) AS n FROM recall_log").get()).n,
-    logRowsBefore + 40,
+    logRowsBefore + 80,
     "only the injected hits were logged — promotionCandidates is a pure read"
   );
+  done(c);
+});
+
+// === "recalled, then fetched" (an AND, not a sum) ====================================================
+
+const log = (c, path, action, n = 1, ts = Date.now()) => {
+  for (let i = 0; i < n; i++) c.store.logRecall([{ path, kind: "episode" }], ts, action);
+};
+
+test("promotion: an episode recalled 10x but never fetched is NOT a candidate", async () => {
+  const c = ctx();
+  await c.remember("ep:seen", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  log(c, "ep:seen", "recall", 10);
+  assert.deepEqual(c.promotionCandidates(), []);
+  done(c);
+});
+
+test("promotion: recalled then fetched 10x IS a candidate (real recall() + get())", async () => {
+  const c = ctx();
+  await c.remember("ep:used", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) {
+    await c.recall("retry storms cold cache", { kind: "episode" });
+    c.get("ep:used");
+  }
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:used", hits: 10 }]);
+  done(c);
+});
+
+test("promotion: 10 fetches with NO prior recall do not count; the AND is per fetch", async () => {
+  const c = ctx();
+  await c.remember("ep:blind", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  const t = Date.now();
+  log(c, "ep:blind", "fetch", 10, t); // all strictly before the first recall
+  assert.deepEqual(c.promotionCandidates(), []);
+  log(c, "ep:blind", "recall", 1, t + 1000);
+  assert.deepEqual(c.promotionCandidates(1), [], "a recall AFTER the fetches does not retro-count them");
+  log(c, "ep:blind", "fetch", 3, t + 2000); // after the recall: they count, but as ONE cycle (one recall)
+  assert.deepEqual(c.promotionCandidates(1), [{ path: "ep:blind", hits: 1 }]);
+  done(c);
+});
+
+test("promotion: recall({body:true}) 10x logs fetch rows too, so a body consumer is a candidate", async () => {
+  const c = ctx();
+  await c.remember("ep:body", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) await c.recall("retry storms cold cache", { kind: "episode", body: true });
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:body", hits: 10 }]);
+  done(c);
+});
+
+test("promotion: without body:true, recall alone never promotes (no fetch row is written)", async () => {
+  const c = ctx();
+  await c.remember("ep:plain", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) await c.recall("retry storms cold cache", { kind: "episode" });
+  assert.deepEqual(c.promotionCandidates(), []);
+  assert.equal(c.store.db.prepare("SELECT count(*) n FROM recall_log WHERE action='fetch'").get().n, 0);
+  done(c);
+});
+
+/** Log a recall→fetch timeline for an episode with explicit, strictly increasing timestamps. */
+function timeline(c, path, steps) {
+  let ts = Date.now() - 10_000;
+  for (const a of steps) c.store.logRecall([{ path, kind: "episode" }], (ts += 10), a);
+}
+
+test("promotion counts each recall→fetch cycle once", async () => {
+  const c = ctx();
+  for (const id of ["ep:a", "ep:b", "ep:c", "ep:d"]) await c.remember(id, `note for ${id}`, { kind: "episode", by: "agent" });
+  // (a) one recall + ten gets = ONE cycle
+  timeline(c, "ep:a", ["recall", ...Array(10).fill("fetch")]);
+  // (b) ten × (recall then get) = ten cycles
+  timeline(c, "ep:b", Array.from({ length: 10 }, () => ["recall", "fetch"]).flat());
+  // (c) a get with no prior recall counts nothing
+  timeline(c, "ep:c", ["fetch", "fetch"]);
+  // (d) recall, get, recall, recall, get = 2 cycles (the middle recall is superseded by the next)
+  timeline(c, "ep:d", ["recall", "fetch", "recall", "recall", "fetch"]);
+
+  const at = (id) => c.promotionCandidates(1).find((r) => r.path === id)?.hits ?? 0;
+  assert.equal(at("ep:a"), 1);
+  assert.equal(at("ep:b"), 10);
+  assert.equal(at("ep:c"), 0);
+  assert.equal(at("ep:d"), 2);
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:b", hits: 10 }], "only the 10-cycle episode clears the default threshold");
+  done(c);
+});
+
+test("promotion: same-ts ties order by insertion id — fetch logged before its recall does NOT count; recall then fetch does", async () => {
+  const c = ctx();
+  await c.remember("ep:fr", "fetch inserted first", { kind: "episode", by: "agent" });
+  await c.remember("ep:rf", "recall inserted first", { kind: "episode", by: "agent" });
+  const ts = Date.now() - 1000;
+  c.store.logRecall([{ path: "ep:fr", kind: "episode" }], ts, "fetch"); // lower id, same ts
+  c.store.logRecall([{ path: "ep:fr", kind: "episode" }], ts, "recall");
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "recall"); // lower id, same ts
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "fetch");
+  const at = (id) => c.promotionCandidates(1).find((r) => r.path === id)?.hits ?? 0;
+  assert.equal(at("ep:fr"), 0, "a same-ts fetch inserted before the recall precedes it");
+  assert.equal(at("ep:rf"), 1, "a same-ts recall inserted before the fetch is followed by it");
+  done(c);
+});
+
+test("promotion: (ts, id) tie-break holds under a non-rowid scan order", async () => {
+  const c = ctx();
+  // This index forces a non-rowid scan order (fetch rows read before recall rows), so the explicit id tie-break is what keeps the count right.
+  c.store.db.exec("CREATE INDEX recall_log_pat ON recall_log(path, action, ts)");
+  await c.remember("ep:rf", "recall inserted first", { kind: "episode", by: "agent" });
+  const ts = Date.now() - 1000;
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "recall");
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "fetch");
+  const hits = c.promotionCandidates(1).find((r) => r.path === "ep:rf")?.hits ?? 0;
+  assert.equal(hits, 1, "same-ts recall-then-fetch counts once regardless of scan order");
   done(c);
 });

@@ -115,7 +115,10 @@ test("M4: promotionCandidates is tenant-fenced — another tenant's hot episode 
   // make BOTH episodes hot, each within its own tenant scope
   const a = ctx.scoped("cust:A");
   const b = ctx.scoped("cust:B");
-  for (let i = 0; i < 3; i++) (await a.recall("rate limiter", { kind: "episode" }), await b.recall("rate limiter", { kind: "episode" }));
+  // promotion counts "recalled, then fetched": each round is a recall followed by a get of the episode
+  for (let i = 0; i < 3; i++) (await a.recall("rate limiter", { kind: "episode" }), a.get("ep:a"), await b.recall("rate limiter", { kind: "episode" }), b.get("ep:b"));
+  // a cross-tenant fetch of a guessed id is fenced (null) and logs nothing, so it can't inflate B's count
+  for (let i = 0; i < 5; i++) a.get("ep:b");
 
   assert.deepEqual(ctx.scoped("cust:A").promotionCandidates(2).map((c) => c.path), ["ep:a"], "A's promotion queue = A's episode only");
   assert.deepEqual(ctx.scoped("cust:B").promotionCandidates(2).map((c) => c.path), ["ep:b"], "B's promotion queue = B's episode only");

@@ -34,7 +34,8 @@ function done(c) {
 }
 /** Inject `n` recall-demand events for a written id (drives the promotion count without recall()). */
 function hit(c, path, n) {
-  for (let i = 0; i < n; i++) c.store.logRecall([{ path, kind: "episode" }], Date.now(), "recall");
+  // promotion counts "recalled, then fetched": a recall row followed by a fetch row
+  for (let i = 0; i < n; i++) (c.store.logRecall([{ path, kind: "episode" }], Date.now(), "recall"), c.store.logRecall([{ path, kind: "episode" }], Date.now(), "fetch"));
 }
 /** Backdate a written row's occurred_at WITHOUT triggering the write-time prune. */
 function backdate(c, path, ageMs) {

@@ -1379,3 +1379,31 @@ Source: POC scripts in `poc/`: `embed-speed-profile.mjs`, `embed-speed-knobs.mjs
 - The one promising lever is a 256-token cap. It matches the reference model's own default truncation and is about 1.8x faster. It changes stored vectors, so it needs a recall bench first (memory paraphrase MRR, floor 0.574, via `poc/memory-bench.mjs --embeddings`, plus doc recall) and a one-time re-embed on upgrade.
 - A static-embedding model is a second, bigger quality trade.
 - Trigger to revisit: a consumer reports the cold index as a blocker, or the owner picks the 256-cap bench.
+
+### 256-token cap benchmark: PARKED (2026-10-11)
+
+Source: pre-registered bars (sha256 `cb6eef9effaef8aa396f41f83da10bd05dc70944b76ca25115ed7c5670eebe6f`). Raw data stayed outside the repo (session scratchpad, `cap256/`). Question: is a 256-token cap safe for recall?
+
+Pre-registered bars:
+- B1: memory paraphrase MRR at least 0.574 and within 0.02 of the 512 cap.
+- B2: exact and morph memory recall unchanged.
+- B3: code and doc recall with embeddings (`poc/recall-litmus.mjs`), MRR drop at most 0.01.
+- B4: timing, informative only.
+
+Results:
+- B1 and B2 pass, but vacuously. The memory-bench texts are all under 25 tokens (0 of 29 stored texts and 0 of 32 queries exceed 256), so the cap cannot change them.
+- B3 fails by the pre-registered rule. 2 of 8 embedding conditions dropped more than 0.01: emb@0.3 naive 0.364 to 0.289, and emb@1.0 naive 0.519 to 0.500. Others rose by up to +0.079. Naive mean 0.404 to 0.399; expanded mean 0.674 to 0.719.
+- Runs were bit-identical, so there is no noise. But the bench has only 8 queries, and one rank shift moves MRR by 0.05 or more. It cannot resolve 0.01. Fair reading: inconclusive. The cap is neither shown harmful nor shown safe.
+- Doc recall with embeddings at 256 was NOT measured. No in-repo bench covers it; the tinymem doc probe needs the external `~/.cache/tinymem-probe` data.
+- B4: about 1.6 to 1.75x faster on a saturated machine, consistent with the 1.8x quiet-machine figure. Absolute times are unreliable because other sessions loaded the CPU.
+
+Gotcha:
+- In transformers v4, `tokenizer.model_max_length` is getter-only. Setting it throws, and litectx catches the error and silently falls back to BM25 (a para 0.000 artifact).
+- The cap must be set through `tokenizer._tokenizerConfig.model_max_length`.
+- Any future cap change must verify the cap took effect: a long text's vector differs, a short text's vector is identical.
+
+Decision (owner, 2026-10-11): PARKED.
+- Benefit: a one-time first-index speed-up (71 md files about 2 min to about 1 min; about 1,500 docs about 21 to about 12 min). Search is not faster.
+- Cost: a forced re-embed of every existing index on upgrade, plus an unmeasured long-doc quality risk.
+- Un-defer condition: a consumer reports first-index time as a real problem.
+- Then run the quality test first: the frozen tinymem docs question set (27 questions, gold sections), index at 512 against 256, compare gold-section coverage at top 8 and top 20. Pre-register the bars. Offline, no model calls. A quiet machine is not needed for quality, only for timing.

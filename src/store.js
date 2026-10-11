@@ -202,9 +202,10 @@ const SCHEMA = [
   // join "recalled" and "edited" at the same grain (§14 #4); NULL for written memory / unlocalized.
   // `action` tags the row's signal type (slice 9): 'recall' = real demand (ranked retrieval);
   // 'fetch' = a get(id) body read — mechanically coupled to the recall that produced the id, so
-  // counting it would double-count demand (the fetch-toll, §14 #4). Demand readers (recallCount,
-  // reviewCandidates) filter to 'recall'; 'fetch' is recorded as a tagged weak signal only, and
-  // earns weight (if any) at the action-signal bench — never before.
+  // counting it as a SUM would double-count demand (the fetch-toll, §14 #4). Demand readers (recallCount,
+  // reviewCandidates) filter to 'recall'. The ONE exception is promotionCandidates (episodes): it counts
+  // 'fetch' rows that have an earlier-or-equal 'recall' of the same path — an AND ("recalled, then used"),
+  // never recall+fetch added. `recall({body:true})` logs a fetch row too (it hands the body back with no get).
   "CREATE TABLE IF NOT EXISTS recall_log(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, symbol TEXT, action TEXT NOT NULL DEFAULT 'recall', ts INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS recall_log_path ON recall_log(path)",
   // raw text of direct-written memory (slice 9): the FTS body is the *searchable surface*
@@ -1417,8 +1418,11 @@ export class Store {
   }
 
   /**
-   * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s recalled at
-   * least `threshold` times whose `occurred_at` falls in the rolling active window `[since, now]`
+   * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s with at least `threshold`
+   * distinct recall→fetch cycles (an AND, not a sum — the old recall-only count is now only `reviewCandidates`'):
+   * a cycle is one 'recall' row q of the path that has a 'fetch' r after it, before the NEXT recall of
+   * that path. Each recall counts at most once, however many
+   * fetches follow it; a fetch with no prior recall counts nothing. Candidates are those whose `occurred_at` falls in the rolling active window `[since, now]`
    * (older episodes have decayed out of the active set). Mirrors {@link reviewCandidates} exactly —
    * same `recall_log` demand join, `'recall'`-only, same `{ path, hits }` shape — with two deltas:
    * `kind='episode'` (not `'fact'`) and the `occurred_at >= since` window gate. The count gates
@@ -1429,7 +1433,7 @@ export class Store {
    * Tenant-fenced (multis M4): same per-call owner fence as {@link reviewCandidates} — one shared
    * instance's promotion queue never mixes tenants' episodes.
    * @param {{ threshold: number, since: number, memOwner?: string|null, memSeeAll?: boolean }} opts
-   *   `threshold` = min recall hits; `since` = `occurred_at` floor (epoch ms) — the rolling-window
+   *   `threshold` = min distinct recall→fetch cycles; `since` = `occurred_at` floor (epoch ms) — the rolling-window
    *   cutoff; `memOwner`/`memSeeAll` = per-call owner fence (defaults to the instance owner).
    * @returns {{ path: string, hits: number }[]}
    */
@@ -1438,12 +1442,20 @@ export class Store {
     return /** @type {{ path: string, hits: number }[]} */ (
       this.db
         .prepare(
-          "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
-            "LEFT JOIN mem_scope s ON s.path = m.path " +
-            "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since AND r.action = 'recall' " +
+          // One ordered pass per path: `cyc` = running count of recalls up to and including this row, so every
+          // fetch carries the number of the recall it follows (0 = fetch before any recall). A cycle = a
+          // distinct `cyc` among fetches with cyc > 0. Order is (ts, id): insertion id breaks same-ms ties, so a
+          // body:true recall+fetch logged at one ts pairs recall-then-fetch. Candidates are fenced FIRST so only
+          // their rows are windowed.
+          "WITH cand AS (SELECT m.path AS path FROM mem m LEFT JOIN mem_scope s ON s.path = m.path " +
+            "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since " +
             "AND (@memSeeAll = 1 OR s.owner IS NULL OR (@memOwner IS NOT NULL AND s.owner = @memOwner)) " +
-            "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid) " +
-            "GROUP BY m.path HAVING hits >= @threshold ORDER BY hits DESC, m.path"
+            "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid)), " +
+            "ord AS (SELECT l.path AS path, l.action AS action, " +
+            "SUM(CASE WHEN l.action = 'recall' THEN 1 ELSE 0 END) OVER (PARTITION BY l.path ORDER BY l.ts, l.id ROWS UNBOUNDED PRECEDING) AS cyc " +
+            "FROM recall_log l WHERE l.action IN ('recall', 'fetch') AND l.path IN (SELECT path FROM cand)) " +
+            "SELECT path, count(DISTINCT cyc) AS hits FROM ord WHERE action = 'fetch' AND cyc > 0 " +
+            "GROUP BY path HAVING hits >= @threshold ORDER BY hits DESC, path"
         )
         .all({ since, threshold, memSeeAll: f.memSeeAll, memOwner: f.memOwner, sid: this.session })
     );
@@ -1789,6 +1801,27 @@ export class Store {
       this.db.prepare("SELECT body FROM nodes WHERE path = ? AND start_line = ? AND end_line = ? ORDER BY id LIMIT 1").get(path, startLine, endLine)
     );
     return row ? row.body : null;
+  }
+
+  /**
+   * The joined stored body of a RUN of adjacent whole `doc` (md) chunks that exactly spans
+   * `startLine..endLine`: chunks c1..ck (k >= 2), c1.start == startLine, ck.end == endLine, and each
+   * next.start == prev.end + 1. md chunks tile a file (no gap, no overlap), so the join of the bodies
+   * with "\n" reads as the file's lines. Code chunks nest (a class contains its methods), so a `code`
+   * file is never served this way. Any partial edge or gap -> `null`: the range is never widened.
+   * @param {string} path
+   * @param {number} startLine  0-based, inclusive
+   * @param {number} endLine    0-based, inclusive
+   * @returns {string | null}
+   */
+  chunkRunBodyAt(path, startLine, endLine) {
+    const rows = /** @type {{ start_line: number, end_line: number, body: string }[]} */ (
+      this.db.prepare("SELECT start_line, end_line, body FROM nodes WHERE path = ? AND kind = 'doc' AND start_line >= ? AND end_line <= ? ORDER BY start_line, id").all(path, startLine, endLine)
+    );
+    if (rows.length < 2 || rows[0].start_line !== startLine) return null;
+    for (let i = 1; i < rows.length; i++) if (rows[i].start_line !== rows[i - 1].end_line + 1) return null;
+    if (rows[rows.length - 1].end_line !== endLine) return null;
+    return rows.map((r) => r.body).join("\n");
   }
 
   /**

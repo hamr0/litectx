@@ -162,7 +162,7 @@ content-judgment (those are bareguard/harness concerns). It is a leaf-ish local 
    untouched; (2) trust/stability surfaces as columns (`provenance`/`use`/`occurredAt`), never a
    score; (3) a separate "what was I working on" view over recent episodes + chunk-edits, free to
    use recency since it never touches search ranking; (4) an episode life-cycle ladder —
-   `promotionCandidates(10)` flags hot episodes for an agent to distil into a fact, which then
+   `promotionCandidates(10)` flags episodes with 10+ distinct recall→fetch cycles for an agent to distil into a fact, which then
    rides the existing `reviewCandidates(5)` human-validation path; episodes soft-decay after 30
    days (litectx-prd.md:1670-1817).
 5. **Consumption surfaces & graph-view packaging — RESOLVED.** The core is the library. A thin CLI

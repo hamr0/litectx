@@ -5,6 +5,18 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.36.0] — 2026-10-11
+
+### Changed
+
+- **Breaking-ish: `promotionCandidates` / `promotions` now count distinct recall→fetch cycles**, not recall appearances. An episode counts once per recall that is followed by a `get` of it: each recall counts at most once, a fetch with no earlier recall counts nothing, and `recall({ body: true })` counts as a fetch for fact/episode hits returned with a body. `hits` values are lower than before. **Upgrading from 0.35.0 or earlier: counts are not backfilled** — episodes that qualified on recall count alone drop out until they are recalled and then fetched again. The threshold (10), `reviewCandidates`, `recallCount`, `use` and ranking are unchanged. Counted in one ordered pass, so busy episodes stay fast.
+- **MCP `recall` description** now states that `keyword` means the hit matched the keyword (FTS) index, including id/path tokens and stemmed forms.
+
+### Added
+
+- **`get(path, { startLine, endLine })` serves an exact run of 2+ adjacent whole markdown sections.** The range must start on one section's first line and end on another's last line, with no gaps; the sections come back joined. Code files and ranges that cut into a section still return `null`; the same staleness check applies (`StalePointerError` on drift). Works through the CLI `--lines` and MCP `get`.
+- `recall({ body: true })` now also writes a `fetch` log row for fact/episode hits returned with a body (this feeds the cycle count above).
+
 ## [0.35.0] — 2026-10-10
 
 ### Changed

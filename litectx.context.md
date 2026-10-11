@@ -79,7 +79,7 @@ doc into facts is your extraction, then `remember`). Direct writes via
 | **Stemmed fact/episode recall** (porter — inflection-tolerant; doc/code stay keyword-exact by measurement) | ✅ shipped (slice 7b) |
 | **Chunk-granular recall** (`hit.chunk` — the matching function/section inside the file) + `log: false` | ✅ shipped (slice 8) |
 | **`get(id)` body access** — fetch any item's full text by id (written memory verbatim, files from disk) | ✅ shipped (slice 9) |
-| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file; content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.1) |
+| **`get(path, {startLine, endLine})`** — fetch ONE chunk (code + its docstring), not the whole file (md: also an exact run of adjacent sections); content-hash gated, throws `StalePointerError` on drift | ✅ shipped (v0.29.1) |
 | **Index self-heals on upgrade** — the index is stamped with the litectx source that built it; a mismatch forces a re-chunk (file rows only; written memory survives) | ✅ shipped (v0.29.1) |
 | **`recall(q, {body:true})`** — inline each hit's content (verbatim memory / localized chunk / whole-file fallback); off by default | ✅ shipped (v0.10.0 — RT-3) |
 | **`remember(id, text, {meta})`** — sealed opaque-metadata passthrough; verbatim round-trip via `get`/`recall`, never tokenized/searched/scored | ✅ shipped (v0.10.0 — RT-3) |
@@ -123,7 +123,7 @@ import { LiteCtx } from "litectx";
 const ctx = new LiteCtx({ root: "/path/to/repo" });
 await ctx.index();                                    // incremental, git-aware
 const hits = await ctx.recall("where do we validate the auth token?", { kind: "code" });
-// hits: [{ path, kind, format, score, keyword, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; keyword: matched a query word vs added by meaning only; git: activity, not scored)
+// hits: [{ path, kind, format, score, keyword, git }, ...]  (score: the value the list is ordered by, higher = more relevant, comparable within one list only; keyword: true = matched the keyword (FTS) index (incl. id/path tokens; stemmed forms for fact/episode), false = added by meaning only; git: activity, not scored)
 
 // memory that isn't a file (slice 7): facts / episodes / runtime docs
 await ctx.remember("fact:auth-uses-jwt", "Auth is JWT, verified in middleware.", { kind: "fact", by: "human" });
@@ -455,7 +455,11 @@ try {
 > plus the hash address every chunk in every language, exactly once.
 
 A line range matching **no chunk** returns `null` — never a silent fallback to the whole file, which
-would reintroduce the bloat invisibly. Written memory is stored whole and has no chunks, so asking it
+would reintroduce the bloat invisibly. One extension, markdown only: a range that is an **exact run of
+2+ adjacent whole sections** (the first starts at `startLine`, the last ends at `endLine`, each starts on
+the line after the previous ends) is served as those section bodies joined with `\n` — same hash gate,
+one `fetch` logged. A partial edge or a gap still returns `null`; code ranges must still equal a single
+chunk (code chunks nest — a class contains its methods). Written memory is stored whole and has no chunks, so asking it
 for a range also returns `null`. Both `startLine` and `endLine` are required together.
 
 `recall({ body: true })` serves bodies from the same gate: a hit whose file has drifted comes back with
@@ -492,7 +496,8 @@ path, the written row wins — namespace your ids (`"fact:…"`) and it never co
   the audit log. A fetch is a **tagged weak signal, not demand**: you fetch what recall
   just returned, so counting fetches as demand would double-count every retrieval (the
   fetch-toll). `recallCount`/`reviewCandidates` read `action: 'recall'` rows only; nothing
-  scores the fetch tag yet (it earns weight, if any, at the action-signal bench). Set
+  scores the fetch tag, and its one reader is `promotionCandidates` (episodes), which counts a fetch only
+  as the second half of a recall→fetch cycle, never as demand on its own. Set
   `log: false` for non-demand consumers, same as `recall`.
 - `opts.scope?: string | typeof GLOBAL` (multis M3 R2 / M4) — **fences the direct handle**, the same way
   `recall({ scope })` fences discovery, on **both** per-tenant axes: a `get` for a `doc`/blob tagged with a
@@ -922,8 +927,16 @@ bound `ctx.scoped(tenant).reviewCandidates(threshold)` so the scope can't be for
 
 ### `ctx.promotionCandidates(threshold = 10, opts?)` → `{ path, hits }[]`
 The **episode promotion query** — the agent-side first rung of the ladder (`reviewCandidates`
-is the human-side second rung). Returns **agent-written `episode`s** recalled at least
-`threshold` times within the **30-day rolling active window**, most-recalled first. Episodes are
+is the human-side second rung). Returns **agent-written `episode`s** **recalled, then fetched** (`get`)
+at least `threshold` times within the **30-day rolling active window**, most-used first. `hits` counts
+**distinct recall→fetch cycles**: each recall of the id counts at most once, and only if a `get` follows it
+before the next recall (one recall + ten gets = 1) — an **AND, not a sum**: a fetch with no prior recall
+counts nothing, and recalls alone never count (an episode that was only ever *returned* in results is not
+"used"). Upgrading from ≤0.35.0: counts are not backfilled — episodes that qualified on recall count alone
+drop out until recalled-then-fetched again. `recall({ body: true })` hands bodies back with
+no `get`, so it also logs a fetch per fact/episode hit returned with a body — **for those callers the
+signal is "returned with body", no stronger than the old recall count**. `reviewCandidates` (facts) is
+unchanged and still counts recalls. Episodes are
 the agent's *ephemeral scratchpad* (its own synthesized gotchas); they graduate by **use** into
 durable facts. The intended loop is **yours**: read each candidate (`get(id)`), then write a
 distilled `fact` — `remember(id, text, { kind: "fact", by: "agent" })` — which then rides the
@@ -1463,7 +1476,8 @@ synchronously against the file except parsing, which uses an async WASM runtime.
   files may fall back to a file-level chunk. They are not in the default `include`.
 - **`recall()` and `get()` write — unless you opt out.** Since slice 7, every recall appends
   its hits to the `recall_log` audit table, and since slice 9 every `get` appends a fetch row
-  (tagged `action: 'fetch'`, kept apart from recall's demand signal) — so by default both need
+  (tagged `action: 'fetch'`, kept apart from recall's demand signal; `recall({ body: true })` also logs one
+  for each fact/episode hit returned with a body) — so by default both need
   a writable db, and the log grows with use (append-only; small rows, but unbounded — pruning
   policy is yours until the access-log tier defines one). Pass `{ log: false }` for read-only
   opens and for any consumer whose queries aren't real demand (dashboards, CI, batch tooling)

@@ -58,10 +58,10 @@
     {
       "name": "get",
       "category": "recall",
-      "when": "Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range. The model calls this directly via MCP.",
+      "when": "Fetch the full body behind a recall hit — a whole file/fact, or one chunk (code + its docstring) by line range (md: or an exact run of adjacent sections). The model calls this directly via MCP.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.get(id: string, opts?: { startLine?, endLine?, scope? }) => Item | null",
-      "fails": "Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk.",
+      "fails": "Throws `StalePointerError` when a chunk range is requested from a file that changed since indexing (refuses rather than return different code); returns `null` for an unknown id or a range matching no chunk (or no exact run of adjacent md sections).",
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst [hit] = await ctx.recall('backoff', { kind: 'code' })\n// echo the hit's chunk range back as the address — nothing widens it\nconst chunk = ctx.get(hit.path, hit.chunk)"
     },
     {
@@ -130,7 +130,7 @@
     {
       "name": "promotionCandidates",
       "category": "memory",
-      "when": "Find episodes recalled often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.",
+      "when": "Find episodes with enough distinct recall→fetch cycles to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]",
       "fails": "Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).",

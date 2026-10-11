@@ -1,6 +1,6 @@
 # tinymem — long-term organized memory for agents, inside litectx (preliminary PRD)
 
-> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. Re-scoped by the owner 2026-10-08: docs-only, litectx as a compass (see Goal); measurement order M1–M3 under "Next".** The retrieval change (md sections as rows) is built in 0.34.0 (unreleased); the docs-compass work was closed out 2026-10-09 (see "Conclusion so far"); everything under "Next, in order" other than the close-out list is not built. A line marked **(proposed)**
+> **Status: DRAFT, a portal that changes as POCs come and go. Go/no-go 1 ran 2026-10-07: NOT CONFIRMED. Step 1 v2 ran 2026-10-08: hybrid FAIL-WORSE at 1x, FAIL at ~5x, gap does not grow; the hybrid is dropped as the plan. Re-scoped by the owner 2026-10-08: docs-only, litectx as a compass (see Goal); measurement order M1–M3 under "Next".** The retrieval change (md sections as rows) was released in 0.34.0 (0.35.0 is current); the docs-compass work was closed out 2026-10-09 (see "Conclusion so far"); everything under "Next, in order" other than the close-out list is not built. A line marked **(proposed)**
 > is the orchestrator's recommendation awaiting the owner's answer; it is not a decision.
 > Companion to [`litectx-prd.md`](litectx-prd.md), which stays the authority for what litectx is.
 > Probe results and findings are in [`tinymem-learnings.md`](tinymem-learnings.md).
@@ -20,15 +20,17 @@ fetch context around a hit" lesson in [learnings](tinymem-learnings.md#lessons-f
 **Success.** Answers about features and about what was decided are as good as grep-only, while
 the agent reads far less (fewer tokens and fewer lines read). Keep it simple.
 
-**Sessions are parked.** Claude Code session history is out of scope for tests: it is too
-fragmented and noisy (tool calls, edits, unstructured text), while docs are coherent. As a
-product goal, sessions are parked, not dropped for good.
+**Session memory is covered by `/remember`.** Long-term memory built from past Claude Code
+sessions is the owner's existing `/remember` skill (it consolidates session stashes into project
+memory); it is not unfinished tinymem work (owner, 2026-10-11). Session search stays out of
+scope for tinymem tests: session history is too fragmented and noisy (tool calls, edits,
+unstructured text), while docs are coherent.
 
 **Original goal (kept as history).** Long-term, organized memory for agents that gets smarter
 as interactions accumulate, the way Claude on the web does: memory built from past sessions,
 plus search over them, kept per project. The test was "what do we know, or what did we decide,
 about X" from past sessions, with a pointer to the source. Adapting to the owner's corrections
-is `/remember`'s job, not tinymem's. The original goal included sessions.
+is `/remember`'s job, not tinymem's. The original goal included sessions; that part is covered by `/remember` (owner, 2026-10-11). The real tinymem goal is the docs compass above.
 
 **What this is not claiming (earlier note).** Our own measurement was a tie between splitting
 docs and searching them. Under the new goal, fewer tokens and lines read is part of success, but
@@ -48,12 +50,12 @@ only if answer quality holds against grep-only.
 
 ## Open issues to look at
 
-- **Slow indexing with embeddings.** Docs-only 1x index took 558 s for bareloop (71 files) and 338 s for bareagent (43 files), built concurrently (CPU contention inflates it); bareloop alone is 3:30. Docs-only padded indexes: 1,525 files 21:02, 919 files 11:53. The earlier ~5x indexes took 45 min and 37.5 min. The first full session index took about 19 min. Embedding is sequential per section. Not yet investigated. Recorded in [learnings](tinymem-learnings.md#step-2--m1-offline-coverage--m2-validation-2026-1008-09) (M1) and the step 1 v2 section. Investigated 2026-10-10: embedding is about 99.5% of the time (about 55 ms per section; 71 md files cold take about 116 s, alone on a quiet machine). Batching, dedupe, thread tuning and parallel embedders give no safe speed-up. A 256-token cap is about 1.8x faster but changes vectors and needs a recall bench first. See [learnings](tinymem-learnings.md#embedding-index-speed-2026-0910).
-- **Recall score display.** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`), while `LiteCtx.recall` orders by fused `minmax(score) + embedWeight * minmax(cosine)` (`src/index.js` ~938-946). Printed scores can contradict the order (for example 0.54 above 1.00). Display issue, not a ranking bug (this is the "weights 0.5 vs 0.9" the owner saw). Fix: print the fused value or label the column. Found in the step-1 v2 trace autopsy and the arm-E diagnostic; recorded in learnings ("Score-column finding"). Fixed on branch fix/recall-score-order (2026-10-10): score is now the fused ordering value.
+- **Slow indexing with embeddings.** Docs-only 1x index took 558 s for bareloop (71 files) and 338 s for bareagent (43 files), built concurrently (CPU contention inflates it); bareloop alone is 3:30. Docs-only padded indexes: 1,525 files 21:02, 919 files 11:53. The earlier ~5x indexes took 45 min and 37.5 min. The first full session index took about 19 min. Embedding is sequential per section. Not yet investigated. Recorded in [learnings](tinymem-learnings.md#step-2--m1-offline-coverage--m2-validation-2026-1008-09) (M1) and the step 1 v2 section. Investigated 2026-10-10: embedding is about 99.5% of the time (about 55 ms per section; 71 md files cold take about 116 s, alone on a quiet machine). Batching, dedupe, thread tuning and parallel embedders give no safe speed-up. A 256-token cap is about 1.8x faster but changes vectors; benchmarked 2026-10-11 and parked (quality result inconclusive; un-defer when a consumer reports first-index time as a problem). See [learnings](tinymem-learnings.md#256-token-cap-benchmark-parked-2026-10-11).
+- **Recall score display.** The CLI prints the pre-fusion BM25 score (`bin/litectx.js:65`), while `LiteCtx.recall` orders by fused `minmax(score) + embedWeight * minmax(cosine)` (`src/index.js` ~938-946). Printed scores can contradict the order (for example 0.54 above 1.00). Display issue, not a ranking bug (this is the "weights 0.5 vs 0.9" the owner saw). Fix: print the fused value or label the column. Found in the step-1 v2 trace autopsy and the arm-E diagnostic; recorded in learnings ("Score-column finding"). Resolved: shipped in litectx 0.35.0 (2026-10-10); score is now the fused ordering value.
 
 ## Current direction (2026-10-08)
 
-- **Goal clarified by the owner (2026-10-08):** litectx as a compass over md docs. It returns all related chunks with file and line ranges; the agent reads only those lines and greps for detail. Sessions are parked and out of tests. See "Goal". The bullets below are the results that led here.
+- **Goal clarified by the owner (2026-10-08):** litectx as a compass over md docs. It returns all related chunks with file and line ranges; the agent reads only those lines and greps for detail. Session search is out of tests, and session memory is covered by `/remember` (owner, 2026-10-11). See "Goal". The bullets below are the results that led here.
 
 - **Step 1 ran (2026-10-08) and the hybrid is dropped.** D (litectx plus grep/read) against B (grep/read only), 40 questions, k = 3: win rate 0.617 against 0.742 at 1x (FAIL-WORSE), 0.658 against 0.717 at ~5x (FAIL). The gap does not grow with size (mean g +0.067, sign test p = 0.067). D used about 60% of B's tokens. D matched B on docs but lost on sessions. (The first reading, "stopped early", was wrong; see the autopsy bullet below.) Per the PREREG outcome table, no build on the hybrid claim. Details: [learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08).
 
@@ -81,7 +83,7 @@ only if answer quality holds against grep-only.
 | The store is project-local by default, in the project's `.litectx/` folder. A global store under `~/.config/litectx` is the opt-in. |
 | tinymem never fetches anything itself. Everything that passes through the agent is material, including what it reads through tools and MCP servers. |
 
-## Retrieval change (decided 2026-10-04) — BUILT (0.34.0, unreleased)
+## Retrieval change (decided 2026-10-04) — BUILT (0.34.0, released)
 
 **Now.** An indexed md file is one search row. Search ranks whole files and returns one hit per file, with a guess at the best section. That guess is wrong about a third of the time when the right file is found (round 13). One embedding per file, made from its first 6,000 characters.
 
@@ -166,7 +168,7 @@ Settled by the owner, 2026-10-02.
 | Stemming for doc sections | Word-form matching (agree/agreed) on section search. | a consumer searches docs with embeddings off (round 12: +5/60 top-5 with embeddings off, ~even with them on) |
 | Multi-range / neighbour-aware `get` | `get` accepting several exact printed ranges (or serving the neighbours) in one call, so the agent's habit of merging printed sections stops failing (41 failed gets in 36 of 96 scale-run F runs, about +0.7 turns and +4% cost per failing run). Must keep the never-widen doctrine; widening `get` to overlapping sections was rejected in the replay. | a consumer reports agents merging sections or losing facts to narrow reads; the test must show tokens do not rise |
 | Grouping with section names | `FILE <path>: Retry 77-90; Backoff 112-119`, a format-only paid A/B with the same description (bare-range grouping lost in step 6, likely because it dropped section names). | the token bar is revisited |
-| Recall score display bug (fixed on fix/recall-score-order, 2026-10-10); slow embedding index (investigated 2026-10-10, no safe speed-up; 256-token cap needs a recall bench first) | Existing open issues (see Open issues above); not duplicated here. | a consumer reports either, or the owner picks them up; for the slow index, a consumer reports the cold index as a blocker or the owner picks the 256-cap bench |
+| Recall score display bug (shipped in 0.35.0, 2026-10-10); slow embedding index (investigated 2026-10-10, no safe speed-up; 256-token cap benchmarked 2026-10-11 and parked, see [learnings](tinymem-learnings.md#256-token-cap-benchmark-parked-2026-10-11)) | Score display is resolved; the slow index stays an open issue (see Open issues above), not duplicated here. | a consumer reports first-index time as a real problem (then un-defer the 256-token cap) |
 | Naturally grown large corpus test | The 1,500-doc corpus is padded with other projects' docs. | a consumer with thousands of docs |
 | Episode write-up and promotion loop (owner idea, 2026-10-09) | The harness writes quick, unconfirmed episodes; an episode the agent keeps using becomes hot; within the 30-day window it is offered as a permanent fact with a human yes/no. Most of it already ships: episodes (30-day window), `recall_log` demand count, `promotionCandidates` (threshold 10), durable facts. litectx only flags; writing episodes and the human yes/no need an LLM, so they belong to the harness (bareagent, multis, `/remember`-style). The one litectx gap: "hot" counts hits returned by recall, not hits the agent used. A "this hit was used" call would add a count that gates promotion only, never ranking (use-as-ranking-score stays killed). | a consumer's memory outgrows grep (hundreds to ~1,000 items is grep's range) or a consumer asks for the write-up loop. First step then: add the "was used" count and test it against "returned by recall" as the promotion signal. |
 
@@ -186,17 +188,17 @@ Settled by the owner, 2026-10-02.
 
 - **M1. Offline, no model.** For each question, does recall's result list contain ALL the gold chunks, and at what ranks (all-related coverage)? Compare three ways: current recall, results grouped by file into spans, and one query per sub-question.
 - **M2. Validation run, about $3.** Arm E (wider fetch plus file spans) against B (grep-only), about 10 fresh docs questions, k = 2. Measures answer wins, tokens, and lines read.
-- **M3. Owner approval, then a pre-registered run.**
+- **M3. Owner approval, then a pre-registered run.** DONE: carried out as the step 7 pilot and the step 8 scale run.
 
 *Close-out list (owner decision 2026-10-09; replaces the pending pilot/scale items):*
 1. DONE: record learnings (pilot, scale run, B autopsy, `get` replay, close-out decision) in [learnings](tinymem-learnings.md#pilot-at-big-scale-step-7-2026-10-09).
-2. PENDING (owner): put the honest claim wording into the shipped docs: README, `litectx.context.md`, and the MCP `recall` tool description.
-3. PENDING (owner): release the built sections retrieval (0.34.0, unreleased).
+2. DONE: honest claim wording is in the shipped docs: README (line 20) and the MCP `recall` tool description.
+3. DONE: sections retrieval released in 0.34.0 (published; 0.35.0 is current).
 (Done earlier: fresh question set and free confirmation of grouped output; description A/B, step 6; pilot, step 7; scale run, step 8. Grouping with section names moved to Deferred.)
 
-*Status 2026-10-09: M1 done, M2 done (ceiling, 20/20 both arms). Next is a paraphrase-question validation run before M3.*
+*Status 2026-10-09: M1 done, M2 done (ceiling, 20/20 both arms), the paraphrase validation run (step 3) done. The docs-compass work is closed out (see the close-out list above); M3 was done as the step 7 pilot and the step 8 scale run.*
 
-**Old steps below are ON HOLD or retired (2026-10-08).** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started. Session-feed steps (5 and 6) are parked with sessions.
+**Old steps below are ON HOLD or retired (2026-10-08).** Steps 1 and 2 are done; steps 3 to 7 are kept as written but not started. Session-feed steps (5 and 6) are not tinymem work: session memory is covered by `/remember` (owner, 2026-10-11).
 
 Each step names its pass bar or what it measures. A confirming run uses fresh questions; the 60 from go/no-go 1 have been seen.
 
@@ -243,11 +245,9 @@ The answer test showed search plus grep is the open question, not filing. These 
 ## Open questions
 
 - Does tinymem share the project's existing `.litectx/index.db`, or get its own file beside it?
-- Secret scrubbing before session text is written: which patterns, and the measured miss rate.
-- How headings are laid out for session text, which has no headings of its own.
 - Does a hybrid agent's gain survive at scale? Answered 2026-10-08: no gain at 1x or ~5x, and the gap does not grow ([learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08)). The real corpus (8,218 session files) is untested.
-- **Re-scope — decided 2026-10-08** (see Goal): docs-only compass + grep; sessions parked. The options considered were:
+- **Re-scope — decided 2026-10-08** (see Goal): docs-only compass + grep; session memory covered by `/remember` (2026-10-11). The options considered were:
   - (a) Drop session search as a tinymem goal.
   - (b) A docs-only token-saving mode. D matched B on docs at about 60% of the tokens, but this PRD says token saving is not the claim.
   - (c) Change how results are presented so the agent keeps digging, since D lost on sessions through small read windows. This now has evidence: arm E (wider fetch) recovered most losers on seen questions ([learnings](tinymem-learnings.md#trace-autopsy-and-widened-fetch-diagnostic-2026-10-08)). Not yet proven on fresh questions.
-  - Session search is dropped from tests by owner direction (2026-10-08); option (a) is effectively taken for testing, not yet for the product goal.
+  - Session search is dropped from tests by owner direction (2026-10-08); option (a) is taken: session memory is covered by `/remember` (owner, 2026-10-11).
