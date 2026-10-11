@@ -229,3 +229,16 @@ test("promotion: same-ts ties order by insertion id — fetch logged before its 
   assert.equal(at("ep:rf"), 1, "a same-ts recall inserted before the fetch is followed by it");
   done(c);
 });
+
+test("promotion: (ts, id) tie-break holds under a non-rowid scan order", async () => {
+  const c = ctx();
+  // This index forces a non-rowid scan order (fetch rows read before recall rows), so the explicit id tie-break is what keeps the count right.
+  c.store.db.exec("CREATE INDEX recall_log_pat ON recall_log(path, action, ts)");
+  await c.remember("ep:rf", "recall inserted first", { kind: "episode", by: "agent" });
+  const ts = Date.now() - 1000;
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "recall");
+  c.store.logRecall([{ path: "ep:rf", kind: "episode" }], ts, "fetch");
+  const hits = c.promotionCandidates(1).find((r) => r.path === "ep:rf")?.hits ?? 0;
+  assert.equal(hits, 1, "same-ts recall-then-fetch counts once regardless of scan order");
+  done(c);
+});
