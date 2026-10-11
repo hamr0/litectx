@@ -245,8 +245,6 @@ The answer test showed search plus grep is the open question, not filing. These 
 ## Open questions
 
 - Does tinymem share the project's existing `.litectx/index.db`, or get its own file beside it?
-- Secret scrubbing before session text is written: which patterns, and the measured miss rate.
-- How headings are laid out for session text, which has no headings of its own.
 - Does a hybrid agent's gain survive at scale? Answered 2026-10-08: no gain at 1x or ~5x, and the gap does not grow ([learnings](tinymem-learnings.md#step-1-v2--hybrid-vs-grep-at-1x-and-5x-2026-10-08)). The real corpus (8,218 session files) is untested.
 - **Re-scope — decided 2026-10-08** (see Goal): docs-only compass + grep; session memory covered by `/remember` (2026-10-11). The options considered were:
   - (a) Drop session search as a tinymem goal.
