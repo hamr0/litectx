@@ -130,7 +130,7 @@
     {
       "name": "promotionCandidates",
       "category": "memory",
-      "when": "Find episodes recalled often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.",
+      "when": "Find episodes recalled and then fetched often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.",
       "import": "import { LiteCtx } from 'litectx'",
       "signature": "liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]",
       "fails": "Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).",

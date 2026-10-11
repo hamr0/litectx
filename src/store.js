@@ -202,9 +202,10 @@ const SCHEMA = [
   // join "recalled" and "edited" at the same grain (§14 #4); NULL for written memory / unlocalized.
   // `action` tags the row's signal type (slice 9): 'recall' = real demand (ranked retrieval);
   // 'fetch' = a get(id) body read — mechanically coupled to the recall that produced the id, so
-  // counting it would double-count demand (the fetch-toll, §14 #4). Demand readers (recallCount,
-  // reviewCandidates) filter to 'recall'; 'fetch' is recorded as a tagged weak signal only, and
-  // earns weight (if any) at the action-signal bench — never before.
+  // counting it as a SUM would double-count demand (the fetch-toll, §14 #4). Demand readers (recallCount,
+  // reviewCandidates) filter to 'recall'. The ONE exception is promotionCandidates (episodes): it counts
+  // 'fetch' rows that have an earlier-or-equal 'recall' of the same path — an AND ("recalled, then used"),
+  // never recall+fetch added. `recall({body:true})` logs a fetch row too (it hands the body back with no get).
   "CREATE TABLE IF NOT EXISTS recall_log(id INTEGER PRIMARY KEY, path TEXT NOT NULL, kind TEXT NOT NULL, symbol TEXT, action TEXT NOT NULL DEFAULT 'recall', ts INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS recall_log_path ON recall_log(path)",
   // raw text of direct-written memory (slice 9): the FTS body is the *searchable surface*
@@ -1417,8 +1418,9 @@ export class Store {
   }
 
   /**
-   * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s recalled at
-   * least `threshold` times whose `occurred_at` falls in the rolling active window `[since, now]`
+   * Episode promotion candidates (slice 5b, §14 #4 view #4): agent-written `episode`s recalled-then-fetched
+   * at least `threshold` times (distinct 'fetch' rows with an earlier-or-equal 'recall' of the same path;
+   * an AND, not a sum — the old recall-only count is now only `reviewCandidates`') whose `occurred_at` falls in the rolling active window `[since, now]`
    * (older episodes have decayed out of the active set). Mirrors {@link reviewCandidates} exactly —
    * same `recall_log` demand join, `'recall'`-only, same `{ path, hits }` shape — with two deltas:
    * `kind='episode'` (not `'fact'`) and the `occurred_at >= since` window gate. The count gates
@@ -1429,7 +1431,7 @@ export class Store {
    * Tenant-fenced (multis M4): same per-call owner fence as {@link reviewCandidates} — one shared
    * instance's promotion queue never mixes tenants' episodes.
    * @param {{ threshold: number, since: number, memOwner?: string|null, memSeeAll?: boolean }} opts
-   *   `threshold` = min recall hits; `since` = `occurred_at` floor (epoch ms) — the rolling-window
+   *   `threshold` = min recalled-then-fetched count; `since` = `occurred_at` floor (epoch ms) — the rolling-window
    *   cutoff; `memOwner`/`memSeeAll` = per-call owner fence (defaults to the instance owner).
    * @returns {{ path: string, hits: number }[]}
    */
@@ -1440,7 +1442,8 @@ export class Store {
         .prepare(
           "SELECT m.path AS path, count(r.id) AS hits FROM mem m JOIN recall_log r ON r.path = m.path " +
             "LEFT JOIN mem_scope s ON s.path = m.path " +
-            "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since AND r.action = 'recall' " +
+            "WHERE m.kind = 'episode' AND m.provenance = 'agent' AND m.occurred_at >= @since AND r.action = 'fetch' " +
+            "AND EXISTS (SELECT 1 FROM recall_log q WHERE q.path = r.path AND q.action = 'recall' AND q.ts <= r.ts) " +
             "AND (@memSeeAll = 1 OR s.owner IS NULL OR (@memOwner IS NOT NULL AND s.owner = @memOwner)) " +
             "AND (@sid IS NULL OR s.session IS NULL OR s.session = @sid) " +
             "GROUP BY m.path HAVING hits >= @threshold ORDER BY hits DESC, m.path"

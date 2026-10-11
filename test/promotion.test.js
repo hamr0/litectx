@@ -33,7 +33,11 @@ function done(c) {
 
 /** Inject `n` recall-demand events for a written id (cheaper than driving recall() n times). */
 function hit(c, path, kind, n) {
-  for (let i = 0; i < n; i++) c.store.logRecall([{ path, kind }], Date.now(), "recall");
+  for (let i = 0; i < n; i++) {
+    c.store.logRecall([{ path, kind }], Date.now(), "recall");
+    // promotion counts "recalled, then fetched" (episodes); facts (reviewCandidates) still count recalls only
+    if (kind === "episode") c.store.logRecall([{ path, kind }], Date.now(), "fetch");
+  }
 }
 /** Backdate a written row's occurred_at WITHOUT triggering the write-time prune. */
 function backdate(c, path, ageMs) {
@@ -122,8 +126,63 @@ test("promotion is isolated from ranking — recall order is identical no matter
   assert.deepEqual(after, before, "recall ranking ignores recall-hit count — no rich-get-richer feedback");
   assert.equal(
     /** @type {{ n: number }} */ (c.store.db.prepare("SELECT count(*) AS n FROM recall_log").get()).n,
-    logRowsBefore + 40,
+    logRowsBefore + 80,
     "only the injected hits were logged — promotionCandidates is a pure read"
   );
+  done(c);
+});
+
+// === "recalled, then fetched" (an AND, not a sum) ====================================================
+
+const log = (c, path, action, n = 1, ts = Date.now()) => {
+  for (let i = 0; i < n; i++) c.store.logRecall([{ path, kind: "episode" }], ts, action);
+};
+
+test("promotion: an episode recalled 10x but never fetched is NOT a candidate", async () => {
+  const c = ctx();
+  await c.remember("ep:seen", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  log(c, "ep:seen", "recall", 10);
+  assert.deepEqual(c.promotionCandidates(), []);
+  done(c);
+});
+
+test("promotion: recalled then fetched 10x IS a candidate (real recall() + get())", async () => {
+  const c = ctx();
+  await c.remember("ep:used", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) {
+    await c.recall("retry storms cold cache", { kind: "episode" });
+    c.get("ep:used");
+  }
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:used", hits: 10 }]);
+  done(c);
+});
+
+test("promotion: 10 fetches with NO prior recall do not count; the AND is per fetch", async () => {
+  const c = ctx();
+  await c.remember("ep:blind", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  const t = Date.now();
+  log(c, "ep:blind", "fetch", 10, t); // all strictly before the first recall
+  assert.deepEqual(c.promotionCandidates(), []);
+  log(c, "ep:blind", "recall", 1, t + 1000);
+  assert.deepEqual(c.promotionCandidates(1), [], "a recall AFTER the fetches does not retro-count them");
+  log(c, "ep:blind", "fetch", 3, t + 2000); // after the recall: these count
+  assert.deepEqual(c.promotionCandidates(1), [{ path: "ep:blind", hits: 3 }]);
+  done(c);
+});
+
+test("promotion: recall({body:true}) 10x logs fetch rows too, so a body consumer is a candidate", async () => {
+  const c = ctx();
+  await c.remember("ep:body", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) await c.recall("retry storms cold cache", { kind: "episode", body: true });
+  assert.deepEqual(c.promotionCandidates(), [{ path: "ep:body", hits: 10 }]);
+  done(c);
+});
+
+test("promotion: without body:true, recall alone never promotes (no fetch row is written)", async () => {
+  const c = ctx();
+  await c.remember("ep:plain", "retry storms follow a cold cache", { kind: "episode", by: "agent" });
+  for (let i = 0; i < 10; i++) await c.recall("retry storms cold cache", { kind: "episode" });
+  assert.deepEqual(c.promotionCandidates(), []);
+  assert.equal(c.store.db.prepare("SELECT count(*) n FROM recall_log WHERE action='fetch'").get().n, 0);
   done(c);
 });

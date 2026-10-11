@@ -90,10 +90,10 @@ const TOOLS = [
   {
     name: "promotions",
     description:
-      "Episode promotion candidates — agent-written episodes recalled past a threshold (default 10) within the last 30 days, i.e. the scratchpad notes worth distilling into durable facts. The intended loop is YOURS: read each (get its id), then write a distilled fact with remember(kind:'fact', by:'agent'). litectx only flags; it never summarizes. Returns { path, hits }; hits gates distillation, never ranking.",
+      "Episode promotion candidates — agent-written episodes recalled and then fetched (get) at least a threshold number of times (default 10) within the last 30 days, i.e. the scratchpad notes worth distilling into durable facts. The intended loop is YOURS: read each (get its id), then write a distilled fact with remember(kind:'fact', by:'agent'). litectx only flags; it never summarizes. Returns { path, hits }; hits (recalled-then-fetched count) gates distillation, never ranking.",
     inputSchema: {
       type: "object",
-      properties: { threshold: { type: "number", description: "min recall hits to flag an episode (default 10)" } },
+      properties: { threshold: { type: "number", description: "min recalled-then-fetched count to flag an episode (default 10)" } },
     },
   },
   {

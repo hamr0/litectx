@@ -759,7 +759,7 @@ export class LiteCtx {
       if (MEM_KINDS.has(opts.kind)) this.store.attachMemMeta(hits); // slice 5c: surface provenance/use/occurredAt — read, never scored
       this._attachMeta(hits); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(hits); // RT-3 inline-body — content, not a pointer
-      if (opts.log !== false) this.store.logRecall(hits, Date.now()); // audit log (slice 7, §3.2) — recorded, not scored
+      if (opts.log !== false) this._logRecall(hits, opts.body); // audit log (slice 7, §3.2) — recorded, not scored
       for (const h of hits) h.path = memId(h.path); // W4: strip the owner prefix → public id (no-op for code/doc); AFTER logRecall so the demand-join keeps the encoded key
       return hits;
     }
@@ -775,9 +775,22 @@ export class LiteCtx {
       this._attachMeta(grouped[k]); // RT-3 #3: opaque caller metadata, verbatim (no-op for code/no-meta)
       if (opts.body) this._attachBodies(grouped[k]); // RT-3 inline-body — content, not a pointer
     }
-    if (opts.log !== false) this.store.logRecall(Object.values(grouped).flat(), Date.now());
+    if (opts.log !== false) this._logRecall(Object.values(grouped).flat(), opts.body);
     for (const arr of Object.values(grouped)) for (const h of arr) h.path = memId(h.path); // W4: public id (no-op off the mem axis); AFTER logRecall
     return grouped;
+  }
+
+  /**
+   * Log a recall's hits ('recall' rows). With `body:true` the caller was handed fact/episode bodies with no
+   * `get` — so also log a 'fetch' row (same ts; the promotion ladder's "earlier-or-equal recall" rule counts
+   * it) per fact/episode hit returned with a body, so body consumers are not starved of the "fetched" half.
+   * For them the signal is "returned with body" — no stronger than a plain recall. Paths are still encoded keys.
+   * @param {import("./store.js").Hit[]} hits  @param {boolean} [body]
+   */
+  _logRecall(hits, body) {
+    const ts = Date.now();
+    this.store.logRecall(hits, ts);
+    if (body) this.store.logRecall(hits.filter((h) => MEM_KINDS.has(h.kind) && h.body != null), ts, "fetch");
   }
 
   /**
@@ -1496,7 +1509,8 @@ export class LiteCtx {
 
   /**
    * Episode promotion candidates (§14 #4 view #4, slice 5b) — the agent-side first rung of the
-   * promotion ladder. Returns agent-written `episode`s recalled at least `threshold` times within the
+   * promotion ladder. Returns agent-written `episode`s **recalled, then fetched** (`get`) at least `threshold`
+   * times within the
    * rolling active window (`episodeWindowDays`, default 30 — older episodes have decayed out and
    * self-prune on the next episode write). The window floor here is the SAME knob the prune uses, so a
    * candidate is never surfaced after it would have been pruned. The intended loop is the **consumer's agent**: read each
@@ -1506,6 +1520,12 @@ export class LiteCtx {
    * fact. The count gates **distillation, never ranking** — a frequently-recalled episode does not
    * rank higher (that would be the feedback loop §4 forbids). Threshold defaults higher than facts'
    * review (10 vs 5): episodes are noisier and more numerous.
+   *
+   * `hits` counts distinct `get` fetches of the episode that have an earlier-or-equal recall of the same id
+   * (an AND, not a sum: a fetch with no prior recall does not count, and recalls alone never count).
+   * `recall({ body: true })` hands bodies back without a `get`, so it also logs a fetch per fact/episode hit
+   * returned with a body — for those callers the signal is "returned with body", no stronger than before.
+   * `reviewCandidates` (facts) is unchanged: it still counts recalls.
    *
    * Unlike `reviewCandidates` (where a human re-`remember` flips provenance and drops the row),
    * distilling does not remove an episode — it stays a candidate until it ages out of the window (or
@@ -1519,7 +1539,7 @@ export class LiteCtx {
    * @param {{ scope?: string | symbol }} [opts]
    * @returns {{ path: string, hits: number }[]}
    * @category memory
-   * @when Find episodes recalled often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.
+   * @when Find episodes recalled and then fetched often enough to distil into durable facts — the agent-side rung of the promotion ladder. Exposed to the model via MCP.
    * @fails Under `strictScope`, throws when `scope` is omitted; otherwise returns `[]`. litectx flags candidates, never summarizes them (no extraction LLM).
    * @signature liteCtx.promotionCandidates(threshold?: number, opts?: { scope? }) => { path, hits }[]
    * @example

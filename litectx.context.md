@@ -926,8 +926,14 @@ bound `ctx.scoped(tenant).reviewCandidates(threshold)` so the scope can't be for
 
 ### `ctx.promotionCandidates(threshold = 10, opts?)` → `{ path, hits }[]`
 The **episode promotion query** — the agent-side first rung of the ladder (`reviewCandidates`
-is the human-side second rung). Returns **agent-written `episode`s** recalled at least
-`threshold` times within the **30-day rolling active window**, most-recalled first. Episodes are
+is the human-side second rung). Returns **agent-written `episode`s** **recalled, then fetched** (`get`)
+at least `threshold` times within the **30-day rolling active window**, most-fetched first. `hits` counts
+distinct `get` fetches of the episode that have an earlier-or-equal recall of the same id — an **AND, not
+a sum**: a fetch with no prior recall does not count, and recalls alone never count (an episode
+that was only ever *returned* in results is not "used"). `recall({ body: true })` hands bodies back with
+no `get`, so it also logs a fetch per fact/episode hit returned with a body — **for those callers the
+signal is "returned with body", no stronger than the old recall count**. `reviewCandidates` (facts) is
+unchanged and still counts recalls. Episodes are
 the agent's *ephemeral scratchpad* (its own synthesized gotchas); they graduate by **use** into
 durable facts. The intended loop is **yours**: read each candidate (`get(id)`), then write a
 distilled `fact` — `remember(id, text, { kind: "fact", by: "agent" })` — which then rides the
