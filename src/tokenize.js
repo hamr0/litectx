@@ -23,6 +23,34 @@ export function splitIdent(s) {
 }
 
 /**
+ * Does `splitIdent(text)` contain `term`? Same answer, without building the token array: scan for the
+ * term case-insensitively and accept an occurrence only if it is exactly one token — it starts and ends
+ * on a splitIdent boundary (a non-alnum edge, or a camelCase lower/digit→Upper edge) with no camel edge
+ * inside. `term` must be a single lowercase [a-z0-9] token (what `keywords` yields).
+ * @param {string} text
+ * @param {string} term
+ * @returns {boolean}
+ */
+export function hasToken(text, term) {
+  const re = new RegExp(term, "gi");
+  const alnum = /[A-Za-z0-9]/;
+  const lowDig = /[a-z0-9]/;
+  const upper = /[A-Z]/;
+  let m;
+  while ((m = re.exec(text))) {
+    const i = m.index;
+    const j = i + term.length;
+    re.lastIndex = i + 1; // occurrences may overlap ("aAa" holds "aA" and "Aa")
+    const before = i > 0 ? text[i - 1] : "";
+    const after = j < text.length ? text[j] : "";
+    const starts = !before || !alnum.test(before) || (upper.test(text[i]) && lowDig.test(before));
+    const ends = !after || !alnum.test(after) || (upper.test(after) && lowDig.test(text[j - 1]));
+    if (starts && ends && !/[a-z0-9][A-Z]/.test(m[0])) return true;
+  }
+  return false;
+}
+
+/**
  * Camel-split supplement for an FTS body. Queries are identifier-split (`keywords` runs
  * `splitIdent`), so the body must expose the same parts or a `get user data` query can't match a
  * source containing only `getUserData`. FTS5's unicode61 tokenizer already splits on `_` and

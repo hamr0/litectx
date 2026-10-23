@@ -23,6 +23,11 @@ All notable changes to this project are documented here, following
 - **Tracked files with non-ASCII names were silently never indexed.** `git ls-files` C-quotes such names (`"Cr\303\250me.md"`), which matches no file on disk. The file list now uses `ls-files -z`, and the git-activity pass uses `git log -z`, so names containing `"`, `\`, tab or newline keep their git metadata too.
 - **`childRepos`: a repo whose `git ls-files` fails no longer makes its files read as deleted.** It is reported in the new `IndexResult.skipped` (`{repo, error}`), its indexed entries are kept, and the CLI/UI print a warning. Symlinked directories are no longer treated as repos (a symlink to a repo was indexed twice). A leading `./` on a pathspec is normalized before routing. Repos named like noise dirs or hidden names stay skipped (documented).
 
+### Changed
+
+- **`recall()` is ~6-10x faster on large indexes, output unchanged.** Chunk localization (`attachChunks`) re-tokenized every chunk of every returned file on every search; it now checks each query term against the chunk text directly (`hasToken`, exact same answer as `splitIdent`). Measured on a 1,830-file / 8-repo index: a two-kind `n=60` recall went from median 164 ms to 17 ms; 120 varied recalls dumped before and after are byte-identical.
+
+
 ## [0.36.0] — 2026-10-11
 
 ### Changed

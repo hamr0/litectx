@@ -4,7 +4,7 @@
 // nodes/edges/signals tables around this; recall keeps reading FTS.
 
 import Database from "better-sqlite3";
-import { indexBody, splitIdent } from "./tokenize.js";
+import { indexBody, splitIdent, hasToken } from "./tokenize.js";
 import { cosine } from "./embedder.js"; // pure math — the ML dep stays lazy inside Embedder
 
 // R-I3 peek: a fixed head+tail preview budget, in characters. Head+tail (not head-only) because for the
@@ -2287,9 +2287,10 @@ export class Store {
       const rows = /** @type {{ symbol: string|null, node_type: string, start_line: number, end_line: number, body: string }[]} */ (sel.all(h.path));
       const scored = [];
       for (const r of rows) {
-        const toks = new Set(splitIdent(`${r.symbol ?? ""} ${r.body}`));
+        // same score as counting terms in `new Set(splitIdent(text))`, minus the per-chunk tokenization
+        const text = `${r.symbol ?? ""} ${r.body}`;
         let s = 0;
-        for (const t of terms) if (toks.has(t)) s++;
+        for (const t of terms) if (hasToken(text, t)) s++;
         if (s > 0) scored.push({ r, s });
       }
       if (!scored.length) continue;
