@@ -63,6 +63,8 @@ Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings
 
 - **First run** (no sources): the page opens on the Add form. Submit a name and a path; it is
   checked, the mode is detected, and the source is indexed.
+- **Title line** (small, muted): `litectx tinymem · v<version> · lightning local retrieval`; the
+  version is read from litectx's own package.json by the server (also in the tab title).
 - **Top bar**: `pycharm ▾ · 7,108 files · ↻ re-index · meaning: off`. Picking another source makes
   it the remembered default.
 - **Settings page**: lists sources (name, path, mode, file count) with Add, Remove and Set default.
@@ -75,14 +77,18 @@ Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings
 - **Search line**.
 - **One filter line**, groups separated by `│`:
   - docs/code and file type (taken from the results)
-  - "exact words only"
   - a typed repo picker with live suggestions (multi-select, ✕ to remove)
   - folder chips suggested from the current results
   - "old/tests last" (archive, poc, tests and logs go to the bottom)
 - **View switch** (sliding, `table ●— roomy`) on the line above the results.
 - **Table view**: hover a row for a quick-look popup. Roomy view shows the top 5 with a 3-line
   preview. Click any result to open a side view with line numbers, "+N more sections" and two
-  links: open the file in the browser, or in PyCharm at that line.
+  links: open the file in the browser (same tab, `/view`; only indexed files open, so an untracked
+  `.env` in the root is refused), or in PyCharm at that line.
+- **URL state**: the search lives in the URL hash (query, repos, docs/code, type, folder,
+  old/tests last, view, open side view), so Back from the file view, reload and a bookmark restore
+  the page and its scroll position. Enter adds a history entry; filter changes replace it.
+- Repo picker suggestions highlight the typed text.
 - **Look**: monospace, Tokyo Night Day (light) / Tokyo Night (dark). Plain JS + CSS, no build step,
   no dependencies.
 
@@ -91,7 +97,7 @@ Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings
 1. Multi-repo collection in `src/`: one level deep, per-repo `git ls-files`, repo-prefixed paths.
    It replaces the probe's symlink corpus. Today, a non-git root falls back to a walk that ignores
    `pathspecs` and each repo's `.gitignore` (`src/indexer.js` `collectFiles`).
-2. Server: `node:http`, bound to 127.0.0.1. `/view` is real-path-confined to the source root.
+2. Server: `node:http`, bound to 127.0.0.1. `/view` serves only files in the active source's index, and only when their real path is inside the source root.
    Routes: page, search JSON, view, re-index, click log, sources CRUD.
 3. Page F plus three knobs, each on/off and each scored:
    - one entry per file ("+N more sections")

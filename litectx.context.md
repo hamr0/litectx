@@ -1326,13 +1326,13 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.
 - **Results**: one `recall` over `doc` and `code`, interleaved by rank (per-kind scores are not
   comparable). The query is searched as typed; a repo name in it (all-repos mode) also filters to
-  that repo. One entry per file with "+N more sections", and old/tests last (a dir segment
+  that repo. The page keeps its search in the URL hash, so Back, reload and bookmarks restore it. One entry per file with "+N more sections", and old/tests last (a dir segment
   `archive|poc|test|tests|logs`, or `.test.` in the name, goes after the rest). Line numbers
   shown are 1-based.
 - **Security**: it listens on `127.0.0.1` only; requests whose `Host` is not `127.0.0.1:<port>` or
   `localhost:<port>` are refused (DNS rebinding); POST/DELETE with a foreign `Origin` are refused;
-  `/view` serves only files whose real path is inside the source root (`../` and symlink escapes
-  are rejected); everything rendered is HTML-escaped and a strict CSP is set. There is no
+  `/view` serves only files that are in the active source's index (an untracked `.env` in the root
+  is refused) and whose real path is inside the source root (`../` and symlink escapes are rejected); everything rendered is HTML-escaped and a strict CSP is set. There is no
   authentication, so do not forward the port. The *open in PyCharm* link uses
   `pycharm://open?file=<abs>&line=<n>` and needs the IDE's URL handler.
 
