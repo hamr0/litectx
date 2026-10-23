@@ -99,6 +99,8 @@ environment variable). These are the UI's own settings, separate from
   old/tests last, view, open side view), so Back from the file view, reload and a bookmark restore
   the page and its scroll position. Enter adds a history entry; filter changes replace it.
 - Repo picker suggestions highlight the typed text.
+- **Repo filters are sticky**: repos picked by hand stay until ✕ or `✕ clear`; repo names typed in the query are added (deduped), never replacing. `✕ clear` (shown only when a filter is set) resets repos, docs/code, type, folder and old/tests last, keeps the query, and re-runs the search. With repos set, the server filters to them before interleaving docs and code.
+- **Instant feedback**: re-index, meaning and source changes show a busy state at click time (button disabled, CSS spinner, label, elapsed seconds; static indicator under reduced motion), then the result (`+3 ~1 -0 · 2.1 s`). No progress bar: `index()` has no progress hook, so elapsed time is all that is honest. If the optional peer `@huggingface/transformers` is missing the library drops to keyword-only and the page shows "meaning unavailable: install ...".
 - **Look**: monospace, Tokyo Night Day (light) / Tokyo Night (dark). Plain JS + CSS, no build step,
   no dependencies.
 

@@ -62,8 +62,12 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
   // overfetch when filtering to repos: the wanted repo's hits may sit far below other repos' hits
   const n = wanted ? 200 : 60;
   const r = await ctx.recall(q, { kind: kinds, n });
-  const d = r.doc ?? [];
-  const c = r.code ?? [];
+  // filter to the wanted repos BEFORE interleaving: interleaving by global rank first lets one repo's code
+  // hold early slots and its docs late ones, burying its docs behind all its code
+  const repoOf = (/** @type {{ path: string }} */ h) => (mode === "repos" ? (h.path.split("/")[0] ?? "") : sourceName);
+  const keep = (/** @type {{ path: string }} */ h) => !wanted || wanted.has(repoOf(h));
+  const d = (r.doc ?? []).filter(keep);
+  const c = (r.code ?? []).filter(keep);
   // per-kind scores are not comparable → interleave doc/code by rank
   const merged = [];
   for (let i = 0; i < d.length || i < c.length; i++) {

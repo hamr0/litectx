@@ -611,3 +611,66 @@ test("the page title line gets litectx's own version from the server (package.js
     await ui.close();
   }
 });
+
+// ---- repo filters survive a new search; "clear all" ---------------------------------------------------
+
+const J = (v) => JSON.parse(JSON.stringify(v)); // vm objects carry another realm's prototypes
+
+test("repos named in a query are ADDED to the picked ones (deduped), never replace them", () => {
+  const { mergeRepos } = pageState();
+  const names = ["alpha", "beta", "gamma"];
+  assert.deepEqual(J(mergeRepos(["gamma"], names, "alpha docs")), ["gamma", "alpha"], "picked stays, typed is added");
+  assert.deepEqual(J(mergeRepos(["alpha"], names, "alpha again")), ["alpha"], "no duplicates");
+  assert.deepEqual(J(mergeRepos(["gamma"], names, "nothing here")), ["gamma"], "a query naming no repo keeps the picks");
+  assert.deepEqual(J(mergeRepos([], names, "BETA, Alpha")), ["alpha", "beta"], "case-insensitive, in repo order");
+});
+
+test("clear all resets every filter, keeps the query, and hasFilters tells when it is needed", () => {
+  const { clearFilters, hasFilters, encodeState } = pageState();
+  const def = { q: "find me", sub: "find me", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, demote: true, view: "table" };
+  assert.equal(hasFilters(def), false, "nothing set: the control stays hidden");
+  for (const dirty of [{ repos: ["a"] }, { ext: "md" }, { folder: "docs" }, { kinds: { doc: false, code: true } }, { kinds: { doc: true, code: false } }, { demote: false }]) {
+    assert.equal(hasFilters({ ...def, ...dirty }), true, JSON.stringify(dirty));
+  }
+  const s = { ...def, repos: ["a", "b"], ext: "md", folder: "docs", kinds: { doc: false, code: true }, demote: false };
+  clearFilters(s);
+  assert.deepEqual(J(s), def, "all five back to defaults, query untouched");
+  assert.equal(encodeState(s), "#q=find+me&sub=find+me", "the URL hash holds only the query afterwards");
+});
+
+test("passText formats the last index pass for the top bar", () => {
+  const { passText } = pageState();
+  assert.equal(passText({ added: 3, updated: 1, removed: 0, ms: 2140 }), "+3 ~1 -0 · 2.1 s");
+  assert.equal(passText(null), "");
+});
+
+test("the page wires the Enter handler to mergeRepos and the clear control to clearFilters", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    assert.ok(app.includes("ST.mergeRepos(s.repos") && app.includes("ST.clearFilters(s)"));
+    assert.ok(!/s\.repos = names\.filter/.test(app), "the replacing assignment is gone");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("naming a repo: its docs and code alternate from the top (filter BEFORE the doc/code interleave)", async () => {
+  const root = join(scratch(), "two");
+  const docs = {};
+  for (let i = 0; i < 5; i++) docs[`d${i}.md`] = `# zebra zebra zebra\n\nzebra zebra zebra zebra ${i}\n`;
+  repo(join(root, "bravo"), docs); // bravo's docs outrank alpha's globally
+  const code = {};
+  for (let i = 0; i < 5; i++) code[`c${i}.js`] = `// zebra\nexport function zebra${i}() { return "zebra zebra"; }\n`;
+  repo(join(root, "alpha"), { "README.md": "# alpha\n\nthe zebra is mentioned once here among much other prose about nothing relevant\n", ...code });
+  const ctx = new LiteCtx({ root, childRepos: true });
+  try {
+    await ctx.index();
+    const rows = (await search(ctx, root, "repos", "two", "zebra", { repos: ["alpha"] })).rows;
+    assert.ok(rows.every((r) => r.repo === "alpha"));
+    assert.deepEqual(rows.slice(0, 2).map((r) => r.kind).sort(), ["code", "doc"], "first two = one doc + one code of alpha");
+  } finally {
+    ctx.close();
+  }
+});

@@ -217,6 +217,8 @@ export async function createUi(opts = {}) {
             error: cur.error,
             last: cur.last,
             embeddings: cur.embeddings,
+            // the tier was asked for but dropped at runtime (optional peer '@huggingface/transformers' missing): BM25 only
+            meaningOff: cur.embeddings && !cur.ctx.embeddings,
             repoNames: cur.repoNames,
           }
         : null,

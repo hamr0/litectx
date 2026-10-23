@@ -24,5 +24,25 @@
     };
     return d;
   }
-  root.litectxState = { encodeState: encodeState, decodeState: decodeState };
+  // Repos named in a query are ADDED to the picked ones (deduped, picked order kept) -- never replace them.
+  function mergeRepos(picked, available, query) {
+    var words = String(query || "").toLowerCase().split(/[^a-z0-9_.-]+/), out = (picked || []).slice();
+    (available || []).forEach(function (r) { if (words.indexOf(r.toLowerCase()) >= 0 && out.indexOf(r) < 0) out.push(r); });
+    return out;
+  }
+  // True when any filter differs from its default (the query itself is not a filter).
+  function hasFilters(s) {
+    var k = s.kinds || { doc: true, code: true };
+    return !!((s.repos && s.repos.length) || s.ext || s.folder || !k.doc || !k.code || s.demote === false);
+  }
+  // "clear all": reset every filter to its default, keep the query. Mutates and returns s.
+  function clearFilters(s) {
+    s.repos = []; s.ext = null; s.folder = null; s.kinds = { doc: true, code: true }; s.demote = true;
+    return s;
+  }
+  // "+3 ~1 -0 · 2.1 s" from the server's last index pass
+  function passText(last) {
+    return last ? "+" + last.added + " ~" + last.updated + " -" + last.removed + " · " + (last.ms / 1000).toFixed(1) + " s" : "";
+  }
+  root.litectxState = { encodeState: encodeState, decodeState: decodeState, mergeRepos: mergeRepos, hasFilters: hasFilters, clearFilters: clearFilters, passText: passText };
 })(window);

@@ -12,10 +12,11 @@
   var tip = document.createElement("div");
   tip.id = "tip"; tip.setAttribute("role", "tooltip"); document.body.appendChild(tip);
 
+  var ST = window.litectxState;
   var s = {
     q: "", sub: "", kinds: { doc: true, code: true }, ext: null, repos: [], folder: null, demote: true,
     view: "table", open: null, openOthers: false, hits: [], facets: { exts: [], folders: [] }, ms: 0,
-    st: null, settings: false, msg: "", searched: false
+    st: null, settings: false, msg: "", searched: false, busy: null, result: ""
   };
 
   function api(method, url, body) {
@@ -37,6 +38,9 @@
     return api("GET", "/api/sources").then(function (st) {
       s.st = st; $("title").innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
       if (!st.sources.length) s.settings = true;
+      var ix = !!(st.current && st.current.indexing);
+      if (ix && !s.busy) s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; // a pass the server started itself
+      if (!ix && s.busy && !s.busy.pending) endBusy(st);
       renderTop(); renderPanel(); renderFilters();
       return st;
     });
@@ -54,6 +58,26 @@
       if (s.open && !s.hits.some(function (h) { return h.path === s.open; })) s.open = null;
       renderTop(); renderFilters(); renderResults();
     }).catch(function (e) { s.msg = e.message; renderResults(); });
+  }
+  // ---- busy state: set by the page at click time, cleared when the server reports the pass finished -----
+  var tickTimer = null;
+  function startBusy(what, label) {
+    s.busy = { what: what, label: label, t0: Date.now(), pending: true };
+    clearInterval(tickTimer); tickTimer = setInterval(tick, 1000);
+    renderTop();
+  }
+  function tick() { var e = $("elapsed"); if (e && s.busy) e.textContent = " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"; }
+  function endBusy(st) {
+    var b = s.busy, c = st && st.current; s.busy = null; clearInterval(tickTimer);
+    if (b.what === "reindex" && c && c.last) s.result = "re-indexed " + ST.passText(c.last);
+    else if (b.what === "meaning" && c) s.result = c.embeddings ? (c.meaningOff ? "" : "meaning: built") : "meaning: off";
+    else s.result = "";
+  }
+  // run a server action behind an instant busy state; the page never waits on the server to show it
+  function act(what, label, call) {
+    startBusy(what, label);
+    return call().then(function () { s.busy && (s.busy.pending = false); return refresh(); })
+      .catch(function (e) { s.busy = null; clearInterval(tickTimer); fail(e); renderTop(); });
   }
   var pollTimer = null;
   function poll() {
@@ -74,22 +98,33 @@
     if (st && st.sources.length) {
       var sel = el("select", "chip"); sel.setAttribute("aria-label", "source");
       st.sources.forEach(function (x) { var o = el("option", "", x.name); o.value = x.name; if (x.name === st.active) o.selected = true; sel.appendChild(o); });
-      sel.onchange = function () { s.repos = []; s.open = null; api("POST", "/api/sources", { active: sel.value }).then(refresh).catch(fail); };
+      sel.onchange = function () { s.repos = []; s.open = null; act("reindex", "opening " + sel.value + "…", function () { return api("POST", "/api/sources", { active: sel.value }); }); };
+      sel.disabled = !!s.busy;
       left.appendChild(sel);
     }
     var info = el("span", "dim");
-    if (c && c.indexing) info.textContent = "re-indexing… (≈40 s for all repos)";
-    else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText;
+    if (s.busy) {
+      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + s.busy.label));
+      var ev = el("span", "", " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"); ev.id = "elapsed"; info.appendChild(ev);
+    }
+    else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText + (s.result ? " · " + s.result : "");
     else if (st && st.error) { info.className = "err"; info.textContent = st.error; }
     else info.textContent = "no source yet";
     left.appendChild(info);
+    if (c && c.embeddings && c.meaningOff && !s.busy) left.appendChild(el("span", "err", "meaning unavailable: install the optional peer `npm i @huggingface/transformers` (searching by keywords only)"));
     if (c && c.error) left.appendChild(el("span", "err", "index error: " + c.error));
     var right = el("span", "row");
     if (c) {
-      right.appendChild(chip("↻ re-index", c.indexing, function () { api("POST", "/api/reindex", {}).then(refresh).catch(fail); }, "refresh changed files now"));
-      right.appendChild(chip(c.embeddings ? "meaning: on" : "meaning: off", c.embeddings, function () {
-        api("POST", "/api/sources", { name: c.name, embeddings: !c.embeddings }).then(refresh).catch(fail);
-      }, "embeddings re-order results by meaning. First turn-on builds them once (~15 min for ~7k files)."));
+      var busyRe = !!s.busy && s.busy.what !== "meaning", busyMe = !!s.busy && s.busy.what === "meaning";
+      var rb = chip("↻ re-index", busyRe, function () { act("reindex", "re-indexing…", function () { return api("POST", "/api/reindex", {}); }); }, "refresh changed files now");
+      if (busyRe) rb.insertBefore(el("span", "spin"), rb.firstChild);
+      rb.disabled = !!s.busy; right.appendChild(rb);
+      var mb = chip(busyMe ? "building meaning…" : c.embeddings ? "meaning: on" : "meaning: off", c.embeddings || busyMe, function () {
+        var on = !c.embeddings;
+        act("meaning", on ? "building meaning… (first build takes minutes; search keeps working on keywords)" : "turning meaning off…", function () { return api("POST", "/api/sources", { name: c.name, embeddings: on }); });
+      }, "embeddings re-order results by meaning. First turn-on builds them once (~15 min for ~7k files).");
+      if (busyMe) mb.insertBefore(el("span", "spin"), mb.firstChild);
+      mb.disabled = !!s.busy; right.appendChild(mb);
     }
     right.appendChild(chip("sources", s.settings, function () { s.settings = !s.settings; renderPanel(); }, "add, remove or switch sources"));
     var th = chip("theme", false, function () {
@@ -114,12 +149,12 @@
       var r = el("div", "src");
       r.innerHTML = '<b class="sym">' + esc(x.name) + '</b><span class="dim">' + esc(x.path) + "</span><span>" +
         (x.error ? '<span class="err">' + esc(x.error) + "</span>" : x.mode === "repo" ? "one repo" : "all repos (" + esc(x.repos) + ")") + "</span>";
-      if (x.name !== s.st.active) r.appendChild(chip("set default", false, function () { s.repos = []; api("POST", "/api/sources", { active: x.name }).then(refresh).catch(fail); }));
+      if (x.name !== s.st.active) r.appendChild(chip("set default", false, function () { s.repos = []; act("reindex", "opening " + x.name + "…", function () { return api("POST", "/api/sources", { active: x.name }); }); }));
       var lab = el("label", "dim");
       var cb = document.createElement("input"); cb.type = "checkbox"; cb.setAttribute("aria-label", "also delete the index of " + x.name);
       if (x.mode === "repos") { lab.appendChild(cb); lab.appendChild(document.createTextNode(" also delete its index")); }
       r.appendChild(chip("remove", false, function () {
-        api("DELETE", "/api/sources", { name: x.name, deleteIndex: cb.checked }).then(refresh).catch(fail);
+        act("reindex", "removing " + x.name + "…", function () { return api("DELETE", "/api/sources", { name: x.name, deleteIndex: cb.checked }); });
       }, x.mode === "repo" ? "removes it from this list only; the repo's own index stays (agents use it)" : "removes it from this list"));
       if (x.mode === "repos") r.appendChild(lab);
       box.appendChild(r);
@@ -131,7 +166,7 @@
       ev.preventDefault();
       var name = f.elements.name.value.trim(), body = { path: f.elements.path.value.trim() };
       if (name) body.name = name;
-      api("POST", "/api/sources", body).then(function () { s.settings = false; s.msg = ""; s.repos = []; return refresh(); }).catch(function (e) { s.msg = e.message; renderPanel(); });
+      act("reindex", "adding source…", function () { return api("POST", "/api/sources", body).then(function () { s.settings = false; s.msg = ""; s.repos = []; }); });
     };
     box.appendChild(f);
     if (s.msg) box.appendChild(el("div", "err", s.msg));
@@ -152,6 +187,7 @@
     s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); });
     k.appendChild(sep());
     k.appendChild(chip("old/tests last", s.demote, go(function () { s.demote = !s.demote; }), "archive, poc, tests and logs go to the bottom"));
+    if (ST.hasFilters(s)) { var ca = chip("✕ clear", false, go(function () { ST.clearFilters(s); }), "reset repos, docs/code, type, folder and old/tests last; keeps the query"); ca.className += " clear"; k.appendChild(ca); }
   }
   // escape the name and the query separately, then wrap the first case-insensitive match (real-case letters kept)
   function hilite(name, q) {
@@ -261,7 +297,7 @@
   function hideTip() { tip.style.display = "none"; }
 
   // ---- URL state: the hash holds the search, so Back / reload / bookmark restore it ---------------------
-  var ST = window.litectxState, scrollTimer = null;
+  var scrollTimer = null;
   function sync(push) {
     var h = ST.encodeState(s);
     if (h === location.hash || (!h && !location.hash)) return;
@@ -289,8 +325,8 @@
     var q = e.target.value;
     // a repo named in the query filters the results to it (the word stays in the query, searched as typed)
     if (q !== s.sub) {
-      var words = q.toLowerCase().split(/[^a-z0-9_.-]+/), names = (s.st && s.st.current && s.st.current.repoNames) || [];
-      if (s.st && s.st.current && s.st.current.mode === "repos") s.repos = names.filter(function (r) { return words.indexOf(r.toLowerCase()) >= 0; });
+      var names = (s.st && s.st.current && s.st.current.repoNames) || [];
+      if (s.st && s.st.current && s.st.current.mode === "repos") s.repos = ST.mergeRepos(s.repos, names, q);
       s.sub = q; s.open = null; s.folder = null; s.ext = null;
     }
     s.q = q; sync(true); runSearch();

@@ -16,6 +16,11 @@ input.q{width:100%;font:inherit;font-size:15px;background:transparent;color:var(
 .searchbox{display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
 .chip{font:inherit;font-size:13px;background:transparent;color:var(--text);border:1px solid var(--line);padding:2px 8px;cursor:pointer;min-height:28px;border-radius:0}
 .chip[aria-pressed="true"]{color:var(--bg);background:var(--blue);border-color:var(--blue)}
+.chip:disabled{opacity:.7;cursor:progress}
+.chip.clear{color:var(--mute)}
+.spin{display:inline-block;width:.8em;height:.8em;border:2px solid var(--mute);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:4px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none;border-top-color:var(--mute);border-style:dotted}}
 input.chip{cursor:text;min-width:14em}
 select.chip{max-width:16em}
 button.lnk{font:inherit;background:none;border:0;color:var(--blue);cursor:pointer;padding:0}
