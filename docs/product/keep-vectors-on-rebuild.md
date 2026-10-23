@@ -59,8 +59,11 @@ A force or stamp rebuild of an unchanged tree embeds nothing (about 0 s instead 
 4. Recall reads only vectors whose `ekey` matches the current key (`getEmbeddings`, store.js:2407), so a stale-model
    vector is never mixed into a cosine (different models give meaningless cosines, possibly a different `dim`).
 5. The hash-conditional write now being added to `putEmbeddings`: write only if `file_index.content_hash` still equals the
-   `th` the vector was computed from, and store `th` and `ekey` in the same statement. Same rule for
-   `putSectionEmbeddings` (join the section's file hash). One TOCTOU rule for both the backfill and reuse.
+   file hash the caller read the body at (the guard hash), and store `th` and `ekey` in the same statement. For a file
+   the guard hash and `th` are the same value (the file content hash). `putSectionEmbeddings` passes both values: the
+   file hash for the guard (compared to the section's file's `file_index.content_hash`, as src/store.js:1918 does today)
+   and the section's own text hash, stored as `th`. The two differ for sections, so the guard never compares the
+   section-text hash to the file hash. One TOCTOU rule for both the backfill and reuse.
 
 ### Embed key
 
@@ -78,6 +81,7 @@ The key never includes the index stamp or the package version.
 | md section text changed, or chunker change that alters text | section `th` mismatch | only changed sections re-embed |
 | Chunker change that only moves boundaries, text identical | no mismatch | vectors kept (correct: same input) |
 | Change to what `index.js` feeds the embedder (e.g. prefixing the path) | not auto-detected | a pin test (below) fails; the change must bump a `RECIPE` constant folded into `ekey` |
+| `ekey` NULL (migrated vector, non-default model) | NULL != current key | treated as stale: re-embedded once, the write stores the current `ekey`, never repeats |
 | Stamp bump (release) | not a cause | vectors kept. If a future stamp bump needs vectors dropped, it must also change `ekey` |
 
 ## What `force:true` means
@@ -105,7 +109,8 @@ behaviour). Without a real caller this is speculative; ship it only if the owner
   in the same migration block as `nodes.stamp` (store.js:409-414). No new table, no data copy.
 - Existing vectors have `th`/`ekey` NULL. Option A (recommended, decision 1): fill them from known facts. For files
   `th` = `file_index.content_hash`; for sections `th` = sha256 of that one section's own `nodes.body` (exactly what the backfill embeds, `vectorlessSections` store.js:1897 and src/index.js:570; the same definition as design point 1, never the joined body of the file); `ekey` = the current key
-  only when the instance runs the default model, else leave NULL. Option B: treat NULL as stale and re-embed once
+  only when the instance runs the default model, else leave NULL. A NULL `ekey` is never the current key, so it counts
+  as stale: re-embedded once, and that write stores the current `ekey`, so it does not repeat. Option B: treat NULL as stale and re-embed once
   (67 s/497 files, one time, safe but it recreates the gap once after upgrade).
 - This change touches `src/store.js`, which changes `indexStamp`, so the first run after upgrade is itself a stamp
   rebuild. With Option A it keeps its vectors; that is the first real test of the feature.
@@ -132,7 +137,9 @@ two equal texts embed to equal vectors, so this should hold).
    and every `doc_sections` row points at its current `node_id`.
 4. Invalidation: construct with a different `embedModel` (stub reporting another id) on an embedded index; assert recall
    ignores the old vectors, the backfill re-embeds all, and cosines are never computed across two keys.
-   A changed `HEAD_CHARS` (test seam) behaves the same.
+   A NULL `ekey` under a non-default model (migration) is treated as stale: re-embedded once, and the re-embed writes
+   the current `ekey`, so the second pass embeds nothing. (`HEAD_CHARS` is a module const with no seam and needs none:
+   it is part of `src/embedder.js`, so a change to it changes the source hash in `ekey`, the case this test covers.)
 5. Orphans: delete a file on disk, run `force:true`; assert its `file_embeddings` row is gone (mutation target: remove the
    orphan sweep, test must go red).
 6. Reader isolation: a second connection reads during the rebuild transaction; it sees the full old index with vectors.
