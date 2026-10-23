@@ -209,6 +209,13 @@ Builds or **incrementally refreshes** the index over `root`.
   parallelise: a single file's parse and the one atomic `applyChanges` transaction
   stay uninterrupted, so a sub-second residual block remains. For **full** isolation,
   run the instance in your own worker thread instead.
+- `opts.signal?: AbortSignal` — **cancel a long pass.** Checked between files while
+  chunking and between embeds. Aborting before the index commit writes nothing; the
+  commit is one atomic transaction and is never cut. With embeddings on, vectors are
+  written **file by file after** that commit, so an abort (or a crash) mid-embed keeps
+  the complete keyword index and every vector already written, and the next `index()`
+  embeds only the files still without one. An aborted pass **resolves** (not throws)
+  with `aborted: true`.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 
@@ -218,7 +225,10 @@ Builds or **incrementally refreshes** the index over `root`.
   added: number,      // newly indexed
   updated: number,    // re-indexed (content changed)
   removed: number,    // dropped (no longer present)
-  unchanged: number } // skipped (mtime/size or content unchanged)
+  unchanged: number,  // skipped (mtime/size or content unchanged)
+  aborted: boolean,   // true when opts.signal stopped the pass early
+  embedded: number,   // vectors written this pass (0 with embeddings off)
+  embedPending: number } // files/sections still without a vector (0 unless aborted)
 ```
 
 #### Self-healing across a litectx upgrade
@@ -1324,6 +1334,11 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   (remembered per source); the first build is slow (about 15 minutes for ~7k files). An
   embeddings-off pass leaves vectors an embeddings-on writer (the CLI/MCP default) already built
   for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.
+- **Cancel and Ctrl+C**: while a pass runs, the *re-index* / *meaning* chip becomes **cancel re-index** /
+  **cancel meaning**; the pass stops after the file in progress and the page says e.g. "cancelled · 3,146 of
+  12,800 embedded · the next pass finishes the rest". Search keeps working and *meaning* stays on (partial
+  vectors are kept; the next pass embeds only what is missing). Ctrl+C does the same and exits within seconds.
+  A cancel before the first commit leaves the index unchanged.
 - **Meaning while building**: during an index/meaning pass a search runs on keywords only (the page says so) instead of waiting on the in-flight embed; once the pass ends, meaning is back.
 - **Results**: one `recall` over `doc` and `code`, interleaved by rank (per-kind scores are not
   comparable). The query is searched as typed; a repo name in it (all-repos mode) also filters to

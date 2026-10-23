@@ -252,6 +252,12 @@ export class StalePointerError extends Error {
  * @property {{ repo: string, error: string }[]} skipped  `childRepos` mode only: repos whose `git ls-files`
  *   failed this pass (corrupt index, broken `.git`). Their previously indexed files are KEPT untouched (never
  *   reported `removed`) and the pass does not stamp the index; empty when every repo listed fine.
+ * @property {boolean} aborted  `true` when `opts.signal` stopped the pass early (not an error). Before the
+ *   index commit nothing was written; after it the keyword index is complete and the vectors written so far are
+ *   kept — the next `index()` embeds the rest.
+ * @property {number} embedded  vectors written this pass (embeddings tier; `0` when it is off)
+ * @property {number} embedPending  files/sections still without a vector when the pass ended (`0` unless
+ *   `aborted` or the embedder became unavailable)
  */
 
 /**
@@ -384,12 +390,19 @@ export class LiteCtx {
    * uninterrupted (their duration is the residual floor). Default `false` keeps today's behaviour.
    * A caller needing full isolation should run the instance in its own worker thread instead.
    *
-   * @param {{ paths?: string[], force?: boolean, yield?: boolean }} [opts]
+   * **Cancelling.** Pass `signal` (an `AbortSignal`) to stop a long pass. It is checked between files while
+   * chunking and between embeds. Aborting before the index commit writes nothing; the commit itself is one
+   * atomic transaction and is never cut. Vectors are written file by file AFTER the commit, so an abort (or a
+   * crash) during the embeddings phase keeps every vector already written, the keyword index is complete, and
+   * the next `index()` embeds only the files still without one. An aborted pass RESOLVES with
+   * `aborted: true` (it is a stop, not an error).
+   *
+   * @param {{ paths?: string[], force?: boolean, yield?: boolean, signal?: AbortSignal }} [opts]
    * @returns {Promise<IndexResult>}
    * @category index
    * @when Build or refresh the graph from source before recall/impact — call after files change.
    * @fails Throws `RipgrepMissingError` only via later `impact()`, not here; a bad `root` throws at construction.
-   * @signature liteCtx.index(opts?: { paths?, force?, yield? }) => Promise<IndexResult>
+   * @signature liteCtx.index(opts?: { paths?, force?, yield?, signal? }) => Promise<IndexResult>
    * @example
    * import { LiteCtx } from 'litectx'
    * const ctx = new LiteCtx({ root: process.cwd() })
@@ -459,7 +472,9 @@ export class LiteCtx {
 
     // chunk each changed file into symbol/section nodes + collect its import specifiers, in one
     // parse (slice 2 + 4). Chunks are additive substrate; imports become edges below.
+    const noop = () => ({ files: this.store.count(), added: 0, updated: 0, removed: 0, unchanged, skipped, aborted: true, embedded: 0, embedPending: 0 });
     for (const u of upserts) {
+      if (opts.signal?.aborted) return noop(); // before the commit: nothing written, the old index stays whole
       const r = await chunkAndImports(u.path, u.body);
       u.nodes = r.chunks;
       u.imports = r.imports;
@@ -482,30 +497,11 @@ export class LiteCtx {
       for (const u of upserts) u.git = sig.get(u.path);
     }
 
-    // embeddings tier (slice 6): embed ONLY the changed files (incremental — unchanged files keep
-    // their stored vector). File-level, head-truncated text (POC-validated). The vector rides on the
-    // upsert into `applyChanges`, written as a BLOB. Sequential by design (batching deferred).
-    // Indexed md is embedded per heading SECTION (raw section text — the embedder head-caps it), carried as
-    // `sectionVecs`, and gets no file-level vector; every other file keeps its one file vector.
-    if (this.embeddings) {
-      for (const u of upserts) {
-        if (u.kind === "doc" && u.format === "md" && u.nodes?.length) {
-          /** @type {Float32Array[]} */
-          const vecs = [];
-          for (const c of u.nodes) {
-            const v = await this._embedSafe(c.text);
-            if (v === null) break;
-            vecs.push(v);
-          }
-          if (vecs.length < u.nodes.length) break; // tier unavailable — index BM25-only from here
-          u.sectionVecs = vecs;
-          continue;
-        }
-        const v = await this._embedSafe(u.body);
-        if (v === null) break; // tier unavailable — index BM25-only from here
-        u.embedding = v;
-      }
-    }
+    // embeddings tier (slice 6): vectors are NOT part of the commit below. They are written afterwards, file by
+    // file, by the backfill (which embeds every indexed file/section still without a vector — exactly this
+    // pass's upserts plus any older gap), so an abort or crash mid-embed keeps what was written and the next
+    // pass resumes. The keyword index commits whole first; recall already handles files without vectors.
+    if (opts.signal?.aborted) return noop();
 
     // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
     // first build or a whole rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
@@ -519,36 +515,43 @@ export class LiteCtx {
     // boundaries are current; only the vector was missing). Runs AFTER applyChanges so this pass's own
     // upserts already carry their vectors and aren't revisited. Scoped to the files this pass looked at
     // (all files on a full pass; the scoped set on a partial). Idempotent — a warm index backfills none.
+    let aborted = false;
+    let embedded = 0;
+    let embedPending = 0;
     if (this.embeddings) {
-      /** @type {[string, Float32Array][]} */
-      const backfilled = [];
-      for (const p of this.store.vectorlessFiles()) {
-        if (!current.has(p)) continue;
+      const files = this.store.vectorlessFiles().filter((p) => current.has(p));
+      const sections = this.store.vectorlessSections().filter((x) => current.has(x.path));
+      let todo = files.length + sections.length;
+      // each vector is written the moment it exists (own autocommit), so an abort/crash keeps all of them
+      for (const p of files) {
+        if (opts.signal?.aborted) { aborted = true; break; }
         let body;
         try {
           body = readFileSync(join(this.root, p), "utf8");
         } catch {
+          todo--;
           continue; // vanished/unreadable since the pass began
         }
         // drift guard: only embed if the disk bytes STILL match what was indexed. If the file changed
         // since this pass's diffFiles snapshot (a concurrent external write), its stored chunk bodies are
         // the OLD content — embedding the new bytes would pair a vector with a mismatched body. Skip it;
         // the next index() catches the hash change as an upsert and re-chunks + re-embeds it consistently.
-        if (this.store.fileHash(p) !== sha256(body)) continue;
+        if (this.store.fileHash(p) !== sha256(body)) {
+          todo--;
+          continue;
+        }
         const v = await this._embedSafe(body);
         if (v === null) break; // tier went unavailable — stop attempting
-        backfilled.push([p, v]);
+        this.store.putEmbeddings([[p, v]]);
+        embedded++;
       }
-      this.store.putEmbeddings(backfilled); // one transaction (no-op when empty)
       // same backfill for indexed-md SECTION rows (embedded per section, no file vector): embed the stored
       // section body (byte-identical to the normal-path input — chunk text) once the file's disk hash still
       // matches the indexed hash (TOCTOU guard, as above).
-      /** @type {[number, Float32Array][]} */
-      const secBackfilled = [];
       /** @type {Map<string, boolean>} */
       const fresh = new Map();
-      for (const sct of this.store.vectorlessSections()) {
-        if (!current.has(sct.path)) continue;
+      for (const sct of sections) {
+        if (aborted || opts.signal?.aborted) { aborted = true; break; }
         let ok = fresh.get(sct.path);
         if (ok === undefined) {
           try {
@@ -558,16 +561,20 @@ export class LiteCtx {
           }
           fresh.set(sct.path, ok);
         }
-        if (!ok) continue;
+        if (!ok) {
+          todo--;
+          continue;
+        }
         const v = await this._embedSafe(sct.body);
         if (v === null) break;
-        secBackfilled.push([sct.rid, v]);
+        this.store.putSectionEmbeddings([[sct.rid, v]]);
+        embedded++;
       }
-      this.store.putSectionEmbeddings(secBackfilled);
+      embedPending = Math.max(0, todo - embedded);
     }
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
-    return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged, skipped };
+    return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged, skipped, aborted, embedded, embedPending };
   }
 
   /**
