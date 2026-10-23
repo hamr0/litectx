@@ -688,7 +688,7 @@ test("naming a repo: its docs and code alternate from the top (filter BEFORE the
 function fakeEditor(dir) {
   const out = join(dir, "argv.txt");
   const bin = join(dir, "fake-editor");
-  writeFileSync(bin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${out}'\n`);
+  writeFileSync(bin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${out}.tmp' && mv '${out}.tmp' '${out}'\n`);
   chmodSync(bin, 0o755);
   return { bin, out };
 }
@@ -846,6 +846,24 @@ test("search while a meaning pass runs skips the query embed (keywords only); af
   } finally {
     release();
     Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});
+
+test("regression: a status poll must not rebuild the top bar when only the elapsed seconds changed (focus on a chip survives)", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    const rt = app.slice(app.indexOf("function renderTop"), app.indexOf("function fail("));
+    // the rebuilt bar is compared with the live one (elapsed span excluded) and the DOM is kept when equal
+    assert.ok(/outerHTML\.replace\(\/<span id="elapsed">/.test(rt), "signature ignores the elapsed seconds");
+    assert.ok(/if \(sig === topSig && t\.firstChild\) return;/.test(rt), "an unchanged bar is left alone");
+    assert.ok(rt.indexOf("t.innerHTML = \"\"") > rt.indexOf("return;"), "the live bar is cleared only after the unchanged check");
+    // a pass the server started itself (page reload) has no click to start the ticker, so adopting it must: nothing else refreshes "elapsed"
+    assert.ok(/s\.busy = \{ what: "reindex"[^\n]*setInterval\(tick, 1000\)/.test(app), "an adopted pass starts the elapsed ticker");
+    assert.ok(/st && st\.active/.test(rt), "a source switch (select value is a property, not markup) still rebuilds");
+  } finally {
     await ui.close();
   }
 });
