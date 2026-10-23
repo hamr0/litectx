@@ -5,7 +5,7 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## Unreleased
+## [0.37.0] — 2026-10-23
 
 ### Added
 
@@ -18,6 +18,7 @@ All notable changes to this project are documented here, following
 ### Fixed
 
 - **Indexing no longer runs a repo's git config.** Every `git` call passes `-c core.fsmonitor=false`: a repo whose `.git/config` sets `core.fsmonitor=<program>` made `git ls-files` run that program, and `childRepos` / `litectx ui <folder>` run git in every repo in the folder.
+- **`litectx ui`: the page answers during a cold first index.** The re-index ran without yielding, so a first index of a large folder (about 7,000 files, ~2 min) held the event loop and no request was served until it ended. The pass now yields between files.
 - **`litectx ui`: toggling meaning (or switching away and back) no longer runs two passes on one database.** The old pass was aborted but kept finishing its in-flight embed (up to ~2 s) while the new pass started. A new pass now waits for the previous source's pass to end (cut short by cancel / Ctrl+C, so closing stays prompt).
 - **Embeddings: a slow embed no longer overwrites a newer vector.** With embeds running after the keyword-index commit, process A could embed a file's old body (~2 s) while process B re-indexed the changed file and stored the new body's vector; A's late write then replaced B's, and since the file hash matched, nothing healed it. The vector write (`putEmbeddings` / `putSectionEmbeddings`) now lands only if the file's indexed hash is still the one embedded, in one SQL statement; a dropped write leaves the file vectorless and the next pass re-embeds it.
 - **`litectx ui`: the side view appears right across from the result you click.** It sat at the top of a long list, off-screen after scrolling down; it now stays in the viewport (sticky) while the list scrolls, and the page does not move on click.
