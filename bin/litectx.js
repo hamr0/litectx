@@ -13,6 +13,7 @@
 //   litectx impact <symbol> [--root <dir>]
 //   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--no-embeddings]
 //   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
+//   litectx ui [path] [--port <n>] [--embeddings]   # localhost search page (127.0.0.1:4747); embeddings OFF unless --embeddings
 
 import { readFileSync } from "node:fs";
 import { LiteCtx, KINDS } from "../src/index.js";
@@ -20,8 +21,8 @@ import { LiteCtx, KINDS } from "../src/index.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, embeddings: boolean, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, embeddings: true, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, embeddings: boolean, embeddingsFlag: boolean, port: number|undefined, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, embeddings: true, embeddingsFlag: false, port: undefined, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "--lines") opts.lines = rest[++i];
@@ -31,7 +32,8 @@ function parse(argv) {
     else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
-    else if (rest[i] === "--embeddings") opts.embeddings = true; // default; kept for back-compat
+    else if (rest[i] === "--embeddings") opts.embeddings = opts.embeddingsFlag = true; // default; kept for back-compat (`ui` is the exception: off unless this flag)
+    else if (rest[i] === "--port") opts.port = Number(rest[++i]);
     else if (rest[i] === "--no-embeddings") opts.embeddings = false;
     else if (rest[i] === "--no-log") opts.log = false;
     else opts.words.push(rest[i]);
@@ -44,6 +46,19 @@ async function main() {
 
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") help();
 
+  if (cmd === "ui") {
+    if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
+    // Loaded here so the other commands never pay for the server. Embeddings are OFF for the UI unless
+    // --embeddings is passed (the CLI's "default on" does not apply: first build is slow).
+    const { createUi } = await import("../src/ui/server.js");
+    const ui = await createUi({ port: opts.port, path: opts.words[0], embeddings: opts.embeddingsFlag });
+    console.error(`litectx ui: ${ui.url}\n  ${ui.describe()}\n  Ctrl+C to stop`);
+    // keep serving; the open server handle holds the process alive
+    process.on("SIGINT", () => void ui.close().then(() => process.exit(0)));
+    process.on("SIGTERM", () => void ui.close().then(() => process.exit(0)));
+    return;
+  }
+
   if (cmd === "index") {
     const root = opts.words[0] ?? opts.root;
     const ctx = new LiteCtx({ root, embeddings: opts.embeddings });
@@ -53,6 +68,7 @@ async function main() {
     console.error(
       `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
     );
+    for (const k of r.skipped) console.error(`warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
     return;
   }
 
@@ -243,7 +259,8 @@ function relAge(sec) {
 // invoked above this point in source order — a `const` here would be in its TDZ at that call.
 function usage() {
   return (
-    "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--lines <A-B>] [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by   (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
+    "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--lines <A-B>] [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
+    "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +
     "\noutput columns (tab-separated):\n" +
     "  recall  score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)   (memory hits also: provenance use:N)\n" +
     "  recent  age(m|h|d)  edits×  kind  path  › symbol"

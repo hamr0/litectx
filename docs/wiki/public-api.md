@@ -21,6 +21,9 @@ await lc.index({ paths: ["src/"] });    // scoped
 ```
 (litectx-prd.md:173-179)
 
+`index()` also takes `{ force, yield, signal }`; `signal` (an `AbortSignal`) cancels a long pass, resolving with
+`aborted: true` and keeping the keyword index and every vector written so far (`litectx.context.md`, `index`).
+
 ### `LiteCtxConfig`
 
 One object, all fields optional except `root`. No `.litectxrc`, no env vars — this is the whole
@@ -31,6 +34,7 @@ surface (litectx-prd.md:208-212):
 | `root` | *(required)* | repo root to index |
 | `include` | `.ts .js .mjs .cjs .py .md` | which file extensions to index |
 | `pathspecs` | — | git pathspecs to scope the index |
+| `childRepos` | `false` | `root` is a folder of git repos: index every repo one level down, paths prefixed `<repo>/` (see `litectx.context.md`) |
 | `dbPath` | `<root>/.litectx/index.db` | the single SQLite file (`:memory:` = ephemeral) |
 | `embeddings` | `false` (lib) · **on** (CLI + MCP) | the opt-in semantic tier |
 | `embedWeight` | `1.0` | semantic fusion weight (higher = more semantic) |

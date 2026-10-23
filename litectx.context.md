@@ -24,7 +24,7 @@ but everything you need to *use* litectx is here.
 
 litectx is a local search + memory layer for coding agents, in one **SQLite** file —
 `import`-able, running **in your process**: no daemon, no service, no network, no telemetry, no
-LLM inside. It does three jobs, each returning addresses rather than text dumps:
+LLM inside. (The one opt-in exception is `litectx ui`, a search page you start by hand that listens on 127.0.0.1 only while it runs.) It does three jobs, each returning addresses rather than text dumps:
 
 - **"What breaks if I change this?"** — `impact()`: called-by/calling, blast radius, and a
   risk bucket (code only; tree-sitter + ripgrep, no LSP). See *Public API → impact*.
@@ -148,6 +148,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `root` | `string` | — (required) | Repository root to index. Throws if omitted. |
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
+| `childRepos` | `boolean` | `false` | `root` is a **folder of git repos**, not a repo itself: `index()` reads the tracked files (`git ls-files`) of every repo **one level down**, paths prefixed `<repo>/` (e.g. `rwxmap/README.md`). Untracked files, loose files at `root`, non-repo directories and repos nested deeper are never read. A pathspec whose first segment is a repo name scopes to that repo (`rwxmap/src`); any other pathspec applies to every repo. Git grounding follows the prefix. A leading `./` on a pathspec is ignored; routing looks only at the first `/` segment, so `:`-magic pathspecs (`:(glob)…`, `:!x`) are not parsed and go to every repo verbatim, and a spec whose first segment equals a repo name is routed to that repo only. **Not treated as repos:** hidden-named folders (`.dotfiles`), folders named like a noise dir (`node_modules`, `dist`, `build`, `coverage`, `.venv`, `__pycache__`, `.litectx`) and symlinked directories (a symlink to a repo would index it twice) — rename the folder to index it. A repo whose `git ls-files` fails (corrupt index, broken `.git`) is listed in `IndexResult.skipped` (`{repo, error}`), its previously indexed files are **kept** (never reported `removed`), and that pass does not stamp the index. In this mode `impact()` runs ripgrep over the whole `root`, so it also sweeps untracked data (over-count — the safe direction), and tsconfig path aliases are read only from `<root>/tsconfig.json`, so per-repo aliases are not seen. The default `dbPath` is still `<root>/.litectx/index.db`. Git is run with `-c core.fsmonitor=false`, so a repo's own `.git/config` cannot make indexing execute a program. |
 | `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
 | `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@huggingface/transformers` (`npm i @huggingface/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
@@ -208,6 +209,18 @@ Builds or **incrementally refreshes** the index over `root`.
   parallelise: a single file's parse and the one atomic `applyChanges` transaction
   stay uninterrupted, so a sub-second residual block remains. For **full** isolation,
   run the instance in your own worker thread instead.
+- `opts.signal?: AbortSignal` — **cancel a long pass.** Checked between files while
+  chunking and between embeds. Aborting before the index commit writes nothing; the
+  commit is one atomic transaction and is never cut. With embeddings on, vectors are
+  written **file by file after** that commit, so an abort (or a crash) mid-embed keeps
+  the complete keyword index and every vector already written, and the next `index()`
+  embeds only the files still without one. An aborted pass **resolves** (not throws)
+  with `aborted: true`. **Vectors lag the keyword index:** after the atomic commit a
+  file is searchable by keyword (BM25) only until its vector is written, so during a
+  `force` or stale-stamp rebuild recall has no meaning re-rank for the whole embed
+  phase, and a file edited mid-pass stays keyword-only until the next pass (a vector
+  computed from superseded content is dropped, never written). Once the pass finishes
+  uninterrupted the final index is byte-identical to a single-transaction build.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 
@@ -217,7 +230,11 @@ Builds or **incrementally refreshes** the index over `root`.
   added: number,      // newly indexed
   updated: number,    // re-indexed (content changed)
   removed: number,    // dropped (no longer present)
-  unchanged: number } // skipped (mtime/size or content unchanged)
+  unchanged: number,  // skipped (mtime/size or content unchanged)
+  skipped: { repo: string, error: string }[], // childRepos only: repos whose `git ls-files` failed this pass; their indexed files are KEPT (never `removed`) and the pass does not stamp the index; [] otherwise
+  aborted: boolean,   // true when opts.signal stopped the pass early
+  embedded: number,   // vectors written this pass (0 with embeddings off)
+  embedPending: number } // files/sections still without a vector (0 unless aborted or the embedder was unavailable)
 ```
 
 #### Self-healing across a litectx upgrade
@@ -1296,6 +1313,53 @@ it for dashboards, CI, and batch scripts.
 Output is **tab-separated** (composable with `awk`/`cut`; `help` prints this legend):
 `recall` → `score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)` (memory
 hits append `provenance use:N`); `recent` → `age(m|h|d)  edits×  kind  path  › symbol`.
+
+### `litectx ui` (localhost search page)
+
+```
+litectx ui [path] [--port <n>] [--embeddings]    # default port 4747; Ctrl+C stops it
+```
+A search page for a **person** (a ranked list, not an answer): type a word or a question, get
+matching docs and code across one repo or every repo under one folder. Prints the URL and the
+active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is added as a source
+(named after its folder) and made active; without one it opens the last active source.
+
+- **Sources** are `{name, path}` pairs in `~/.litectx/ui.json` (`{ "active": "...", "sources": [...] }`;
+  set `LITECTX_UI_CONFIG` to use another file). The page's top bar switches source; the *sources*
+  panel adds, removes and sets the default. The first run, with no sources, opens on the Add form.
+  The click log (`ui-log.jsonl`, one `{ts, source, q, path, rank}` line per opened result) is
+  written beside the settings file.
+- **Modes**, detected from the path (absolute, existing directory): it has `.git` → **one repo**,
+  using that repo's own `.litectx/index.db` (the one agents use, so nothing is indexed twice);
+  no `.git` but git repos one level down → **all repos**, one combined index at
+  `<folder>/.litectx/index.db` (`childRepos`); neither → refused ("no git repos found"). Only
+  git-tracked files are read. **Removing a source never deletes a one-repo index**; for an
+  all-repos index the Remove box can also delete it (unticked by default).
+- **Indexing** runs once on start (incremental: only changed files are re-read) and on the
+  *re-index* button. **Embeddings are off** unless you pass `--embeddings` or switch *meaning* on
+  (remembered per source); the first build is slow (about 15 minutes for ~7k files). An
+  embeddings-off pass leaves vectors an embeddings-on writer (the CLI/MCP default) already built
+  for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.
+- **Cancel and Ctrl+C**: while a pass runs, the *re-index* / *meaning* chip becomes **cancel re-index** /
+  **cancel meaning**; the pass stops after the file in progress and the page says e.g. "cancelled · 3,146 of
+  12,800 embedded · the next pass finishes the rest". Search keeps working and *meaning* stays on (partial
+  vectors are kept; the next pass embeds only what is missing). Ctrl+C does the same and exits within seconds.
+  A cancel before the first commit leaves the index unchanged.
+- **Meaning while building**: during an index/meaning pass a search runs on keywords only (the page says so) instead of waiting on the in-flight embed; once the pass ends, meaning is back.
+- **Results**: one `recall` over `doc` and `code`, interleaved by rank (per-kind scores are not
+  comparable). The query is searched as typed; a repo name in it (all-repos mode) also filters to
+  that repo. The page keeps its search in the URL hash, so Back, reload and bookmarks restore it. One entry per file with "+N more sections", and old/tests last (a dir segment
+  `archive|poc|test|tests|logs`, or `.test.` in the name, goes after the rest). Line numbers
+  shown are 1-based.
+- **Security**: it listens on `127.0.0.1` only; requests whose `Host` is not `127.0.0.1:<port>` or
+  `localhost:<port>` are refused (DNS rebinding); POST/DELETE with a foreign `Origin` are refused;
+  `/view` serves only files that are in the active source's index (an untracked `.env` in the root
+  is refused) and whose real path is inside the source root (`../` and symlink escapes are rejected); everything rendered is HTML-escaped and a strict CSP is set. There is no
+  authentication, so do not forward the port. The *open in PyCharm* button
+  POSTs `/api/open {path, line}` and the server runs `<editor> --line N <abs path>` detached (no shell; same
+  Host/Origin checks and indexed-only rule as `/view`). The launcher is the `editor` field of
+  `~/.litectx/ui.json`, else auto-detected (`pycharm` on PATH, `/opt/pycharm/bin/pycharm`, JetBrains Toolbox,
+  snap); none found is an error naming the setting.
 
 ### `litectx-mcp` (MCP server)
 

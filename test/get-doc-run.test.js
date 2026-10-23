@@ -91,7 +91,12 @@ test("a code file union is null (code chunks nest)", async () => {
   assert.ok(cs.length >= 2);
   const lo = Math.min(...cs.map((c) => c.startLine)), hi = Math.max(...cs.map((c) => c.endLine));
   const exact = cs.find((c) => c.startLine === lo && c.endLine === hi);
-  if (!exact) assert.equal(ctx.get("box.js", { startLine: lo, endLine: hi }), null);
+  assert.ok(exact, "precondition: the class chunk exactly spans lo..hi");
+  const whole = ctx.get("box.js", { startLine: lo, endLine: hi }); // an exact chunk range is served as that one chunk
+  assert.ok(whole, "an exact chunk range is served, not null");
+  assert.equal(whole.text, exact.text, "…and it is that chunk's text");
+  assert.equal(whole.id, "box.js");
+  assert.equal(whole.text, lines(JS, lo, hi), "…spanning exactly lines lo..hi of the file");
   const m = cs.filter((c) => c.symbol === "open" || c.symbol === "shut");
   assert.equal(ctx.get("box.js", { startLine: m[0].startLine, endLine: m[1].endLine }), null);
 });
