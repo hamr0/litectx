@@ -7,11 +7,11 @@ Status: spec only, 2026-10-23. Source: fix-ledger bullet at `src/index.js` "let 
 Since embeddings moved out of the atomic commit into the per-file backfill (ec98189, `index({signal})`),
 a whole-index rebuild wipes every file vector in the commit and refills them one file at a time afterwards.
 
-- `index({force:true})` or a stale stamp (`PRAGMA user_version` or per-node `nodes.stamp`, src/index.js:441-459; any
+- `index({force:true})` or a stale stamp (`PRAGMA user_version` or per-node `nodes.stamp`, src/index.js:429-437; any
   release that touches `src/*.js` changes the stamp, and the default-ON CLI/MCP warm-index runs it) sets `clearAll`.
 - `applyChanges` then runs `_clearIndexedRows()`, which deletes `file_embeddings` (src/store.js:683) and `doc_sections`
   (which hold the md section vectors, :684). The upsert loop also deletes each upserted file's vector (:857).
-- The backfill (src/index.js:521-573) then re-embeds everything: about 67 s per 497 files, about 2 s a file, blocking
+- The backfill (src/index.js:521-576) then re-embeds everything: about 67 s per 497 files, about 2 s a file, blocking
   the event loop. Until a file is re-embedded, code recall falls back to BM25-only for it.
 - Measured (ledger): ranking during the embed phase differs from before and after (`b.js:2.000 a.js:1.000` vs
   `b.js:1.000 a.js:1.000`). Old code, with vectors inside the commit, was identical throughout.
@@ -24,18 +24,17 @@ A force or stamp rebuild of an unchanged tree embeds nothing (about 0 s instead 
 
 ## Non-goals
 
-- No change to `mem_embeddings` (written memory). Rebuilds never touch it (src/store.js:679, `clearIndexed` keeps it).
+- No change to `mem_embeddings` (written memory). Rebuilds never touch it (src/store.js:679; `clearIndexed`, :576, keeps it).
   Out of scope.
 - No change to chunking, stamps, or the recall formula. No new embedder or model.
 - No automatic model migration UI. A model change just re-embeds, quietly, over the next passes.
 
 ## What the embed input really is (checked)
 
-- Code and non-md files: the whole file body, `readFileSync(...)` then `embed(body)` (src/index.js:541-543),
+- Code and non-md files: the whole file body, `readFileSync(...)` then `embed(body)` (`readFileSync` src/index.js:530, `_embedSafe(body)` :544),
   head-cut to `HEAD_CHARS = 6000` inside `Embedder.embed` (src/embedder.js:11,58). Depends only on the file bytes, the
   model (default `Xenova/all-MiniLM-L6-v2`), dtype `q8` (embedder.js:47) and `HEAD_CHARS`.
-- Indexed md: one vector per heading section, input = that section's stored text (`nodes.body`, src/index.js:566-568,
-  src/store.js:1897). Depends on the chunker's section text, so a chunker change can change what a section contains.
+- Indexed md: one vector per heading section, input = that section's stored text (`nodes.body`, read by `vectorlessSections` at src/store.js:1897 and embedded at src/index.js:570). Depends on the chunker's section text, so a chunker change can change what a section contains.
 - The vector must not depend on the index stamp: the stamp is a hash of all `src/*.js`, so tying vectors to it
   would bring the problem straight back on every release.
 
@@ -52,12 +51,12 @@ A force or stamp rebuild of an unchanged tree embeds nothing (about 0 s instead 
      leave an orphan vector).
    - Section: before `doc_sections` is cleared (:684, and `delSec` for upserts), snapshot `(path, th, ekey, dim, vec)`
      for the paths being rebuilt. When the new section's `sha256(c.text)` and the key match a snapshot entry, insert the
-     new `doc_sections` row with that vec (insSec at :763 currently inserts `vec: null`). Match by text, not position:
+     new `doc_sections` row with that vec (`insSec`, prepared at store.js:762, is run at :844 with `vec: null`). Match by text, not position:
      a moved or renumbered section with identical text keeps its vector; an edited one loses it.
 3. The backfill is unchanged in spirit: it embeds only what is still vectorless, so reused vectors are skipped.
-   `vectorlessFiles` / `vectorlessSections` (store.js:1877-1899) also treat a row whose `ekey` is not the current key as
+   `vectorlessFiles` / `vectorlessSections` (store.js:1875-1899) also treat a row whose `ekey` is not the current key as
    vectorless. `embedded` in `IndexResult` now counts new vectors only (docs and CHANGELOG say so).
-4. Recall reads only vectors whose `ekey` matches the current key (`getEmbeddings`, store.js:2397), so a stale-model
+4. Recall reads only vectors whose `ekey` matches the current key (`getEmbeddings`, store.js:2407), so a stale-model
    vector is never mixed into a cosine (different models give meaningless cosines, possibly a different `dim`).
 5. The hash-conditional write now being added to `putEmbeddings`: write only if `file_index.content_hash` still equals the
    `th` the vector was computed from, and store `th` and `ekey` in the same statement. Same rule for
@@ -89,23 +88,23 @@ behaviour). Without a real caller this is speculative; ship it only if the owner
 
 ## Interactions
 
-- Per-node stamp self-heal: a stale-stamped file is re-chunked via the sentinel `hash:""` (src/index.js:464-469); it
+- Per-node stamp self-heal: a stale-stamped file is re-chunked via the sentinel `hash:""` (src/index.js:464-467); it
   reaches the upsert with its real `u.hash`, so the same reuse rule applies. No change to the stamps or to when they are
-  set. A partial pass still never clears (`partial`, :441) and still does not set the stored stamp.
+  set. A partial pass still never clears (`partial`, :429) and still does not set the stored stamp.
 - clearAll in one transaction: unchanged. Reuse happens inside the same `tx`, so a reader sees the old complete index
   (old vectors included) or the new one (reused vectors included), never an empty one. Stop at the final orphan sweep
   inside that `tx`, not after it.
 - `doc_sections`: covered above. The section rows get new `doc_rowid`s on rebuild, so vectors are re-attached by
   text, never by rowid.
 - `mem_embeddings`: untouched. Written docs and facts keep their own table and their own ladder.
-- Drift guard (:535-541): unchanged. It guards against embedding bytes that differ from the indexed ones.
+- Drift guard (src/index.js:535-543): unchanged. It guards against embedding bytes that differ from the indexed ones.
 
 ## Migration
 
 - Schema: column-additive `ALTER TABLE ... ADD COLUMN th TEXT, ekey TEXT` on `file_embeddings` and `doc_sections`,
-  in the same migration block as `nodes.stamp` (store.js:409-413). No new table, no data copy.
+  in the same migration block as `nodes.stamp` (store.js:409-414). No new table, no data copy.
 - Existing vectors have `th`/`ekey` NULL. Option A (recommended, decision 1): fill them from known facts. For files
-  `th` = `file_index.content_hash`; for sections `th` = sha256 of the joined `nodes.body`; `ekey` = the current key
+  `th` = `file_index.content_hash`; for sections `th` = sha256 of that one section's own `nodes.body` (exactly what the backfill embeds, `vectorlessSections` store.js:1897 and src/index.js:570; the same definition as design point 1, never the joined body of the file); `ekey` = the current key
   only when the instance runs the default model, else leave NULL. Option B: treat NULL as stale and re-embed once
   (67 s/497 files, one time, safe but it recreates the gap once after upgrade).
 - This change touches `src/store.js`, which changes `indexStamp`, so the first run after upgrade is itself a stamp
@@ -124,8 +123,9 @@ two equal texts embed to equal vectors, so this should hold).
 ## Test plan (each can fail)
 
 1. Before/during/after ranking (the ledger's repro): index with a stub embedder where a.js and b.js ordering depends on
-   cosine; capture top-N; run `index({force:true})` with an `onEmbed` hook (or the injected embedder) that, on its first
-   call, runs `recall` and records the ranking. Assert before == during == after. Fails today (during is BM25-only).
+   cosine; capture top-N; run `index({force:true})` with an injected stub embedder (as test/embeddings.test.js does)
+   whose `embed` wraps the stub and, on its first call during the pass, runs `recall` and records the ranking
+   (no new hook is needed: the backfill awaits `embed`, so the recall runs mid-phase). Assert before == during == after. Fails today (during is BM25-only).
 2. Embed-call count: unchanged tree, `force:true` and a forced stale stamp (`setStoredStamp(1)`) each give
    `embedded === 0` and zero embedder calls. Edit one file: exactly one new file vector, other vectors byte-identical.
 3. Sections: an md file with 3 sections; edit one. After a force pass, 1 section re-embeds, 2 are kept byte-for-byte,
@@ -152,7 +152,7 @@ survives an edit); key check dropped (test 4); orphan sweep removed (test 5); re
 - Edited-file case: embedder calls equal edited files (or edited sections), not more.
 - Full suite green, `tsc --noEmit` clean, `check:primitives` unchanged, benches byte-identical with embeddings off.
 - A fresh-tarball drive (library and CLI) on an embedded index: `index --force` reports `embedded: 0`, recall unchanged.
-- Docs updated together: `litectx.context.md` (the `embedded`/`embedPending` lines, :231, and what `force` does to
+- Docs updated together: `litectx.context.md` (the `embedded`/`embedPending` lines, :235-236, and what `force` does to
   vectors), CHANGELOG, JSDoc at src/index.js:258-260, this spec marked shipped. Grep to confirm.
 
 ## Ship condition (un-defer)
