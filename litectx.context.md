@@ -148,6 +148,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `root` | `string` | — (required) | Repository root to index. Throws if omitted. |
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
+| `childRepos` | `boolean` | `false` | `root` is a **folder of git repos**, not a repo itself: `index()` reads the tracked files (`git ls-files`) of every repo **one level down**, paths prefixed `<repo>/` (e.g. `rwxmap/README.md`). Untracked files, loose files at `root`, non-repo directories and repos nested deeper are never read. A pathspec whose first segment is a repo name scopes to that repo (`rwxmap/src`); any other pathspec applies to every repo. Git grounding follows the prefix. The default `dbPath` is still `<root>/.litectx/index.db`. |
 | `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
 | `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@huggingface/transformers` (`npm i @huggingface/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
@@ -1296,6 +1297,44 @@ it for dashboards, CI, and batch scripts.
 Output is **tab-separated** (composable with `awk`/`cut`; `help` prints this legend):
 `recall` → `score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)` (memory
 hits append `provenance use:N`); `recent` → `age(m|h|d)  edits×  kind  path  › symbol`.
+
+### `litectx ui` (localhost search page)
+
+```
+litectx ui [path] [--port <n>] [--embeddings]    # default port 4747; Ctrl+C stops it
+```
+A search page for a **person** (a ranked list, not an answer): type a word or a question, get
+matching docs and code across one repo or every repo under one folder. Prints the URL and the
+active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is added as a source
+(named after its folder) and made active; without one it opens the last active source.
+
+- **Sources** are `{name, path}` pairs in `~/.litectx/ui.json` (`{ "active": "...", "sources": [...] }`;
+  set `LITECTX_UI_CONFIG` to use another file). The page's top bar switches source; the *sources*
+  panel adds, removes and sets the default. The first run, with no sources, opens on the Add form.
+  The click log (`ui-log.jsonl`, one `{ts, source, q, path, rank}` line per opened result) is
+  written beside the settings file.
+- **Modes**, detected from the path (absolute, existing directory): it has `.git` → **one repo**,
+  using that repo's own `.litectx/index.db` (the one agents use, so nothing is indexed twice);
+  no `.git` but git repos one level down → **all repos**, one combined index at
+  `<folder>/.litectx/index.db` (`childRepos`); neither → refused ("no git repos found"). Only
+  git-tracked files are read. **Removing a source never deletes a one-repo index**; for an
+  all-repos index the Remove box can also delete it (unticked by default).
+- **Indexing** runs once on start (incremental: only changed files are re-read) and on the
+  *re-index* button. **Embeddings are off** unless you pass `--embeddings` or switch *meaning* on
+  (remembered per source); the first build is slow (about 15 minutes for ~7k files). An
+  embeddings-off pass leaves vectors an embeddings-on writer (the CLI/MCP default) already built
+  for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.
+- **Results**: one `recall` over `doc` and `code`, interleaved by rank (per-kind scores are not
+  comparable). The query is searched as typed; a repo name in it (all-repos mode) also filters to
+  that repo. One entry per file with "+N more sections", and old/tests last (a dir segment
+  `archive|poc|test|tests|logs`, or `.test.` in the name, goes after the rest). Line numbers
+  shown are 1-based.
+- **Security**: it listens on `127.0.0.1` only; requests whose `Host` is not `127.0.0.1:<port>` or
+  `localhost:<port>` are refused (DNS rebinding); POST/DELETE with a foreign `Origin` are refused;
+  `/view` serves only files whose real path is inside the source root (`../` and symlink escapes
+  are rejected); everything rendered is HTML-escaped and a strict CSP is set. There is no
+  authentication, so do not forward the port. The *open in PyCharm* link uses
+  `pycharm://open?file=<abs>&line=<n>` and needs the IDE's URL handler.
 
 ### `litectx-mcp` (MCP server)
 

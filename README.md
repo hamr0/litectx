@@ -28,6 +28,7 @@ Around those three sit small helpers for fitting evidence into a window: **compr
 
 - **MCP client** (Claude Code, Cursor…) → run `litectx-mcp --root /path/to/repo`. Tools: index · recall · impact · get · recent · promotions · remember · forget.
 - **Your own loop** → `npm i litectx`, hand your assistant `litectx.context.md` (the full API, including the render/budget verbs MCP doesn't expose).
+- **A person searching** → `litectx ui [path]` opens a localhost search page over one repo, or every git repo under a folder: ranked docs and code, one line per file, a side view to read the hit. It listens on 127.0.0.1 only; embeddings stay off unless you switch them on.
 - **AI agent / tool-calling** → read `primitives.json` first (`unpkg.com/litectx/primitives.json`, or import it); generated from source, never drifts.
 
 ## What's inside
