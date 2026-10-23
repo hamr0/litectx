@@ -215,7 +215,12 @@ Builds or **incrementally refreshes** the index over `root`.
   written **file by file after** that commit, so an abort (or a crash) mid-embed keeps
   the complete keyword index and every vector already written, and the next `index()`
   embeds only the files still without one. An aborted pass **resolves** (not throws)
-  with `aborted: true`.
+  with `aborted: true`. **Vectors lag the keyword index:** after the atomic commit a
+  file is searchable by keyword (BM25) only until its vector is written, so during a
+  `force` or stale-stamp rebuild recall has no meaning re-rank for the whole embed
+  phase, and a file edited mid-pass stays keyword-only until the next pass (a vector
+  computed from superseded content is dropped, never written). Once the pass finishes
+  uninterrupted the final index is byte-identical to a single-transaction build.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 
@@ -228,7 +233,7 @@ Builds or **incrementally refreshes** the index over `root`.
   unchanged: number,  // skipped (mtime/size or content unchanged)
   aborted: boolean,   // true when opts.signal stopped the pass early
   embedded: number,   // vectors written this pass (0 with embeddings off)
-  embedPending: number } // files/sections still without a vector (0 unless aborted)
+  embedPending: number } // files/sections still without a vector (0 unless aborted or the embedder was unavailable)
 ```
 
 #### Self-healing across a litectx upgrade
