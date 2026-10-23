@@ -8,7 +8,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 :focus-visible{outline:2px solid var(--magenta);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 .wrap{max-width:1100px;margin:0 auto}
-.dim{color:var(--mute)}.k-doc{color:var(--cyan)}.k-code{color:var(--green)}.kw{color:var(--yellow)}.mo{color:var(--orange)}.sym{color:var(--magenta)}.err{color:var(--red)}
+.dim{color:var(--mute)}.fgc{color:var(--fg)}#title{font-size:12px;margin:0 0 6px}.k-doc{color:var(--cyan)}.k-code{color:var(--green)}.kw{color:var(--yellow)}.mo{color:var(--orange)}.sym{color:var(--magenta)}.err{color:var(--red)}
 .row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
 .row.between{justify-content:space-between}
 .row.filters{margin:8px 0}

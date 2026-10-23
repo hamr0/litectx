@@ -40,7 +40,6 @@ export function isNoisy(segs, file) {
  * @property {string[]} [repos]   keep only these repos
  * @property {string[]} [kinds]   subset of doc|code (default both)
  * @property {string} [ext]       keep only files with this extension (no dot)
- * @property {boolean} [kwOnly]   drop meaning-only hits
  * @property {string} [folder]    keep only folders starting with this (repo-relative)
  * @property {boolean} [demote]   knob 2 (default on)
  * @property {boolean} [group]    knob 1 (default on)
@@ -116,7 +115,6 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
     folders: [...new Set(rows.map((x) => x.folder.split("/")[0]).filter(Boolean))].slice(0, 12),
   };
   if (o.ext) rows = rows.filter((x) => extOf(x.file) === o.ext);
-  if (o.kwOnly) rows = rows.filter((x) => x.keyword);
   const f = o.folder;
   if (f) rows = rows.filter((x) => x.folder === f || x.folder.startsWith(f + "/"));
   if (o.demote !== false) rows = [...rows.filter((x) => !x.noisy), ...rows.filter((x) => x.noisy)];

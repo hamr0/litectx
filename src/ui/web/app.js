@@ -6,14 +6,14 @@
   var $ = function (id) { return document.getElementById(id); };
   var app = $("app");
   app.innerHTML =
-    '<div id="top"></div><div id="panel"></div>' +
+    '<div id="title" class="dim"></div><div id="top"></div><div id="panel"></div>' +
     '<label class="searchbox"><span class="kw" aria-hidden="true">$</span><input id="q" class="q" aria-label="search" autocomplete="off" autofocus></label>' +
     '<div id="filters" class="row filters"></div><div id="viewrow" class="row"></div><div id="results"></div>';
   var tip = document.createElement("div");
   tip.id = "tip"; tip.setAttribute("role", "tooltip"); document.body.appendChild(tip);
 
   var s = {
-    q: "", sub: "", kinds: { doc: true, code: true }, ext: null, kwOnly: false, repos: [], folder: null, demote: true,
+    q: "", sub: "", kinds: { doc: true, code: true }, ext: null, repos: [], folder: null, demote: true,
     view: "table", open: null, openOthers: false, hits: [], facets: { exts: [], folders: [] }, ms: 0,
     st: null, settings: false, msg: "", searched: false
   };
@@ -35,7 +35,8 @@
   // ---- data ---------------------------------------------------------------------------------------
   function loadState() {
     return api("GET", "/api/sources").then(function (st) {
-      s.st = st; if (!st.sources.length) s.settings = true;
+      s.st = st; $("title").innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
+      if (!st.sources.length) s.settings = true;
       renderTop(); renderPanel(); renderFilters();
       return st;
     });
@@ -47,7 +48,6 @@
     var p = new URLSearchParams({ q: s.q, kinds: kinds.join(","), demote: s.demote ? "1" : "0" });
     if (s.repos.length) p.set("repos", s.repos.join(","));
     if (s.ext) p.set("ext", s.ext);
-    if (s.kwOnly) p.set("kwOnly", "1");
     if (s.folder) p.set("folder", s.folder);
     return api("GET", "/api/search?" + p).then(function (r) {
       s.hits = r.hits; s.facets = r.facets; s.ms = r.ms; s.msg = "";
@@ -145,7 +145,6 @@
     k.appendChild(chip("docs", s.kinds.doc, go(function () { s.kinds.doc = !s.kinds.doc; })));
     k.appendChild(chip("code", s.kinds.code, go(function () { s.kinds.code = !s.kinds.code; })));
     s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); });
-    k.appendChild(chip("exact words only", s.kwOnly, go(function () { s.kwOnly = !s.kwOnly; }), "hide results that matched by meaning only"));
     k.appendChild(sep());
     s.repos.forEach(function (r) { k.appendChild(chip(r + " ✕", true, go(function () { s.repos = s.repos.filter(function (x) { return x !== r; }); }), "remove filter")); });
     k.appendChild(repoInput());
@@ -271,7 +270,7 @@
   function applyHash() {
     var d = ST.decodeState(location.hash);
     s.q = d.q; s.sub = d.sub; s.ext = d.ext; s.folder = d.folder; s.open = d.open; s.repos = d.repos;
-    s.kinds = d.kinds; s.kwOnly = d.kwOnly; s.demote = d.demote; s.view = d.view;
+    s.kinds = d.kinds; s.demote = d.demote; s.view = d.view;
     $("q").value = d.q;
   }
   function restoreScroll() {

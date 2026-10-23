@@ -19,6 +19,8 @@ const NAME_RE = /^[^\u0000-\u001f]{1,64}$/;
 export const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 
 /** @param {string} f @returns {string} */
+/** litectx's own version, read from its package.json once (never hardcoded). */
+const VERSION = /** @type {{ version: string }} */ (JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"))).version;
 const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
 
 /**
@@ -191,6 +193,7 @@ export async function createUi(opts = {}) {
   // ---- state for the page -------------------------------------------------------------------------
   function state() {
     return {
+      version: VERSION,
       active: cfg.active,
       sources: cfg.sources.map((s) => {
         const m = detectMode(s.path);
@@ -309,7 +312,6 @@ export async function createUi(opts = {}) {
       repos: list("repos"),
       kinds: list("kinds"),
       ext: sp.get("ext") || undefined,
-      kwOnly: sp.get("kwOnly") === "1" || sp.get("kwOnly") === "true",
       folder: sp.get("folder") || undefined,
       demote: sp.get("demote") !== "0",
       group: sp.get("group") !== "0",
@@ -333,6 +335,10 @@ export async function createUi(opts = {}) {
     }
     const rp = relative(rootReal, target);
     if (rp === "" || rp === ".." || rp.startsWith(`..${sep}`) || isAbsolute(rp)) throw new HttpError(403, "outside the source root");
+    // Membership: only files in the active source's index are served (an untracked `.env` inside the root
+    // is not). One lookup in the store, keyed by the canonical root-relative path -- no git per request.
+    const node = cur.ctx.getNode(rp.split(sep).join("/"));
+    if (!node || node.source !== "file") throw new HttpError(404, "not an indexed file");
     const st = statSync(target);
     if (!st.isFile()) throw new HttpError(404, "not a file");
     if (st.size > MAX_VIEW_BYTES) throw new HttpError(413, "file too large to view");

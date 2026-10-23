@@ -259,7 +259,7 @@ test("knob 2: old/tests last moves archive|poc|test|tests|logs and .test. files 
   }
 });
 
-test("repo filter, kinds filter, extension, exact-words and folder filters", async () => {
+test("repo filter, kinds filter, extension, and folder filters", async () => {
   const root = manyRepos();
   const ui = await createUi({ port: 0, path: root });
   try {
@@ -281,7 +281,6 @@ test("repo filter, kinds filter, extension, exact-words and folder filters", asy
     assert.ok(all.facets.folders.includes("src"));
     assert.ok((await find(ui, "quokka", "&ext=js")).hits.every((h) => h.file.endsWith(".js")));
     assert.ok((await find(ui, "quokka", "&folder=src")).hits.every((h) => h.folder === "src"));
-    assert.ok((await find(ui, "quokka", "&kwOnly=1")).hits.every((h) => h.keyword));
     assert.deepEqual((await find(ui, "   ")).hits, [], "blank query = no results");
   } finally {
     await ui.close();
@@ -323,15 +322,13 @@ test("re-index is incremental and picks up new files", async () => {
   }
 });
 
-// Over a stub recall: doc/code BM25 hits are always keyword:true (only fact/episode can be meaning-only),
-// so the exact-words filter and the name rules are pinned here, where the input can be controlled.
-test("search transforms over stub hits: exact-words filter, noisy-path rules, repo prefix is not a dir segment", async () => {
+// Over a stub recall, so the name rules are pinned where the input can be controlled.
+test("search transforms over stub hits: noisy-path rules, repo prefix is not a dir segment", async () => {
   const hit = (path, keyword = true) => ({ path, kind: "code", format: "js", score: 1, keyword, chunk: { symbol: null, nodeType: "file", startLine: 0, endLine: 0 } });
   const hits = [hit("poc/a.js"), hit("r/src/b.js", false), hit("r/src/c.test.js"), hit("r/src/d.js")];
   const ctx = /** @type {any} */ ({ recall: async () => ({ doc: [], code: hits }) });
   const run = (o) => search(ctx, "/nowhere", "repos", "x", "q", o).then((r) => r.rows.map((h) => h.path));
   assert.deepEqual(await run({ demote: false }), ["poc/a.js", "r/src/b.js", "r/src/c.test.js", "r/src/d.js"]);
-  assert.deepEqual(await run({ demote: false, kwOnly: true }), ["poc/a.js", "r/src/c.test.js", "r/src/d.js"], "meaning-only hit dropped");
   // `poc` here is a REPO name (first segment), not a directory: it must not be demoted
   assert.deepEqual(await run({}), ["poc/a.js", "r/src/b.js", "r/src/d.js", "r/src/c.test.js"], "only the .test. file moves to the end");
   assert.equal(isNoisy(["src"], "c.test.js"), true, ".test. in the file name");
@@ -346,6 +343,7 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
   const secret = join(scratch(), "secret.txt");
   writeFileSync(secret, "TOP-SECRET-CONTENT\n");
   repo(root, { "a.md": "# A\n\nline <script>alert(1)</script> one\nline two\n", "b.js": "export const b = 1;\n" });
+  writeFileSync(join(root, ".env"), "API_KEY=UNTRACKED-SECRET\n"); // inside the root, never git-added
   symlinkSync(secret, join(root, "link.md")); // tracked symlink pointing OUTSIDE the root
   execFileSync("git", ["-C", root, "add", "link.md"]);
   const ui = await createUi({ port: 0, path: root });
@@ -364,6 +362,13 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
       assert.ok(r.status === 403 || r.status === 404, `${bad} → ${r.status}`);
       assert.ok(!r.text.includes("TOP-SECRET"), `${bad} leaked`);
     }
+    // only INDEXED files are served: an untracked file inside the root is refused, however it is spelled
+    for (const p of [".env", "./.env", "x/../.env"]) {
+      const r = await get(ui, "/view?p=" + encodeURIComponent(p));
+      assert.equal(r.status, 404, `${p} → ${r.status}`);
+      assert.ok(!r.text.includes("UNTRACKED-SECRET"), `${p} leaked`);
+    }
+    assert.equal((await get(ui, "/view?p=./b.js")).status, 200, "an indexed file opens under a non-canonical spelling");
     const link = await get(ui, "/view?p=link.md");
     assert.equal(link.status, 403, "symlink escape rejected");
     assert.ok(!link.text.includes("TOP-SECRET"));
@@ -534,7 +539,7 @@ test("CLI: `litectx ui <path> --port 0` prints the URL and mode, serves, and a b
     });
     assert.match(err, /mode: all repos \(2 found\)/);
     const html = await (await fetch(`${url}/`)).text();
-    assert.match(html, /litectx search/);
+    assert.match(html, /litectx tinymem/);
   } finally {
     p.kill("SIGINT");
     await new Promise((ok) => p.on("exit", ok));
@@ -558,7 +563,7 @@ test("regression: the page and status answer WHILE a cold index pass is running 
     // the cold pass started during createUi; without yield it would hold the event loop until it finished
     const page = await get(ui, "/");
     assert.equal(page.status, 200);
-    assert.match(page.text, /litectx search/);
+    assert.match(page.text, /litectx tinymem/);
     const st = (await get(ui, "/api/sources")).json();
     assert.equal(st.current.indexing, true, "status was served mid-pass and says so — the page shows 'indexing…'");
     const s = await find(ui, "f10");
@@ -585,11 +590,24 @@ test("page state round-trips through the URL hash: special chars, several repos,
   const decodeState = (h) => JSON.parse(JSON.stringify(dec(h))); // vm objects have another realm's prototypes
   const full = {
     q: 'how to "quote" & #hash? 100% ü 日本', sub: "a b,c", ext: "md", folder: "docs/wiki", open: "my repo/src/a b#c.js",
-    repos: ["bare,agent", "x&y=z", "plain"], kinds: { doc: false, code: true }, kwOnly: true, demote: false, view: "roomy",
+    repos: ["bare,agent", "x&y=z", "plain"], kinds: { doc: false, code: true }, demote: false, view: "roomy",
   };
   assert.deepEqual(decodeState(encodeState(full)), { ...full });
-  const def = { q: "", sub: "", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, kwOnly: false, demote: true, view: "table" };
+  const def = { q: "", sub: "", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, demote: true, view: "table" };
   assert.equal(encodeState(def), "", "defaults leave the URL clean");
   assert.deepEqual(decodeState(""), def);
   assert.deepEqual(decodeState(encodeState({ ...def, q: "x" })), { ...def, q: "x" });
+});
+
+test("the page title line gets litectx's own version from the server (package.json, not hardcoded)", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const st = JSON.parse((await get(ui, "/api/sources")).text);
+    assert.equal(st.version, JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+    const app = (await get(ui, "/app.js")).text;
+    assert.ok(app.includes("lightning local retrieval") && !/v\d+\.\d+\.\d+/.test(app), "no literal version in the page code");
+  } finally {
+    await ui.close();
+  }
 });
