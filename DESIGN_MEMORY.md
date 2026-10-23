@@ -7,7 +7,7 @@
 ## Layout & Spacing
 - Compact. Single column; a side view opens to the right (3fr / 2fr), and stacks below 700px.
 - Order from top to bottom:
-  - Top bar: count on the left; re-index and meaning controls on the right.
+  - Top bar: always two lines — source + count/status on the left; the control group (re-index, meaning, …) on its own line, right-aligned.
   - Search line.
   - **One** filter line, groups split by `│`.
   - View switch line.

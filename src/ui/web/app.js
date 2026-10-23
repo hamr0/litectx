@@ -93,8 +93,8 @@
   function renderTop() {
     var t = $("top"); t.innerHTML = "";
     var st = s.st, c = st && st.current;
-    var bar = el("div", "row between");
-    var left = el("span", "row");
+    var bar = el("div", "topbar");
+    var left = el("div", "row");
     if (st && st.sources.length) {
       var sel = el("select", "chip"); sel.setAttribute("aria-label", "source");
       st.sources.forEach(function (x) { var o = el("option", "", x.name); o.value = x.name; if (x.name === st.active) o.selected = true; sel.appendChild(o); });
@@ -113,7 +113,7 @@
     left.appendChild(info);
     if (c && c.embeddings && c.meaningOff && !s.busy) left.appendChild(el("span", "err", "meaning unavailable: install the optional peer `npm i @huggingface/transformers` (searching by keywords only)"));
     if (c && c.error) left.appendChild(el("span", "err", "index error: " + c.error));
-    var right = el("span", "row");
+    var right = el("div", "row end");
     if (c) {
       var busyRe = !!s.busy && s.busy.what !== "meaning", busyMe = !!s.busy && s.busy.what === "meaning";
       var rb = chip("↻ re-index", busyRe, function () { act("reindex", "re-indexing…", function () { return api("POST", "/api/reindex", {}); }); }, "refresh changed files now");
