@@ -150,6 +150,11 @@ export class StalePointerError extends Error {
  * @property {string} root                 repo root to index
  * @property {string[]} [include]          file extensions to index (default: ts/js/py/md)
  * @property {string[]} [pathspecs]        optional git pathspecs to scope the index (e.g. ["app/**\/*.js"])
+ * @property {boolean} [childRepos]        `root` is a folder of git repos (not a repo itself): index the
+ *                                         tracked files of every repo ONE level down, paths prefixed
+ *                                         `<repo>/` (e.g. `rwxmap/README.md`). Untracked files and loose
+ *                                         files at `root` are never read. A pathspec whose first segment is a
+ *                                         repo name scopes to that repo (`rwxmap/src`). Default false.
  * @property {string} [dbPath]             SQLite file path (default: <root>/.litectx/index.db)
  * @property {boolean} [embeddings]        enable the opt-in semantic tier (default false). When on,
  *                                         `index()` embeds each file and `recall()` fuses cosine into
@@ -266,6 +271,7 @@ export class LiteCtx {
     this.root = config.root;
     this.include = config.include ?? DEFAULT_INCLUDE;
     this.pathspecs = config.pathspecs;
+    this.childRepos = config.childRepos ?? false;
     this.dbPath = config.dbPath ?? join(this.root, ".litectx", "index.db");
     if (this.dbPath !== ":memory:") mkdirSync(dirname(this.dbPath), { recursive: true });
     // scope keys (§4.4 Isolate): the actor + run this instance acts as. Default null = unscoped
@@ -389,7 +395,7 @@ export class LiteCtx {
    * await ctx.index({ paths: ['src/a.js', 'src/b.js'] })
    */
   async index(opts = {}) {
-    const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs);
+    const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs, this.childRepos);
     // force = re-read every FILE from disk. Written memory is not re-derivable from any file and
     // must survive even a force pass (§3.2) — so this clears file-sourced data only, never reset().
     //
@@ -462,7 +468,7 @@ export class LiteCtx {
     // git activity metadata for the changed files (slice 4) — one `git log` pass, scoped like the
     // index. Grounding shown on hits, never scored (§4.1). Skipped when nothing changed.
     if (upserts.length) {
-      const sig = collectGitSig(this.root, opts.paths ?? this.pathspecs);
+      const sig = collectGitSig(this.root, opts.paths ?? this.pathspecs, this.childRepos);
       for (const u of upserts) u.git = sig.get(u.path);
     }
 

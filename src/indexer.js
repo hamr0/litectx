@@ -66,19 +66,91 @@ export function classify(relPath) {
 }
 
 /**
+ * The git repos ONE level under `root`: child directories holding a `.git` (a dir, or a file for a
+ * worktree/submodule), sorted by name. Hidden and noise dirs are skipped. One level only — deeper
+ * repos are not searched (owner decision 4A, docs/wiki/local-ui.md).
+ * @param {string} root
+ * @returns {string[]} child directory names
+ */
+export function childRepos(root) {
+  /** @type {string[]} */
+  const out = [];
+  for (const name of readdirSync(root).sort()) {
+    if (name.startsWith(".") || SKIP_DIRS.has(name)) continue;
+    try {
+      if (statSync(join(root, name)).isDirectory() && statSync(join(root, name, ".git"))) out.push(name);
+    } catch {
+      // no .git (or unreadable) → not a repo
+    }
+  }
+  return out;
+}
+
+/**
+ * Route pathspecs to one child repo. A spec whose first segment is a child repo's name goes to that
+ * repo only, prefix stripped (`rwxmap/src` → `src` in rwxmap; `rwxmap` alone → all of rwxmap). Any
+ * other spec (`*.md`, `docs/x.md`) goes to every repo. Returns `undefined` = unscoped (whole repo),
+ * `null` = no spec targets this repo (skip it), else the repo-relative specs.
+ * @param {string} repo
+ * @param {string[] | undefined} pathspecs
+ * @param {Set<string>} repos  every child repo name
+ * @returns {string[] | undefined | null}
+ */
+export function repoPathspecs(repo, pathspecs, repos) {
+  if (!pathspecs?.length) return undefined;
+  /** @type {string[]} */
+  const mine = [];
+  for (const p of pathspecs) {
+    const head = p.split("/")[0];
+    if (!repos.has(head)) mine.push(p);
+    else if (head === repo) {
+      const rest = p.slice(repo.length + 1);
+      if (!rest) return undefined;
+      mine.push(rest);
+    }
+  }
+  return mine.length ? mine : null;
+}
+
+/**
  * List candidate files under root, filtered to the included extensions.
  * @param {string} root
  * @param {string[]} include  extensions like [".ts", ".js", ".py", ".md"]
  * @param {string[]} [pathspecs]  optional git pathspecs to scope the index (e.g. ["app/**\/*.js"])
- * @returns {string[]} repo-relative paths
+ * @param {boolean} [children]  index the git repos one level under root instead of root itself:
+ *                              each repo's tracked files, paths prefixed `<repo>/` (see {@link childRepos})
+ * @returns {string[]} root-relative paths
  */
-export function collectFiles(root, include, pathspecs) {
+export function collectFiles(root, include, pathspecs, children = false) {
   const inc = new Set(include.map((e) => (e.startsWith(".") ? e : `.${e}`)));
+  if (children) {
+    /** @type {string[]} */
+    const all = [];
+    const repos = childRepos(root);
+    const names = new Set(repos);
+    for (const repo of repos) {
+      const specs = repoPathspecs(repo, pathspecs, names);
+      if (specs === null) continue;
+      try {
+        const out = execFileSync("git", ["-C", join(root, repo), "ls-files", "-z", "--", ...(specs ?? [])], {
+          encoding: "utf8",
+          maxBuffer: 1 << 28,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        for (const f of out.split("\0")) if (f && inc.has(extname(f).toLowerCase())) all.push(`${repo}/${f}`);
+      } catch {
+        // a broken repo (corrupt index, no git) is skipped, never walked — untracked data stays out
+      }
+    }
+    return all;
+  }
   let files;
   try {
     // `--` so a pathspec can never be misread as a git option (parity with gitsig.js / the rg sweeps).
-    files = execFileSync("git", ["-C", root, "ls-files", "--", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
-      .split("\n")
+    // `-z`: raw NUL-separated paths. Without it git C-quotes any non-ASCII name ("Cr\303\250me.md"),
+    // and that quoted string matches no file on disk — the file was silently never indexed.
+    files = execFileSync("git", ["-C", root, "ls-files", "-z", "--", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
+      .split("\0")
       .filter(Boolean);
   } catch {
     files = walk(root, root);

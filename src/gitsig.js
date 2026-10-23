@@ -5,6 +5,8 @@
 // per-block blame (file granularity only) — that, and base-level activation, are the access-log tier.
 
 import { execFileSync } from "node:child_process";
+import { join } from "node:path";
+import { childRepos, repoPathspecs } from "./indexer.js";
 
 /**
  * @typedef {Object} GitSig
@@ -22,16 +24,30 @@ const FMT = "--pretty=format:\x01%ct";
  * Returns an empty map when the root is not a git repo, so metadata is always optional.
  * @param {string} root
  * @param {string[]} [pathspecs]
+ * @param {boolean} [children]  root holds git repos one level down: collect each, keys prefixed `<repo>/`
  * @returns {Map<string, GitSig>}
  */
-export function collectGitSig(root, pathspecs) {
+export function collectGitSig(root, pathspecs, children = false) {
+  if (children) {
+    /** @type {Map<string, GitSig>} */
+    const all = new Map();
+    const repos = childRepos(root);
+    const names = new Set(repos);
+    for (const repo of repos) {
+      const specs = repoPathspecs(repo, pathspecs, names);
+      if (specs === null) continue;
+      for (const [f, g] of collectGitSig(join(root, repo), specs)) all.set(`${repo}/${f}`, g);
+    }
+    return all;
+  }
   /** @type {Map<string, GitSig>} */
   const map = new Map();
   let out;
   try {
-    out = execFileSync("git", ["-C", root, "log", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
+    out = execFileSync("git", ["-C", root, "-c", "core.quotepath=off", "log", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
       encoding: "utf8",
       maxBuffer: 1 << 28,
+      stdio: ["ignore", "pipe", "ignore"],
     });
   } catch {
     return map; // not a git repo / git unavailable → no metadata (graceful)
