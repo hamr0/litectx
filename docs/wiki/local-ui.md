@@ -7,7 +7,7 @@ sources: [owner interview 2026-10-22/23, ~/.cache/litectx-ui-probe/]
 
 `litectx ui` is a localhost search page for a human. You type a word or a question and get a
 ranked list of matches, Google style: results, not answers. It searches one repo, or every repo
-under one folder. Status: **BUILT, UNRELEASED** on branch `feat/local-ui` (owner interview 2026-10-22/23); the UI as built is being scored on the frozen set before release. The visual design
+under one folder. Status: **BUILT, UNRELEASED** on branch `feat/local-ui` (owner interview 2026-10-22/23); the UI as built was scored on the frozen set (see Evidence). The visual design
 is variant F (`DESIGN_PLAN.md` + `DESIGN_MEMORY.md` at the repo root; working copy in
 `~/.cache/litectx-ui-probe/design-F/`).
 
@@ -109,9 +109,9 @@ environment variable). These are the UI's own settings, separate from
 1. **Done.** Multi-repo collection in `src/`: one level deep, per-repo `git ls-files`, repo-prefixed paths.
    It replaces the probe's symlink corpus. Today, a non-git root falls back to a walk that ignores
    `pathspecs` and each repo's `.gitignore` (`src/indexer.js` `collectFiles`).
-2. Server: `node:http`, bound to 127.0.0.1. `/view` serves only files in the active source's index, and only when their real path is inside the source root.
+2. **Done.** Server: `node:http`, bound to 127.0.0.1. `/view` serves only files in the active source's index, and only when their real path is inside the source root.
    Routes: page, search JSON, view, re-index, click log, sources CRUD.
-3. Page F plus three knobs, each on/off and each scored:
+3. **Done.** Page F plus three knobs, each on/off and each scored:
    - one entry per file ("+N more sections")
    - old/tests last
    - a click log (query, source, opened result)
@@ -154,7 +154,38 @@ The right file in the results, on 25 scored questions (strict):
 - **Still failing for every method**: vague questions with no shared word (Q7, Q11, Q14). This is
   the target for the bareagent Rewrite step, not for embeddings.
 - n = 25: a 4-question gap is a hint, not proof.
-- **Next**: the UI as built is being scored on the frozen set before release; a scoring run follows.
+- **Next**: the built UI was scored; see the next section.
+
+## Evidence: the UI as built (2026-10-23)
+
+Scored on the same 25 questions, same answer key, same blind judging as above. "The UI" is the
+default page search at commit 5c3917f: repo names in the query become a repo filter, docs and code
+together, one entry per file, old/tests last. Index: scratch `childRepos` index of
+`~/PycharmProjects`, 7,211 files, embeddings off. Every top-10 slot of every arm is labelled (0
+unlabelled). The numbers were recomputed from `results-*.json`, the gold files and the judge files in
+`~/.cache/litectx-ui-probe/`.
+
+Right file found at #1 / top 3 / top 5 / top 10 (of 25):
+
+| Method | Strict (key + judged yes) | Judged yes only (no key) | Lenient (+ partial) |
+|---|---|---|---|
+| grep | 6 / 13 / 16 / 20 | 6 / 12 / 15 / 16 | 12 / 20 / 22 / 24 |
+| litectx Plain | 7 / 15 / 16 / 19 | 2 / 7 / 10 / 17 | 10 / 19 / 20 / 22 |
+| litectx + repo filter (probe, deduped) | 11 / 16 / 17 / 20 | 3 / 10 / 13 / 18 | 15 / 20 / 21 / 23 |
+| UI before the fix | 9 / 16 / 18 / 21 | 2 / 10 / 13 / 17 | 13 / 20 / 21 / 23 |
+| **UI as built (fixed)** | **11 / 17 / 18 / 21** | 3 / 11 / 12 / 17 | 15 / 21 / 22 / 23 |
+| UI fixed, old/tests last off | 11 / 16 / 17 / 20 | 3 / 10 / 13 / 18 | 15 / 21 / 21 / 23 |
+
+- **With the key, the built UI beats grep in every column**: 11 vs 6 at #1, 18 vs 16 in the top 5.
+- **Old/tests last adds a little**: top 3 is 17 vs 16 and top 5 is 18 vs 17 (UI fixed vs the same
+  run with it off). #1 and top 10 are not helped.
+- **On judged-yes-only labels grep still wins #1** (6 vs 3). The UI is a good shortlist, not a
+  reliable top hit.
+- **The Q20 rank drop was a bug.** The repo filter ran after the doc/code interleave, which pushed
+  Q20's right file to rank 9. Fixed in 5c3917f: Q20 now has an answer at #1 (`rwxmap/CHANGELOG.md`,
+  judged yes), and the key's `rwxmap/README.md` is at #5. That fix is the 9 to 11 at #1.
+- **Still failing for every method**: the vague questions Q7, Q11 and Q14. Q3 is found only by grep.
+- n = 25: gaps of 1 or 2 are noise.
 
 ## Agent carry-overs
 
