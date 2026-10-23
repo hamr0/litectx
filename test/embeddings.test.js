@@ -295,3 +295,46 @@ test("migration moves written vectors out of the shared file_embeddings, leaving
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Cross-process race: process A embeds a file's OLD body (slow); process B re-indexes the changed file and
+// stores the NEW body's vector; A's late write must NOT clobber it (the hash still matches B's row, so
+// nothing would ever heal it). The write is conditional on file_index.content_hash == the embedded hash.
+test("a stale in-flight embed does not overwrite the vector a concurrent re-index stored for the new body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-emb-race-"));
+  const dbPath = join(root, "idx.db");
+  writeFileSync(join(root, "x.js"), "export function x() { return widget; } // alpha\n");
+  try {
+    const seed = new LiteCtx({ root, dbPath }); // tier OFF → x.js indexed vectorless
+    await seed.index();
+    seed.close();
+
+    /** @type {() => void} */ let release = () => {};
+    const gate = new Promise((r) => (release = () => r(undefined)));
+    /** @type {() => void} */ let entered = () => {};
+    const enteredP = new Promise((r) => (entered = () => r(undefined)));
+    const parked = markerStub();
+    const inner = parked.embed.bind(parked);
+    parked.embed = async (/** @type {string} */ t) => { // A's embedder: parks on the gate holding the OLD body's vector
+      const v = await inner(t);
+      entered();
+      await gate;
+      return v;
+    };
+    const a = new LiteCtx({ root, dbPath, embeddings: true, embedder: parked });
+    const pa = a.index(); // backfill: reads the OLD body, parks inside embed()
+    await enteredP;
+
+    writeFileSync(join(root, "x.js"), "export function x() { return widget; } // beta beta\n");
+    const b = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
+    await b.index(); // re-chunks + stores the NEW vector [0,1]
+    assert.deepEqual(Array.from(b.store.getEmbeddings(["x.js"], "code").get("x.js") ?? []), [0, 1], "B stored the new vector");
+
+    release();
+    await pa;
+    assert.deepEqual(Array.from(b.store.getEmbeddings(["x.js"], "code").get("x.js") ?? []), [0, 1], "A's stale (old-body) vector was dropped, not written over B's");
+    a.close();
+    b.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

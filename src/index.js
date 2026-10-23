@@ -536,38 +536,40 @@ export class LiteCtx {
         // since this pass's diffFiles snapshot (a concurrent external write), its stored chunk bodies are
         // the OLD content — embedding the new bytes would pair a vector with a mismatched body. Skip it;
         // the next index() catches the hash change as an upsert and re-chunks + re-embeds it consistently.
-        if (this.store.fileHash(p) !== sha256(body)) {
+        const hash = sha256(body);
+        if (this.store.fileHash(p) !== hash) {
           todo--;
           continue;
         }
         const v = await this._embedSafe(body);
         if (v === null) break; // tier went unavailable — stop attempting
-        this.store.putEmbeddings([[p, v]]);
+        this.store.putEmbeddings([[p, v, hash]]);
         embedded++;
       }
       // same backfill for indexed-md SECTION rows (embedded per section, no file vector): embed the stored
       // section body (byte-identical to the normal-path input — chunk text) once the file's disk hash still
       // matches the indexed hash (TOCTOU guard, as above).
-      /** @type {Map<string, boolean>} */
+      /** @type {Map<string, string | null>} */
       const fresh = new Map();
       for (const sct of sections) {
         if (aborted || opts.signal?.aborted) { aborted = true; break; }
-        let ok = fresh.get(sct.path);
-        if (ok === undefined) {
+        let hash = fresh.get(sct.path);
+        if (hash === undefined) {
           try {
-            ok = this.store.fileHash(sct.path) === sha256(readFileSync(join(this.root, sct.path), "utf8"));
+            const h = sha256(readFileSync(join(this.root, sct.path), "utf8"));
+            hash = this.store.fileHash(sct.path) === h ? h : null;
           } catch {
-            ok = false;
+            hash = null;
           }
-          fresh.set(sct.path, ok);
+          fresh.set(sct.path, hash);
         }
-        if (!ok) {
+        if (!hash) {
           todo--;
           continue;
         }
         const v = await this._embedSafe(sct.body);
         if (v === null) break;
-        this.store.putSectionEmbeddings([[sct.rid, v]]);
+        this.store.putSectionEmbeddings([[sct.rid, v, hash]]);
         embedded++;
       }
       embedPending = Math.max(0, todo - embedded);

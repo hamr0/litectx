@@ -17,6 +17,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **Embeddings: a slow embed no longer overwrites a newer vector.** With embeds running after the keyword-index commit, process A could embed a file's old body (~2 s) while process B re-indexed the changed file and stored the new body's vector; A's late write then replaced B's, and since the file hash matched, nothing healed it. The vector write (`putEmbeddings` / `putSectionEmbeddings`) now lands only if the file's indexed hash is still the one embedded, in one SQL statement; a dropped write leaves the file vectorless and the next pass re-embeds it.
 - **`litectx ui`: the side view appears right across from the result you click.** It sat at the top of a long list, off-screen after scrolling down; it now stays in the viewport (sticky) while the list scrolls, and the page does not move on click.
 - **`litectx ui`: the roomy view shows the same results as the table view** (it was capped at the top 5), just bigger.
 - **`litectx ui`: a focused top-bar chip (e.g. "cancel re-index") keeps focus while a pass runs.** The status poll rebuilt the whole top bar every 1.5 s, dropping keyboard focus and replacing the button under a click. The bar is now left alone when nothing visible changed except the elapsed seconds.

@@ -1900,15 +1900,21 @@ export class Store {
   }
 
   /**
-   * Write section vectors without re-chunking (the embeddings backfill) — one transaction.
-   * @param {[number, Float32Array][]} pairs  (doc_rowid, vec) tuples
+   * Write section vectors without re-chunking (the embeddings backfill) — one transaction. Each write is
+   * CONDITIONAL, in the one UPDATE statement: it lands only if the owning file's indexed `content_hash` is
+   * still the hash the vector was computed from. A concurrent re-index that changed the file wins; this
+   * (stale) vector is dropped and the section stays vectorless, so the next pass re-embeds it.
+   * @param {[number, Float32Array, string][]} pairs  (doc_rowid, vec, hash of the file body it was embedded from)
    * @returns {void}
    */
   putSectionEmbeddings(pairs) {
     if (!pairs.length) return;
-    const up = this.db.prepare("UPDATE doc_sections SET dim = @dim, vec = @vec WHERE doc_rowid = @rid");
+    const up = this.db.prepare(
+      "UPDATE doc_sections SET dim = @dim, vec = @vec WHERE doc_rowid = @rid " +
+        "AND EXISTS (SELECT 1 FROM file_index fi WHERE fi.path = doc_sections.path AND fi.content_hash = @hash)"
+    );
     const tx = this.db.transaction(() => {
-      for (const [rid, vec] of pairs) up.run({ rid, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
+      for (const [rid, vec, hash] of pairs) up.run({ rid, hash, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
     });
     tx();
   }
@@ -1922,19 +1928,23 @@ export class Store {
    * Write (or replace) file embedding vectors, WITHOUT re-chunking — the bytes and boundaries are already
    * current, only the vector was missing. Used by the embeddings backfill; the normal path writes vectors
    * through {@link applyChanges}. All rows land in ONE transaction (the backfill would otherwise issue N
-   * autocommit writes). File vectors only → `file_embeddings`.
-   * @param {[string, Float32Array][]} pairs  (path, vec) tuples
+   * autocommit writes). File vectors only → `file_embeddings`. Each write is CONDITIONAL, in the one
+   * statement: it lands only if `file_index.content_hash` is still the hash the vector was computed from
+   * (a concurrent re-index of the changed file wins; the stale vector is dropped and the next pass, via
+   * {@link vectorlessFiles}, re-embeds it).
+   * @param {[string, Float32Array, string][]} pairs  (path, vec, hash of the body it was embedded from) tuples
    * @returns {void}
    */
   putEmbeddings(pairs) {
     if (!pairs.length) return;
     const up = this.db.prepare(
-      "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
+      "INSERT INTO file_embeddings(path, dim, vec) " +
+        "SELECT @path, @dim, @vec WHERE EXISTS (SELECT 1 FROM file_index WHERE path = @path AND content_hash = @hash) " +
         "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
     );
     const tx = this.db.transaction(() => {
-      for (const [path, vec] of pairs)
-        up.run({ path, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
+      for (const [path, vec, hash] of pairs)
+        up.run({ path, hash, dim: vec.length, vec: Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength) });
     });
     tx();
   }
