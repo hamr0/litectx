@@ -338,3 +338,51 @@ test("a stale in-flight embed does not overwrite the vector a concurrent re-inde
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// Same race on the md SECTION axis: indexed md is embedded per heading section (doc_sections.vec), and
+// putSectionEmbeddings carries its own copy of the hash guard (an EXISTS on file_index.content_hash).
+test("a stale in-flight embed does not overwrite the section vector a concurrent re-index stored for the new body", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-emb-secrace-"));
+  const dbPath = join(root, "idx.db");
+  writeFileSync(join(root, "g.md"), "# Setup\nwidget alpha\n");
+  const sectionVecs = (/** @type {LiteCtx} */ c) =>
+    /** @type {{ body: string, vec: Buffer | null }[]} */ (
+      c.store.db.prepare("SELECT n.body AS body, sec.vec AS vec FROM doc_sections sec JOIN nodes n ON n.id = sec.node_id WHERE sec.path = 'g.md'").all()
+    ).map((r) => ({ body: r.body, vec: r.vec ? Array.from(new Float32Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength / 4)) : null }));
+  try {
+    const seed = new LiteCtx({ root, dbPath }); // tier OFF → g.md's sections indexed vectorless
+    await seed.index();
+    seed.close();
+
+    /** @type {() => void} */ let release = () => {};
+    const gate = new Promise((r) => (release = () => r(undefined)));
+    /** @type {() => void} */ let entered = () => {};
+    const enteredP = new Promise((r) => (entered = () => r(undefined)));
+    const parked = markerStub();
+    const inner = parked.embed.bind(parked);
+    parked.embed = async (/** @type {string} */ t) => { // A: parks holding the OLD section text's vector [1,0]
+      const v = await inner(t);
+      entered();
+      await gate;
+      return v;
+    };
+    const a = new LiteCtx({ root, dbPath, embeddings: true, embedder: parked });
+    const pa = a.index(); // backfill: embeds the OLD section body, parks inside embed()
+    await enteredP;
+
+    writeFileSync(join(root, "g.md"), "# Setup\nwidget beta beta\n");
+    const b = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
+    await b.index(); // re-chunks + stores the NEW section vector [0,1]
+    const before = sectionVecs(b).find((s) => s.body.includes("beta beta"));
+    assert.deepEqual(before?.vec, [0, 1], "B stored the new section vector");
+
+    release();
+    await pa;
+    const after = sectionVecs(b).find((s) => s.body.includes("beta beta"));
+    assert.deepEqual(after?.vec, [0, 1], "A's stale (old-text) section vector was dropped, not written over B's");
+    a.close();
+    b.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
