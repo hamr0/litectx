@@ -7,7 +7,7 @@ sources: [owner interview 2026-10-22/23, ~/.cache/litectx-ui-probe/]
 
 `litectx ui` is a localhost search page for a human. You type a word or a question and get a
 ranked list of matches, Google style: results, not answers. It searches one repo, or every repo
-under one folder. Status: **DECIDED, NOT BUILT** (owner interview 2026-10-22/23). The visual design
+under one folder. Status: **BUILT, UNRELEASED** on branch `feat/local-ui` (owner interview 2026-10-22/23); the UI as built is being scored on the frozen set before release. The visual design
 is variant F (`DESIGN_PLAN.md` + `DESIGN_MEMORY.md` at the repo root; working copy in
 `~/.cache/litectx-ui-probe/design-F/`).
 
@@ -31,7 +31,7 @@ hosted tier.
 | 4 | Repo discovery depth | One level under the given folder (4A). |
 | 5 | Combined index location | `<folder>/.litectx/index.db`, the same convention as a single repo (5A). |
 | 6 | When it re-indexes | Once on start, plus a re-index button. Incremental: only changed files are re-read (6A). |
-| 7 | Embeddings | Off by default; a `--embeddings` flag and a "meaning" toggle (7A). Code/doc recall is BM25-gated, so embeddings only re-order; first build ≈15 min for ~7k files. |
+| 7 | Embeddings | Off by default; a `--embeddings` flag and a "meaning" toggle (7A). Code/doc recall is BM25-gated, so embeddings only re-order; first build ≈15 min for ~7k files (an estimate scaled from 67 s / 497 files, not measured). |
 | — | File types | Git-tracked files only for now. A plain-folder "files mode" (PDF/Word/notes, no git) is parked. |
 | — | LLM | Not in litectx. A Rewrite step (an LLM adds search words) belongs in bareagent's version of the UI (option B). litectx calling bareagent would be a dependency loop and would break the no-LLM-inside rule. |
 | — | Search scope | One source at a time, picked from a dropdown. Merging scores across separate index files is unproven, so "search everything" means adding the parent folder as an all-repos source. |
@@ -47,8 +47,18 @@ startup (e.g. `mode: all repos (45 found)`):
 - **All-repos mode**: the path has no `.git` but contains git repos one level down. It builds one
   combined index of every repo's `git ls-files`, with paths prefixed by the repo name
   (`rwxmap/README.md`). Untracked data (e.g. 14k files in `bareloop-patients`) is never read.
+  Not treated as repos: hidden-named folders (`.dotfiles`), folders named like a noise dir
+  (`node_modules`, `dist`, `build`, `coverage`, `.venv`, `__pycache__`, `.litectx`) and symlinked
+  directories (a symlink to a repo would index it twice); rename the folder to include it. A repo
+  whose `git ls-files` fails is reported as skipped (stderr warning) and its indexed files are kept.
+  Pathspecs are routed on their first segment: a leading `./` is ignored, `:`-magic specs go to every
+  repo verbatim, and a spec whose first segment equals a repo name goes to that repo only.
+  In this mode `impact()` (agents, not the UI) runs ripgrep over the whole root, so it also sweeps
+  untracked data (over-count, the safe direction), and tsconfig path aliases are read only from
+  `<root>/tsconfig.json`, so per-repo aliases are not seen.
 
-Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings, separate from
+Settings live in one file, `~/.litectx/ui.json` (override the location with the `LITECTX_UI_CONFIG`
+environment variable). These are the UI's own settings, separate from
 `LiteCtxConfig`.
 
 ```json
@@ -94,7 +104,7 @@ Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings
 
 ## Build order
 
-1. Multi-repo collection in `src/`: one level deep, per-repo `git ls-files`, repo-prefixed paths.
+1. **Done.** Multi-repo collection in `src/`: one level deep, per-repo `git ls-files`, repo-prefixed paths.
    It replaces the probe's symlink corpus. Today, a non-git root falls back to a walk that ignores
    `pathspecs` and each repo's `.gitignore` (`src/indexer.js` `collectFiles`).
 2. Server: `node:http`, bound to 127.0.0.1. `/view` serves only files in the active source's index, and only when their real path is inside the source root.
@@ -108,10 +118,14 @@ Settings live in one file, `~/.litectx/ui.json`. These are the UI's own settings
 ## Evidence so far (probe, 2026-10-22)
 
 The probe was run before building, on ~7,108 git-tracked files across ~45 repos (embeddings off;
-index 37 s, 367 MB; search ~7 ms).
+index 37 s, 367 MB; search ~7 ms). Those figures are the probe's, on a symlink corpus. The shipped
+`childRepos` mode found 7,193 files and took 63 s cold without yield (about 2 min with the UI's
+yielding index).
 
 - **Question set**: 30 questions, frozen (`~/.cache/litectx-ui-probe/questions.md`, sha256
   `58ead080…`). Q1–16 were drafted by Claude, Q17–30 written by the owner.
+- **Excluded from scoring**: Q13 and Q16 (no answer exists), Q17, Q18 and Q24 (loose wording). That
+  leaves 25 scored questions.
 - **Answer key**: labelled by reading, without grep or litectx. All 518 + 57 extra files that any
   method returned were then judged blind.
 
@@ -123,13 +137,22 @@ The right file in the results, on 25 scored questions (strict):
 | litectx Plain | 7 | 15 | 16 | 19 |
 | litectx + repo filter | 11 | 16 | 16 | 20 |
 
-- **Plain litectx ≈ grep.** The first scoring said "litectx finds twice as many". That was an
-  artifact of an incomplete answer key and was reversed after the blind pool check.
-- **The repo filter moves the right answer to #1** (7 → 11). It does not find new files. Grep was
-  not given the same filter, so part of the gain is "search one repo", not litectx.
+- **Plain litectx ≈ grep, but not robustly.** The first scoring said "litectx finds twice as many".
+  That was an artifact of an incomplete answer key and was reversed after the blind pool check. The
+  result depends on how labels are counted. Counting only blind-judged files (no gold) at #1/3/5/10:
+  grep 6/12/15/16, plain 2/7/10/17, filter 3/10/13/18. Counting partial matches too: grep
+  12/20/22/24, plain 10/19/20/22, filter 15/20/21/23. So "plain ≈ grep" does not hold under every
+  counting.
+- **The repo filter moves the right answer to #1** (7 → 11). It mostly re-orders; it recovered one
+  file (Q20, a typo query). Grep was not given the same filter, so part of the gain is "search one
+  repo", not litectx. The filter arm was scored on chunk-level lists that contain duplicate files
+  while plain was not (Q2, Q5), which understates the filter.
+- **Q3 and Q25**: grep found them (rank 2) and litectx did not, so these are not only Rewrite
+  targets.
 - **Still failing for every method**: vague questions with no shared word (Q7, Q11, Q14). This is
   the target for the bareagent Rewrite step, not for embeddings.
 - n = 25: a 4-question gap is a hint, not proof.
+- **Next**: the UI as built is being scored on the frozen set before release; a scoring run follows.
 
 ## Agent carry-overs
 

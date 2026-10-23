@@ -15,7 +15,8 @@ All notable changes to this project are documented here, following
 ### Fixed
 
 - **`litectx ui`: Back from "open full file" returned to an empty page.** The search (query, repos, docs/code, type, folder, old/tests last, view, open side view) now lives in the URL hash, so Back, reload and a bookmark restore it, scroll position included; "open full file" opens in the same tab. Repo-picker suggestions highlight the typed text.
-- **Tracked files with non-ASCII names were silently never indexed.** `git ls-files` C-quotes such names (`"Cr\303\250me.md"`), which matches no file on disk. The file list now uses `ls-files -z`, and the git-activity pass uses `core.quotepath=off`.
+- **Tracked files with non-ASCII names were silently never indexed.** `git ls-files` C-quotes such names (`"Cr\303\250me.md"`), which matches no file on disk. The file list now uses `ls-files -z`, and the git-activity pass uses `git log -z`, so names containing `"`, `\`, tab or newline keep their git metadata too.
+- **`childRepos`: a repo whose `git ls-files` fails no longer makes its files read as deleted.** It is reported in the new `IndexResult.skipped` (`{repo, error}`), its indexed entries are kept, and the CLI/UI print a warning. Symlinked directories are no longer treated as repos (a symlink to a repo was indexed twice). A leading `./` on a pathspec is normalized before routing. Repos named like noise dirs or hidden names stay skipped (documented).
 
 ## [0.36.0] — 2026-10-11
 

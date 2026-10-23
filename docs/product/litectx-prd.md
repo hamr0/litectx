@@ -137,8 +137,8 @@ content-judgment (those are bareguard/harness concerns). It is a leaf-ish local 
   for off-allowlist types is opt-in only.
 - A server/daemon/hosted service — local library only. **Amended 2026-10-23 (owner decision):**
   one opt-in exception, `litectx ui`, a localhost-only (127.0.0.1) search page started by hand from
-  the CLI, like the MCP stdio bin. Still no daemon, no hosted tier, no network listener, and no
-  LLM inside. See [Local Search UI](../wiki/local-ui.md).
+  the CLI, like the MCP stdio bin. Still no daemon, no hosted tier, no listener other than loopback
+  (127.0.0.1) and that only while `litectx ui` runs, and no LLM inside. See [Local Search UI](../wiki/local-ui.md).
 - Linting — mature per-language linters exist; litectx does not wrap them.
 - Being "bare" — litectx is a real library, not a ≤150-LOC primitive.
 
@@ -231,13 +231,13 @@ method; the `ScopedView` mirror is noted in prose). Deliberately **version-less*
 it carries the version). A `check:primitives` staleness gate (CI + `npm test`) and a completeness test
 (a new public verb must be manifested or explicitly excluded, with a reason) keep it from drifting.
 
-## Local search UI (DECIDED 2026-10-23, NOT BUILT)
+## Local search UI (DECIDED 2026-10-23, BUILT, UNRELEASED)
 
 `litectx ui` is a localhost search page for a human over one repo or every repo under one folder.
 It is managed as named sources in `~/.litectx/ui.json`, with the mode detected per path (one repo:
 reuse its index; folder of repos: one combined index at `<folder>/.litectx/index.db`). It covers
 git-tracked files only, has embeddings off by default, and has no LLM inside (a Rewrite step
-belongs to bareagent). Probe on ~7k files / 30 frozen questions:
+belongs to bareagent). The UI is built on branch `feat/local-ui`, unreleased. Probe on ~7k files / 30 frozen questions:
 
 - plain litectx ≈ grep
 - a repo filter lifts #1 hits from 7 to 11 of 25

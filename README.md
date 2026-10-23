@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/license-Apache%202.0-2a4f8c" alt="license: Apache 2.0">
 </p>
 
-**litectx** — a local search + memory layer for coding agents. One SQLite file, no server, no LLM inside.
+**litectx** — a local search + memory layer for coding agents. One SQLite file, no always-on server, no LLM inside (the opt-in `litectx ui` search page listens on 127.0.0.1 only while you run it).
 
 It answers three questions with addresses, not text dumps — the agent reads only what it needs:
 
