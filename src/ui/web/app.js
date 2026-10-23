@@ -154,6 +154,12 @@
     k.appendChild(sep());
     k.appendChild(chip("old/tests last", s.demote, go(function () { s.demote = !s.demote; }), "archive, poc, tests and logs go to the bottom"));
   }
+  // escape the name and the query separately, then wrap the first case-insensitive match (real-case letters kept)
+  function hilite(name, q) {
+    var at = q ? name.toLowerCase().indexOf(q) : -1;
+    if (at < 0) return esc(name);
+    return esc(name.slice(0, at)) + '<span class="kw">' + esc(name.slice(at, at + q.length)) + "</span>" + esc(name.slice(at + q.length));
+  }
   function repoInput() {
     var names = (s.st && s.st.current && s.st.current.repoNames) || [];
     var w = el("span", "pick"), i = el("input", "chip");
@@ -163,7 +169,7 @@
     i.oninput = function () {
       var q = i.value.toLowerCase();
       var m = q ? names.filter(function (r) { return r.toLowerCase().indexOf(q) >= 0 && s.repos.indexOf(r) < 0; }).slice(0, 6) : [];
-      ul.innerHTML = m.map(function (r, n) { return '<div role="option" data-r="' + esc(r) + '"' + (n === 0 ? ' class="first"' : "") + ">" + esc(r) + "</div>"; }).join("") ||
+      ul.innerHTML = m.map(function (r, n) { return '<div role="option" data-r="' + esc(r) + '"' + (n === 0 ? ' class="first"' : "") + ">" + hilite(r, q) + "</div>"; }).join("") ||
         (q ? '<div class="dim">no repo matches</div>' : "");
       ul.hidden = !q;
       Array.prototype.forEach.call(ul.querySelectorAll("[data-r]"), function (o) { o.onmousedown = function () { pick(o.dataset.r); }; });
@@ -188,7 +194,7 @@
   function loc(h) { return esc(h.file) + '<span class="dim">:' + h.start + "</span>" + (h.more ? ' <span class="dim">+' + h.more + "</span>" : ""); }
 
   function renderResults() {
-    hideTip();
+    hideTip(); sync(false);
     var vr = $("viewrow"); vr.innerHTML = "";
     var on = s.view === "roomy";
     var b = el("button", "sw"); b.type = "button"; b.setAttribute("role", "switch"); b.setAttribute("aria-checked", on ? "true" : "false"); b.setAttribute("aria-label", "view: " + s.view);
@@ -242,8 +248,8 @@
       '<div class="dim"><span class="k-' + esc(h.kind) + '">' + esc(h.kind) + "</span> · " + h.score.toFixed(2) + " · " + (h.keyword ? '<span class="kw">kw</span>' : '<span class="mo">~meaning</span>') + "</div>" +
       '<pre class="code">' + lines + "</pre>" +
       (h.more ? '<button class="lnk" data-more>+' + h.more + " more sections in this file</button><br>" : "") +
-      (h.more && s.openOthers ? '<div class="others">' + h.others.map(function (o) { return '<a href="' + esc(viewUrl(h, o.start, o.end)) + '" target="_blank" rel="noopener">' + esc(o.symbol || "lines") + ' <span class="dim">' + o.start + "–" + o.end + "</span></a>"; }).join("") + "</div>" : "") +
-      '<a href="' + esc(viewUrl(h, h.start, h.end)) + '" target="_blank" rel="noopener">open full file</a> · <a href="' + esc(pycharmUrl(h)) + '">open in pycharm</a>';
+      (h.more && s.openOthers ? '<div class="others">' + h.others.map(function (o) { return '<a href="' + esc(viewUrl(h, o.start, o.end)) + '">' + esc(o.symbol || "lines") + ' <span class="dim">' + o.start + "–" + o.end + "</span></a>"; }).join("") + "</div>" : "") +
+      '<a href="' + esc(viewUrl(h, h.start, h.end)) + '">open full file</a> · <a href="' + esc(pycharmUrl(h)) + '">open in pycharm</a>';
   }
   function showTip(h, e) {
     tip.innerHTML = '<div class="dim">' + esc(h.repo) + "/" + esc(h.folder) + "/" + esc(h.file) + "</div><div>" + (h.symbol ? '<span class="sym">§ ' + esc(h.symbol) + "</span> " : "") +
@@ -255,6 +261,29 @@
   }
   function hideTip() { tip.style.display = "none"; }
 
+  // ---- URL state: the hash holds the search, so Back / reload / bookmark restore it ---------------------
+  var ST = window.litectxState, scrollTimer = null;
+  function sync(push) {
+    var h = ST.encodeState(s);
+    if (h === location.hash || (!h && !location.hash)) return;
+    history[push ? "pushState" : "replaceState"](push ? null : history.state, "", location.pathname + location.search + h);
+  }
+  function applyHash() {
+    var d = ST.decodeState(location.hash);
+    s.q = d.q; s.sub = d.sub; s.ext = d.ext; s.folder = d.folder; s.open = d.open; s.repos = d.repos;
+    s.kinds = d.kinds; s.kwOnly = d.kwOnly; s.demote = d.demote; s.view = d.view;
+    $("q").value = d.q;
+  }
+  function restoreScroll() {
+    var y = history.state && history.state.y;
+    if (y) window.scrollTo(0, y);
+  }
+  window.addEventListener("scroll", function () {
+    clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(function () { history.replaceState({ y: window.scrollY }, "", location.href); }, 100);
+  });
+  window.addEventListener("popstate", function () { applyHash(); renderFilters(); runSearch().then(restoreScroll); });
+
   // ---- wiring -------------------------------------------------------------------------------------
   $("q").onkeydown = function (e) {
     if (e.key !== "Enter") return;
@@ -265,9 +294,10 @@
       if (s.st && s.st.current && s.st.current.mode === "repos") s.repos = names.filter(function (r) { return words.indexOf(r.toLowerCase()) >= 0; });
       s.sub = q; s.open = null; s.folder = null; s.ext = null;
     }
-    s.q = q; runSearch();
+    s.q = q; sync(true); runSearch();
   };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && s.open) { s.open = null; renderResults(); } });
+  applyHash();
   renderResults();
-  refresh();
+  refresh().then(restoreScroll);
 })();

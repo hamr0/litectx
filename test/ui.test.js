@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import Database from "better-sqlite3";
 import { LiteCtx } from "../src/index.js";
 import { createUi } from "../src/ui/server.js";
@@ -463,7 +464,7 @@ test("static assets are served with a locked-down CSP", async () => {
   scratch();
   const ui = await createUi({ port: 0 });
   try {
-    for (const [p, type] of [["/", "text/html"], ["/app.js", "text/javascript"], ["/app.css", "text/css"], ["/theme.js", "text/javascript"]]) {
+    for (const [p, type] of [["/", "text/html"], ["/app.js", "text/javascript"], ["/app.css", "text/css"], ["/theme.js", "text/javascript"], ["/state.js", "text/javascript"]]) {
       const r = await get(ui, p);
       assert.equal(r.status, 200, p);
       assert.ok(r.text.length > 50);
@@ -568,4 +569,27 @@ test("regression: the page and status answer WHILE a cold index pass is running 
   } finally {
     await ui.close();
   }
+});
+
+// ---- page state <-> URL hash (Back / reload / bookmark restore the search) --------------------------
+
+/** state.js is a browser classic script: run it against a fake window and take what it publishes. */
+function pageState() {
+  const win = /** @type {any} */ ({});
+  vm.runInNewContext(readFileSync(new URL("../src/ui/web/state.js", import.meta.url), "utf8"), { window: win, URLSearchParams });
+  return win.litectxState;
+}
+
+test("page state round-trips through the URL hash: special chars, several repos, every filter", () => {
+  const { encodeState, decodeState: dec } = pageState();
+  const decodeState = (h) => JSON.parse(JSON.stringify(dec(h))); // vm objects have another realm's prototypes
+  const full = {
+    q: 'how to "quote" & #hash? 100% ü 日本', sub: "a b,c", ext: "md", folder: "docs/wiki", open: "my repo/src/a b#c.js",
+    repos: ["bare,agent", "x&y=z", "plain"], kinds: { doc: false, code: true }, kwOnly: true, demote: false, view: "roomy",
+  };
+  assert.deepEqual(decodeState(encodeState(full)), { ...full });
+  const def = { q: "", sub: "", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, kwOnly: false, demote: true, view: "table" };
+  assert.equal(encodeState(def), "", "defaults leave the URL clean");
+  assert.deepEqual(decodeState(""), def);
+  assert.deepEqual(decodeState(encodeState({ ...def, q: "x" })), { ...def, q: "x" });
 });

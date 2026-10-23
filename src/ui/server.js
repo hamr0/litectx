@@ -225,6 +225,7 @@ export async function createUi(opts = {}) {
     "/": ["index.html", "text/html; charset=utf-8"],
     "/app.js": ["app.js", "text/javascript; charset=utf-8"],
     "/theme.js": ["theme.js", "text/javascript; charset=utf-8"],
+    "/state.js": ["state.js", "text/javascript; charset=utf-8"],
     "/app.css": ["app.css", "text/css; charset=utf-8"],
   };
   /** @type {Record<string, string>} */
