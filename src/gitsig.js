@@ -44,7 +44,7 @@ export function collectGitSig(root, pathspecs, children = false) {
   const map = new Map();
   let out;
   try {
-    out = execFileSync("git", ["-C", root, "-c", "core.quotepath=off", "log", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
+    out = execFileSync("git", ["-C", root, "log", "-z", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
       encoding: "utf8",
       maxBuffer: 1 << 28,
       stdio: ["ignore", "pipe", "ignore"],
@@ -54,12 +54,19 @@ export function collectGitSig(root, pathspecs, children = false) {
   }
   /** @type {number|null} */
   let ct = null;
-  for (const line of out.split("\n")) {
-    if (!line) continue;
-    if (line.charCodeAt(0) === 1) {
-      const t = Number(line.slice(1));
+  // `-z` output: each header is `\x01<ct>\n` glued to the commit's FIRST name, every name NUL-terminated
+  // (raw bytes, so `"`, `\\`, tab, newline and non-ASCII names need no unquoting), commits separated by an
+  // empty token. The header's `\n` is the first one in the token (<ct> is digits), so a newline inside a
+  // name can never be mistaken for it.
+  for (const tok of out.split("\0")) {
+    if (!tok) continue;
+    let line = tok;
+    if (tok.charCodeAt(0) === 1) {
+      const nl = tok.indexOf("\n");
+      const t = Number(nl < 0 ? tok.slice(1) : tok.slice(1, nl));
       ct = Number.isFinite(t) ? t : null;
-      continue;
+      if (nl < 0 || nl === tok.length - 1) continue; // header with no name (e.g. an empty/merge commit)
+      line = tok.slice(nl + 1);
     }
     if (ct === null) continue; // a file line before any commit header — ignore
     const cur = map.get(line);

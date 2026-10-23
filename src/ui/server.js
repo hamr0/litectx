@@ -33,7 +33,7 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {string[]} repoNames
  * @property {Promise<void> | null} running   the in-flight index pass, if any
  * @property {string | null} error            last index error
- * @property {{ files: number, added: number, updated: number, removed: number, unchanged: number, ms: number } | null} last
+ * @property {{ files: number, added: number, updated: number, removed: number, unchanged: number, skipped: { repo: string, error: string }[], ms: number } | null} last
  */
 
 /**
@@ -89,7 +89,8 @@ export async function createUi(opts = {}) {
       const t = Date.now();
       try {
         const r = await o.ctx.index({ yield: true }); // a cold pass is long; yield so the page + API keep answering
-        o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, ms: Date.now() - t };
+        o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, skipped: r.skipped, ms: Date.now() - t };
+        for (const k of r.skipped) console.error(`litectx ui: warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
         o.error = null;
         if (o.mode.mode === "repos") o.repoNames = childRepos(o.path);
       } catch (e) {

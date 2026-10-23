@@ -249,6 +249,9 @@ export class StalePointerError extends Error {
  * @property {number} updated    re-indexed files (content changed)
  * @property {number} removed    files dropped (no longer present)
  * @property {number} unchanged  files skipped (mtime or content unchanged)
+ * @property {{ repo: string, error: string }[]} skipped  `childRepos` mode only: repos whose `git ls-files`
+ *   failed this pass (corrupt index, broken `.git`). Their previously indexed files are KEPT untouched (never
+ *   reported `removed`) and the pass does not stamp the index; empty when every repo listed fine.
  */
 
 /**
@@ -395,7 +398,9 @@ export class LiteCtx {
    * await ctx.index({ paths: ['src/a.js', 'src/b.js'] })
    */
   async index(opts = {}) {
-    const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs, this.childRepos);
+    /** @type {{ repo: string, error: string }[]} */
+    const skipped = [];
+    const files = collectFiles(this.root, this.include, opts.paths ?? this.pathspecs, this.childRepos, skipped);
     // force = re-read every FILE from disk. Written memory is not re-derivable from any file and
     // must survive even a force pass (§3.2) — so this clears file-sourced data only, never reset().
     //
@@ -406,7 +411,9 @@ export class LiteCtx {
     // the files it DOES cover (dropping them from `prev`), so a scoped caller still converges file by
     // file, deleting nothing. And it must not stamp — only a pass over the whole index can vouch for
     // the whole index.
-    const partial = opts.paths !== undefined;
+    // A skipped child repo is the same shape: its files are absent from this pass's listing but must not be
+    // cleared or stamped over, so it narrows the pass exactly like `paths` (without suppressing deletes elsewhere).
+    const partial = opts.paths !== undefined || skipped.length > 0;
     const stamp = indexStamp();
     const stale = this.store.storedStamp() !== stamp;
     const rebuild = opts.force === true || (stale && !partial);
@@ -433,6 +440,9 @@ export class LiteCtx {
       }
     }
     const current = new Set(files);
+    // a skipped repo's prior entries count as still present: unlisted is not deleted
+    const keepPrefixes = skipped.map((k) => `${k.repo}/`);
+    const kept = (/** @type {string} */ p) => keepPrefixes.some((x) => p.startsWith(x));
     // per-node stamp heal (version skew): files whose stored chunks were written by a DIFFERENT-version
     // writer (an old global CLI, a stale node_modules copy) carry a per-row stamp that no longer matches.
     // Their boundaries are stale even when their bytes are not, so force a re-chunk via the same
@@ -445,7 +455,7 @@ export class LiteCtx {
     }
 
     const { upserts, touch, unchanged } = diffFiles(this.root, files, prev);
-    const deletes = opts.paths ? [] : [...prev.keys()].filter((p) => !current.has(p));
+    const deletes = opts.paths ? [] : [...prev.keys()].filter((p) => !current.has(p) && !kept(p));
 
     // chunk each changed file into symbol/section nodes + collect its import specifiers, in one
     // parse (slice 2 + 4). Chunks are additive substrate; imports become edges below.
@@ -557,7 +567,7 @@ export class LiteCtx {
     }
 
     const added = upserts.filter((u) => !prev.has(u.path)).length;
-    return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged };
+    return { files: this.store.count(), added, updated: upserts.length - added, removed: deletes.length, unchanged, skipped };
   }
 
   /**

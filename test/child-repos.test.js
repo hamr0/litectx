@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,4 +122,52 @@ test("childRepos + repoPathspecs units", () => {
   assert.deepEqual(repoPathspecs("alpha", ["alpha/src", "beta/x"], names), ["src"]);
   assert.equal(repoPathspecs("beta", ["alpha/src"], names), null);
   assert.deepEqual(repoPathspecs("beta", ["*.md", "docs/a.md"], names), ["*.md", "docs/a.md"]);
+});
+
+test("repoPathspecs normalizes a leading ./ before routing", () => {
+  const repos = new Set(["alpha", "beta"]);
+  assert.deepEqual(repoPathspecs("alpha", ["./alpha/src"], repos), ["src"]);
+  assert.equal(repoPathspecs("beta", ["./alpha/src"], repos), null);
+  assert.equal(repoPathspecs("alpha", ["./alpha"], repos), undefined);
+  assert.deepEqual(repoPathspecs("beta", ["././docs/x.md"], repos), ["docs/x.md"]);
+});
+
+test("a repo whose git ls-files fails keeps its indexed files (not 'removed') and is reported skipped", async () => {
+  const root = tree();
+  try {
+    const ctx = new LiteCtx({ root, dbPath: ":memory:", childRepos: true });
+    const first = await ctx.index();
+    assert.equal(first.added, 4);
+    assert.deepEqual(first.skipped, []);
+    // break beta: a `.git` file pointing nowhere makes `git ls-files` fail
+    rmSync(join(root, "beta", ".git"), { recursive: true, force: true });
+    writeFileSync(join(root, "beta", ".git"), "gitdir: /nonexistent/litectx-nowhere\n");
+    const r = await ctx.index();
+    assert.equal(r.removed, 0, "unlistable repo's files are not reported removed");
+    assert.equal(r.skipped.length, 1);
+    assert.equal(r.skipped[0].repo, "beta");
+    assert.ok(r.skipped[0].error.length > 0);
+    assert.equal(r.files, 4);
+    assert.ok(ctx.get("beta/b.py"), "beta's entries are untouched");
+    const doc = await ctx.recall("zebrafish", { kind: "doc", n: 20 });
+    assert.deepEqual(doc.map((h) => h.path).sort(), ["alpha/README.md", "beta/docs/guide.md"]);
+    // a forced pass must not wipe it either
+    const f = await ctx.index({ force: true });
+    assert.equal(f.removed, 0);
+    assert.equal(f.files, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a symlinked directory pointing at a repo is not indexed a second time", async () => {
+  const root = tree();
+  try {
+    symlinkSync(join(root, "alpha"), join(root, "alpha-link"), "dir");
+    assert.deepEqual(childRepos(root), ["alpha", "beta"]);
+    const ctx = new LiteCtx({ root, dbPath: ":memory:", childRepos: true });
+    assert.equal((await ctx.index()).added, 4);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

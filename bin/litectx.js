@@ -68,6 +68,7 @@ async function main() {
     console.error(
       `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
     );
+    for (const k of r.skipped) console.error(`warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
     return;
   }
 

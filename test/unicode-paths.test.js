@@ -51,3 +51,32 @@ test("same in all-repos mode", async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// git log quotes `"`, `\`, tab and newline even with core.quotepath=off; the metadata pass reads `-z` so
+// the key is the raw path and `hit.git` is present. (Newline case: Linux filesystems allow it.)
+const AWKWARD = ['we"ird é.md', "back\\slash.md", "tab\tname.md", "new\nline.md"];
+
+test("git metadata survives names with quote, backslash, tab and newline", async () => {
+  const root = mkdtempSync(join(tmpdir(), "litectx-awkward-"));
+  try {
+    const g = (...a) => execFileSync("git", ["-C", root, ...a], { stdio: "pipe" });
+    g("init", "-q", "-b", "main");
+    g("config", "user.email", "t@t.dev");
+    g("config", "user.name", "Test");
+    g("config", "commit.gpgsign", "false");
+    AWKWARD.forEach((n, i) => writeFileSync(join(root, n), `# T${i}\n\nuniqueword${i} body\n`));
+    g("add", "-A");
+    g("commit", "-qm", "one");
+    writeFileSync(join(root, AWKWARD[0]), "# T0\n\nuniqueword0 body edited\n");
+    g("commit", "-qam", "two");
+    const ctx = new LiteCtx({ root, dbPath: ":memory:" });
+    assert.equal((await ctx.index()).added, AWKWARD.length);
+    for (const [i, n] of AWKWARD.entries()) {
+      const [hit] = await ctx.recall(`uniqueword${i}`, { kind: "doc", n: 1 });
+      assert.equal(hit?.path, n);
+      assert.equal(hit.git?.commits, i === 0 ? 2 : 1, `git metadata for ${JSON.stringify(n)}`);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
