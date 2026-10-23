@@ -224,3 +224,5 @@ condition is met.
   measured and holds up on the frozen set.
 - **LLM Rewrite.** Lives in bareagent. Un-defer when the plain UI ships and the vague-question
   misses bother the owner in real use.
+
+**Stopping.** Ctrl+C exits at once, even mid-build; it does not wait for the running pass. An exit mid-pass leaves the db at its last committed state (a pass writes in one transaction), and the next start redoes the unfinished work. A first build commits only at its end, so stopping it discards its progress.

@@ -867,3 +867,37 @@ test("regression: a filter-line rebuild (status poll while indexing, search repl
     await ui.close();
   }
 });
+
+test("regression: close() (Ctrl+C) returns while a meaning pass is still running instead of waiting for it", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  Embedder.prototype.embed = async function (text) {
+    seen.push(text);
+    await gate; // parked inside a file embed: the pass cannot finish until released
+    return new Float32Array(384).fill(0.05);
+  };
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(seen.length > 0, "precondition: the pass is inside a file embed");
+    await Promise.race([ui.close(), new Promise((_, no) => setTimeout(() => no(new Error("close() waited on the running pass")), 2000))]);
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
+  }
+});
+
+test("regression: removing a source drops its 'removing …' label when the call returns, not when the next source's pass ends", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    assert.match(app, /act\("reindex", "removing " \+ x\.name \+ "…", function \(\) \{[^}]*\}\);? \}, true\)/, "remove runs as a quick action");
+    assert.match(app, /if \(quick\) \{ s\.busy = null;/, "a quick action clears busy once its call returns");
+  } finally {
+    await ui.close();
+  }
+});

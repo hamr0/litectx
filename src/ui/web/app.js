@@ -74,9 +74,11 @@
     else s.result = "";
   }
   // run a server action behind an instant busy state; the page never waits on the server to show it
-  function act(what, label, call) {
+  // `quick`: the call itself is the whole job (remove) — drop the label once it returns, so a pass the server
+  // started for the next source shows as its own "re-indexing…" instead of keeping "removing …" up for minutes
+  function act(what, label, call, quick) {
     startBusy(what, label);
-    return call().then(function () { s.busy && (s.busy.pending = false); return refresh(); })
+    return call().then(function () { if (quick) { s.busy = null; clearInterval(tickTimer); } else s.busy && (s.busy.pending = false); return refresh(); })
       .catch(function (e) { s.busy = null; clearInterval(tickTimer); fail(e); renderTop(); });
   }
   var pollTimer = null;
@@ -155,7 +157,7 @@
       var cb = document.createElement("input"); cb.type = "checkbox"; cb.setAttribute("aria-label", "also delete the index of " + x.name);
       if (x.mode === "repos") { lab.appendChild(cb); lab.appendChild(document.createTextNode(" also delete its index")); }
       r.appendChild(chip("remove", false, function () {
-        act("reindex", "removing " + x.name + "…", function () { return api("DELETE", "/api/sources", { name: x.name, deleteIndex: cb.checked }); });
+        act("reindex", "removing " + x.name + "…", function () { return api("DELETE", "/api/sources", { name: x.name, deleteIndex: cb.checked }); }, true);
       }, x.mode === "repo" ? "removes it from this list only; the repo's own index stays (agents use it)" : "removes it from this list"));
       if (x.mode === "repos") r.appendChild(lab);
       box.appendChild(r);

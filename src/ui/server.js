@@ -406,7 +406,9 @@ export async function createUi(opts = {}) {
         server.close(() => ok(undefined));
         server.closeAllConnections();
       });
-      if (cur?.running) await cur.running;
+      // Do NOT await the running pass: a cold meaning build runs for many minutes, and Ctrl+C must not wait for it.
+      // closeCurrent() defers the store close behind the pass; the CLI exits right after, which is safe (the pass
+      // only writes in one synchronous transaction, so an exit between awaits leaves the db at its last commit).
       closeCurrent();
     },
   };
