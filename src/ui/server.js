@@ -86,7 +86,7 @@ export async function createUi(opts = {}) {
     o.running = (async () => {
       const t = Date.now();
       try {
-        const r = await o.ctx.index();
+        const r = await o.ctx.index({ yield: true }); // a cold pass is long; yield so the page + API keep answering
         o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, ms: Date.now() - t };
         o.error = null;
         if (o.mode.mode === "repos") o.repoNames = childRepos(o.path);

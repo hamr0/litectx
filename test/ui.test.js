@@ -545,3 +545,27 @@ test("CLI: `litectx ui <path> --port 0` prints the URL and mode, serves, and a b
   assert.equal(code, 1);
   assert.match(e2, /no git repos found/);
 });
+
+test("regression: the page and status answer WHILE a cold index pass is running (index runs with yield:true)", async () => {
+  const root = join(scratch(), "big");
+  /** @type {Record<string,string>} */
+  const files = {};
+  for (let i = 0; i < 600; i++) files[`src/m${i}.js`] = `export function f${i}(a) {\n  return a + ${i};\n}\nexport class C${i} { m() { return f${i}(1); } }\n`;
+  repo(root, files);
+  const ui = await createUi({ port: 0, path: root });
+  try {
+    // the cold pass started during createUi; without yield it would hold the event loop until it finished
+    const page = await get(ui, "/");
+    assert.equal(page.status, 200);
+    assert.match(page.text, /litectx search/);
+    const st = (await get(ui, "/api/sources")).json();
+    assert.equal(st.current.indexing, true, "status was served mid-pass and says so — the page shows 'indexing…'");
+    const s = await find(ui, "f10");
+    assert.equal(s.indexing, true, "search is served mid-pass (on the old/partial index) and flags indexing");
+    await ui.idle();
+    assert.equal((await get(ui, "/api/sources")).json().current.indexing, false);
+    assert.ok((await find(ui, "f10")).hits.length > 0);
+  } finally {
+    await ui.close();
+  }
+});
