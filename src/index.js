@@ -512,18 +512,18 @@ export class LiteCtx {
     // embeddings backfill: a file indexed while embeddings were OFF (the library default) has no vector,
     // and the diff above skips it as "content unchanged" — so a later embeddings-on pass would leave
     // semantic recall silently dead on it. Embed those now: read + embed only, no re-chunk (bytes and
-    // boundaries are current; only the vector was missing). Runs AFTER applyChanges so this pass's own
-    // upserts already carry their vectors and aren't revisited. Scoped to the files this pass looked at
+    // boundaries are current; only the vector was missing). Runs AFTER applyChanges, so it also embeds
+    // this pass's own upserts (they commit without vectors). Scoped to the files this pass looked at
     // (all files on a full pass; the scoped set on a partial). Idempotent — a warm index backfills none.
     let aborted = false;
     let embedded = 0;
     let embedPending = 0;
     if (this.embeddings) {
-      const files = this.store.vectorlessFiles().filter((p) => current.has(p));
+      const bare = this.store.vectorlessFiles().filter((p) => current.has(p));
       const sections = this.store.vectorlessSections().filter((x) => current.has(x.path));
-      let todo = files.length + sections.length;
+      let todo = bare.length + sections.length;
       // each vector is written the moment it exists (own autocommit), so an abort/crash keeps all of them
-      for (const p of files) {
+      for (const p of bare) {
         if (opts.signal?.aborted) { aborted = true; break; }
         let body;
         try {

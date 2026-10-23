@@ -45,11 +45,10 @@ function scaleScores(rows) {
  */
 
 /**
- * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig, embedding?: Float32Array, sectionVecs?: Float32Array[] }} Upsert
+ * @typedef {DocRow & { hash: string, mtime: number, size: number, nodes?: import("./chunker.js").Chunk[], imports?: string[], edges?: string[], git?: import("./gitsig.js").GitSig }} Upsert
  * `imports` are raw specifiers from the chunker; `edges` are those resolved to intra-repo dst paths
- * (edges.js); `git` is file-level activity metadata (gitsig.js); `embedding` is the file's float32
- * vector when the embeddings tier is on (slice 6), absent otherwise; `sectionVecs` are the per-heading-
- * section vectors of an indexed md file (aligned to `nodes`), used INSTEAD of `embedding` for md.
+ * (edges.js); `git` is file-level activity metadata (gitsig.js). Vectors are not part of an upsert —
+ * they are written afterwards by `putEmbeddings` / `putSectionEmbeddings`.
  */
 
 /**
@@ -802,10 +801,6 @@ export class Store {
         "ON CONFLICT(path) DO UPDATE SET commits = excluded.commits, last_commit = excluded.last_commit"
     );
     const delEmb = this.db.prepare("DELETE FROM file_embeddings WHERE path = ?");
-    const upEmb = this.db.prepare(
-      "INSERT INTO file_embeddings(path, dim, vec) VALUES (@path, @dim, @vec) " +
-        "ON CONFLICT(path) DO UPDATE SET dim = excluded.dim, vec = excluded.vec"
-    );
 
     const tx = this.db.transaction(() => {
       // force/self-heal rebuild: clear every prior file row FIRST, atomically with the re-insert below,
@@ -842,15 +837,12 @@ export class Store {
         const sectioned = u.kind === "doc" && u.format === "md" && (u.nodes?.length ?? 0) > 0;
         const row = sectioned ? null : insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: u.body, extra }) });
         upIdx.run({ path: u.path, hash: u.hash, mtime: u.mtime, size: u.size, indexed_at: indexedAt, code_rowid: row && u.kind !== "doc" ? Number(row.lastInsertRowid) : -1 });
-        let i = 0;
         for (const c of u.nodes ?? []) {
           const nodeId = insNode.run({ path: u.path, kind: u.kind, format: u.format, symbol: c.symbol, node_type: c.nodeType, start_line: c.startLine, end_line: c.endLine, body: c.text, stamp }).lastInsertRowid;
           if (sectioned) {
             const rid = insDoc.run({ path: u.path, kind: u.kind, format: u.format, body: indexBody({ path: u.path, body: c.text, extra: [] }) }).lastInsertRowid;
-            const v = u.sectionVecs?.[i];
-            insSec.run({ rid, path: u.path, node_id: nodeId, dim: v ? v.length : null, vec: v ? Buffer.from(v.buffer, v.byteOffset, v.byteLength) : null });
+            insSec.run({ rid, path: u.path, node_id: nodeId, dim: null, vec: null });
           }
-          i++;
           // slice 5a: a chunk whose (symbol, body) wasn't in the prior set is new or modified — record it.
           if (prevKeys && !prevKeys.has(chunkKey(c.symbol, c.text))) {
             insEdit.run({ path: u.path, symbol: c.symbol, kind: u.kind, ts: indexedAt });
@@ -861,10 +853,8 @@ export class Store {
         // no history (non-git tree, or a tracked-but-uncommitted file) → no row → recall `git: null`.
         if (u.git) upGit.run({ path: u.path, commits: u.git.commits, last: u.git.lastCommit });
         else delGit.run(u.path);
-        // embeddings tier (slice 6): store the file's float32 vector as a BLOB when present. Computed
-        // only for changed files (incremental) — unchanged files keep their stored vector untouched.
-        if (u.embedding) upEmb.run({ path: u.path, dim: u.embedding.length, vec: Buffer.from(u.embedding.buffer, u.embedding.byteOffset, u.embedding.byteLength) });
-        else delEmb.run(u.path);
+        // a changed file's old vector is stale; the backfill re-embeds it after this commit.
+        delEmb.run(u.path);
       }
       for (const t of touch) touchIdx.run({ path: t.path, mtime: t.mtime });
     });
