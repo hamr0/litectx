@@ -868,7 +868,7 @@ test("regression: a filter-line rebuild (status poll while indexing, search repl
   }
 });
 
-test("regression: close() (Ctrl+C) returns while a meaning pass is still running instead of waiting for it", async () => {
+test("regression: close() (Ctrl+C) stops a running meaning pass after the in-flight embed instead of waiting it out", async () => {
   const root = manyRepos();
   const real = Embedder.prototype.embed;
   const seen = [];
@@ -876,17 +876,84 @@ test("regression: close() (Ctrl+C) returns while a meaning pass is still running
   const gate = new Promise((r) => (release = r));
   Embedder.prototype.embed = async function (text) {
     seen.push(text);
-    await gate; // parked inside a file embed: the pass cannot finish until released
+    await gate; // the in-flight embed
     return new Float32Array(384).fill(0.05);
   };
   const ui = await createUi({ port: 0, path: root, embeddings: true });
   try {
     for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
     assert.ok(seen.length > 0, "precondition: the pass is inside a file embed");
-    await Promise.race([ui.close(), new Promise((_, no) => setTimeout(() => no(new Error("close() waited on the running pass")), 2000))]);
+    setTimeout(release, 300);
+    const t = Date.now();
+    await ui.close();
+    assert.ok(Date.now() - t < 2000, "close() returned promptly");
+    assert.ok(seen.length <= 2, `the pass stopped after the in-flight embed (embedded ${seen.length})`);
   } finally {
     release();
     Embedder.prototype.embed = real;
+  }
+});
+
+test("cancel route: stops a running meaning pass after the in-flight embed, keeps search working, reports aborted with counts", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  Embedder.prototype.embed = async function (text) {
+    seen.push(text);
+    await gate;
+    return new Float32Array(384).fill(0.05);
+  };
+  const pre = new LiteCtx({ root, childRepos: true });
+  await pre.index();
+  pre.close();
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal((await get(ui, "/api/sources")).json().current.indexing, true, "precondition: a pass is running");
+    const c = await req(ui, "POST", "/api/cancel", { body: {} });
+    assert.equal(c.status, 200);
+    release();
+    await ui.idle();
+    const cur = (await get(ui, "/api/sources")).json().current;
+    assert.equal(cur.indexing, false);
+    assert.equal(cur.last.aborted, true);
+    assert.ok(cur.last.embedPending > 0, "work was left for the next pass");
+    assert.equal(cur.embeddings, true, "meaning stays on");
+    assert.ok((await find(ui, "quokka")).hits.length > 0, "search keeps working");
+    assert.ok(seen.length <= 2, `stopped after the in-flight embed (embedded ${seen.length})`);
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});
+
+test("cancel route: a foreign Origin is refused and the pass is not stopped", async () => {
+  const root = manyRepos();
+  const ui = await createUi({ port: 0, path: root });
+  try {
+    const r = await req(ui, "POST", "/api/cancel", { headers: { origin: "http://evil.example" }, body: {} });
+    assert.equal(r.status, 403);
+    const h = await req(ui, "POST", "/api/cancel", { headers: { host: "evil.example" }, body: {} });
+    assert.equal(h.status, 403);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("page: the running chip becomes a cancel button and the result says what was kept", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    assert.match(app, /"cancel re-index"/);
+    assert.match(app, /"cancel meaning"/);
+    assert.match(app, /api\("POST", "\/api\/cancel"/);
+    assert.match(app, /embedded · the next pass finishes the rest/);
+  } finally {
+    await ui.close();
   }
 });
 

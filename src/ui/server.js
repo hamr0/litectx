@@ -34,8 +34,9 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {LiteCtx | null} kwCtx   embeddings-off handle on the same db, opened on the first search during a meaning pass
  * @property {string[]} repoNames
  * @property {Promise<void> | null} running   the in-flight index pass, if any
+ * @property {AbortController | null} abort   stops the in-flight pass (Cancel, Ctrl+C, switching away)
  * @property {string | null} error            last index error
- * @property {{ files: number, added: number, updated: number, removed: number, unchanged: number, skipped: { repo: string, error: string }[], ms: number } | null} last
+ * @property {{ files: number, added: number, updated: number, removed: number, unchanged: number, skipped: { repo: string, error: string }[], aborted: boolean, embedded: number, embedPending: number, ms: number } | null} last
  */
 
 /**
@@ -69,6 +70,7 @@ export async function createUi(opts = {}) {
       kwCtx: null,
       repoNames: m.mode.mode === "repos" ? childRepos(s.path) : [s.name],
       running: null,
+      abort: null,
       error: null,
       last: null,
     };
@@ -79,6 +81,7 @@ export async function createUi(opts = {}) {
     cur = null;
     if (!old) return;
     old.kwCtx?.close();
+    old.abort?.abort(); // a pass for a source nobody is looking at stops at its next file/embed; its vectors so far are kept
     // never close a store under a running index pass
     if (old.running) void old.running.finally(() => old.ctx.close());
     else old.ctx.close();
@@ -89,11 +92,13 @@ export async function createUi(opts = {}) {
     const o = cur;
     if (!o) return Promise.resolve();
     if (o.running) return o.running;
+    const ac = new AbortController();
+    o.abort = ac;
     o.running = (async () => {
       const t = Date.now();
       try {
-        const r = await o.ctx.index({ yield: true }); // a cold pass is long; yield so the page + API keep answering
-        o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, skipped: r.skipped, ms: Date.now() - t };
+        const r = await o.ctx.index({ yield: true, signal: ac.signal }); // a cold pass is long; yield so the page + API keep answering
+        o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, skipped: r.skipped, aborted: r.aborted, embedded: r.embedded, embedPending: r.embedPending, ms: Date.now() - t };
         for (const k of r.skipped) console.error(`litectx ui: warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
         o.error = null;
         if (o.mode.mode === "repos") o.repoNames = childRepos(o.path);
@@ -101,6 +106,7 @@ export async function createUi(opts = {}) {
         o.error = e instanceof Error ? e.message : String(e);
       } finally {
         o.running = null;
+        o.abort = null;
       }
     })();
     return o.running;
@@ -291,6 +297,11 @@ export async function createUi(opts = {}) {
         return json(res, 200, state());
       }
     }
+    if (p === "/api/cancel" && method === "POST") {
+      // stops the running pass at its next file/embed; the page's next state poll reports it as cancelled
+      cur?.abort?.abort();
+      return json(res, 200, state());
+    }
     if (p === "/api/reindex" && method === "POST") {
       const b = obj(await readJson(req));
       if (!cur) throw new HttpError(400, "no active source");
@@ -406,9 +417,12 @@ export async function createUi(opts = {}) {
         server.close(() => ok(undefined));
         server.closeAllConnections();
       });
-      // Do NOT await the running pass: a cold meaning build runs for many minutes, and Ctrl+C must not wait for it.
-      // closeCurrent() defers the store close behind the pass; the CLI exits right after, which is safe (the pass
-      // only writes in one synchronous transaction, so an exit between awaits leaves the db at its last commit).
+      // Stop the pass instead of waiting it out (a cold meaning build runs for many minutes). It halts after at
+      // most one in-flight embed and keeps the vectors written so far. Bounded wait, then exit regardless: an
+      // exit between awaits is safe (the keyword index commits in one transaction, vectors one file at a time).
+      const run = cur?.running;
+      cur?.abort?.abort();
+      if (run) await Promise.race([run, new Promise((ok) => setTimeout(ok, 5000).unref())]);
       closeCurrent();
     },
   };

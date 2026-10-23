@@ -69,7 +69,11 @@
   function tick() { var e = $("elapsed"); if (e && s.busy) e.textContent = " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"; }
   function endBusy(st) {
     var b = s.busy, c = st && st.current; s.busy = null; clearInterval(tickTimer);
-    if (b.what === "reindex" && c && c.last) s.result = "re-indexed " + ST.passText(c.last);
+    if (c && c.last && c.last.aborted) {
+      var tot = c.last.embedded + c.last.embedPending;
+      s.result = tot ? "cancelled · " + c.last.embedded + " of " + tot + " embedded · the next pass finishes the rest" : "cancelled · nothing was changed";
+    }
+    else if (b.what === "reindex" && c && c.last) s.result = "re-indexed " + ST.passText(c.last);
     else if (b.what === "meaning" && c) s.result = c.embeddings ? (c.meaningOff ? "" : "meaning: built") : "meaning: off";
     else s.result = "";
   }
@@ -80,6 +84,12 @@
     startBusy(what, label);
     return call().then(function () { if (quick) { s.busy = null; clearInterval(tickTimer); } else s.busy && (s.busy.pending = false); return refresh(); })
       .catch(function (e) { s.busy = null; clearInterval(tickTimer); fail(e); renderTop(); });
+  }
+  // ask the server to stop the running pass; the busy state ends when the next poll sees it stopped
+  function cancelPass() {
+    if (!s.busy || s.busy.cancelling) return;
+    s.busy.cancelling = true; renderTop();
+    api("POST", "/api/cancel", {}).then(function () { return refresh(); }).catch(function (e) { fail(e); });
   }
   var pollTimer = null;
   function poll() {
@@ -106,7 +116,7 @@
     }
     var info = el("span", "dim");
     if (s.busy) {
-      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + s.busy.label));
+      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : s.busy.label)));
       var ev = el("span", "", " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"); ev.id = "elapsed"; info.appendChild(ev);
     }
     else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText + (s.result ? " · " + s.result : "");
@@ -119,15 +129,15 @@
     var right = el("div", "row end");
     if (c) {
       var busyRe = !!s.busy && s.busy.what !== "meaning", busyMe = !!s.busy && s.busy.what === "meaning";
-      var rb = chip("↻ re-index", busyRe, function () { act("reindex", "re-indexing…", function () { return api("POST", "/api/reindex", {}); }); }, "refresh changed files now");
+      var rb = chip(busyRe ? "cancel re-index" : "↻ re-index", busyRe, busyRe ? cancelPass : function () { act("reindex", "re-indexing…", function () { return api("POST", "/api/reindex", {}); }); }, busyRe ? "stop this pass; what is done so far is kept" : "refresh changed files now");
       if (busyRe) rb.insertBefore(el("span", "spin"), rb.firstChild);
-      rb.disabled = !!s.busy; right.appendChild(rb);
-      var mb = chip(busyMe ? "building meaning…" : c.embeddings ? "meaning: on" : "meaning: off", c.embeddings || busyMe, function () {
+      rb.disabled = (!!s.busy && !busyRe) || (busyRe && !!s.busy.cancelling); right.appendChild(rb);
+      var mb = chip(busyMe ? "cancel meaning" : c.embeddings ? "meaning: on" : "meaning: off", c.embeddings || busyMe, busyMe ? cancelPass : function () {
         var on = !c.embeddings;
         act("meaning", on ? "building meaning… (first build takes minutes; search keeps working on keywords)" : "turning meaning off…", function () { return api("POST", "/api/sources", { name: c.name, embeddings: on }); });
-      }, "embeddings re-order results by meaning. First turn-on builds them once (~15 min for ~7k files).");
+      }, busyMe ? "stop building; meaning stays on, the next pass finishes the rest" : "embeddings re-order results by meaning. First turn-on builds them once (~15 min for ~7k files).");
       if (busyMe) mb.insertBefore(el("span", "spin"), mb.firstChild);
-      mb.disabled = !!s.busy; right.appendChild(mb);
+      mb.disabled = (!!s.busy && !busyMe) || (busyMe && !!s.busy.cancelling); right.appendChild(mb);
     }
     right.appendChild(chip("sources", s.settings, function () { s.settings = !s.settings; renderPanel(); }, "add, remove or switch sources"));
     var th = chip("theme", false, function () {
