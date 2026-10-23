@@ -306,7 +306,7 @@
       }).join("") + "</tbody></table>";
   }
   function roomy() {
-    return s.hits.slice(0, 5).map(function (h, i) {
+    return s.hits.map(function (h, i) {
       return '<article class="hit' + (s.open === h.path ? " cur" : "") + (h.noisy && s.demote ? " noisy" : "") + '" data-i="' + i + '" tabindex="0"><div class="dim">' + (i + 1) + ". " + esc(h.repo) + " › " + esc(h.folder) +
         '</div><div class="title">' + esc(h.file) + ' <span class="dim">lines ' + h.start + "–" + h.end + "</span></div>" + (h.symbol ? '<div class="sym">§ ' + esc(h.symbol) + "</div>" : "") +
         "<pre>" + h.preview.map(function (l) { return esc(l.t); }).join("\n") + '</pre><div class="dim"><span class="k-' + esc(h.kind) + '">' + esc(h.kind) + "</span> · " + h.score.toFixed(2) + " · " + marker(h) + (h.more ? " · +" + h.more + " more" : "") + "</div></article>";

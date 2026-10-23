@@ -986,3 +986,16 @@ test("regression: removing a source drops its 'removing …' label when the call
     await ui.close();
   }
 });
+
+test("regression: the roomy view renders every hit, same results as the table view", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    const body = app.slice(app.indexOf("function roomy()"), app.indexOf("function pane("));
+    assert.match(body, /return s\.hits\.map\(function \(h, i\)/, "roomy maps all hits");
+    assert.doesNotMatch(body, /\.slice\(/, "no cap on the roomy list");
+  } finally {
+    await ui.close();
+  }
+});

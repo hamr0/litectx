@@ -102,7 +102,7 @@ environment variable). These are the UI's own settings, separate from
   - folder chips (suggested from the current results)
   - `✕ clear` last, only while a filter is set (resets filters, keeps the query)
 - **View switch** (sliding, `table ●— roomy`) on the line above the results.
-- **Table view**: hover a row for a quick-look popup. Roomy view shows the top 5 with a 3-line
+- **Table view**: hover a row for a quick-look popup. Roomy view shows the same results, each with a 3-line
   preview. Click any result to open a side view with line numbers, "+N more sections" and two
   links: open the file in the browser (same tab, `/view`; only indexed files open, so an untracked
   `.env` in the root is refused), or in PyCharm at that line. "open in pycharm" is a button: it POSTs `/api/open {path, line}` and the
