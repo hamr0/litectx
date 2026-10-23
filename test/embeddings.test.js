@@ -349,12 +349,14 @@ test("a stale in-flight embed does not overwrite the section vector a concurrent
     /** @type {{ body: string, vec: Buffer | null }[]} */ (
       c.store.db.prepare("SELECT n.body AS body, sec.vec AS vec FROM doc_sections sec JOIN nodes n ON n.id = sec.node_id WHERE sec.path = 'g.md'").all()
     ).map((r) => ({ body: r.body, vec: r.vec ? Array.from(new Float32Array(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength / 4)) : null }));
+  /** @type {() => void} */ let release = () => {};
+  /** @type {LiteCtx | undefined} */ let a;
+  /** @type {LiteCtx | undefined} */ let b;
   try {
     const seed = new LiteCtx({ root, dbPath }); // tier OFF → g.md's sections indexed vectorless
     await seed.index();
     seed.close();
 
-    /** @type {() => void} */ let release = () => {};
     const gate = new Promise((r) => (release = () => r(undefined)));
     /** @type {() => void} */ let entered = () => {};
     const enteredP = new Promise((r) => (entered = () => r(undefined)));
@@ -366,12 +368,12 @@ test("a stale in-flight embed does not overwrite the section vector a concurrent
       await gate;
       return v;
     };
-    const a = new LiteCtx({ root, dbPath, embeddings: true, embedder: parked });
+    a = new LiteCtx({ root, dbPath, embeddings: true, embedder: parked });
     const pa = a.index(); // backfill: embeds the OLD section body, parks inside embed()
     await enteredP;
 
     writeFileSync(join(root, "g.md"), "# Setup\nwidget beta beta\n");
-    const b = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
+    b = new LiteCtx({ root, dbPath, embeddings: true, embedder: markerStub() });
     await b.index(); // re-chunks + stores the NEW section vector [0,1]
     const before = sectionVecs(b).find((s) => s.body.includes("beta beta"));
     assert.deepEqual(before?.vec, [0, 1], "B stored the new section vector");
@@ -380,9 +382,10 @@ test("a stale in-flight embed does not overwrite the section vector a concurrent
     await pa;
     const after = sectionVecs(b).find((s) => s.body.includes("beta beta"));
     assert.deepEqual(after?.vec, [0, 1], "A's stale (old-text) section vector was dropped, not written over B's");
-    a.close();
-    b.close();
   } finally {
+    release(); // unpark A even on a red assertion
+    a?.close();
+    b?.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
