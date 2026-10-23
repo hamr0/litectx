@@ -44,7 +44,7 @@ export function collectGitSig(root, pathspecs, children = false) {
   const map = new Map();
   let out;
   try {
-    out = execFileSync("git", ["-C", root, "log", "-z", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
+    out = execFileSync("git", ["-c", "core.fsmonitor=false", "-C", root, "log", "-z", FMT, "--name-only", "--", ...(pathspecs ?? [])], {
       encoding: "utf8",
       maxBuffer: 1 << 28,
       stdio: ["ignore", "pipe", "ignore"],

@@ -143,7 +143,7 @@ export function collectFiles(root, include, pathspecs, children = false, skipped
       const specs = repoPathspecs(repo, pathspecs, names);
       if (specs === null) continue;
       try {
-        const out = execFileSync("git", ["-C", join(root, repo), "ls-files", "-z", "--", ...(specs ?? [])], {
+        const out = execFileSync("git", ["-c", "core.fsmonitor=false", "-C", join(root, repo), "ls-files", "-z", "--", ...(specs ?? [])], {
           encoding: "utf8",
           maxBuffer: 1 << 28,
           stdio: ["ignore", "pipe", "pipe"],
@@ -164,7 +164,7 @@ export function collectFiles(root, include, pathspecs, children = false, skipped
     // `--` so a pathspec can never be misread as a git option (parity with gitsig.js / the rg sweeps).
     // `-z`: raw NUL-separated paths. Without it git C-quotes any non-ASCII name ("Cr\303\250me.md"),
     // and that quoted string matches no file on disk — the file was silently never indexed.
-    files = execFileSync("git", ["-C", root, "ls-files", "-z", "--", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
+    files = execFileSync("git", ["-c", "core.fsmonitor=false", "-C", root, "ls-files", "-z", "--", ...(pathspecs ?? [])], { encoding: "utf8", maxBuffer: 1 << 28 })
       .split("\0")
       .filter(Boolean);
   } catch {
