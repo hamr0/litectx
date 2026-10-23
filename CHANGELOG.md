@@ -14,6 +14,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **`litectx ui`: filter line cleanup.** The `│` separators are gone (groups are set apart by spacing); the docs/code chips start deselected and act as a filter (none = search both, click one = only that kind; `✕ clear` resets them; old URL hashes still load). While a meaning build is running, searches use keywords only instead of waiting ~2 s behind the in-flight embed, and the page says so.
 - **`litectx ui`: "open in PyCharm" now works without a registered `pycharm://` URL handler.** The button POSTs `/api/open` and the server launches the editor (`--line N <abs path>`, detached, no shell) for an indexed file of the active source; the launcher is the `editor` field of `ui.json` or auto-detected, with a clear error if none is found. The filter line has a fixed control order, and a `×` in the search box clears the query only.
 
 - **`litectx ui`: naming a repo buried its docs behind its code.** Results were interleaved doc/code by global rank before the repo filter ran, so a repo's code held early slots and its docs late ones. The filter now runs first, then the interleave (a doc-heavy query naming a repo went from rank 54 to 7 for the repo's README in the investigated case).

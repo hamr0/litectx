@@ -1324,6 +1324,7 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   (remembered per source); the first build is slow (about 15 minutes for ~7k files). An
   embeddings-off pass leaves vectors an embeddings-on writer (the CLI/MCP default) already built
   for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.
+- **Meaning while building**: during an index/meaning pass a search runs on keywords only (the page says so) instead of waiting on the in-flight embed; once the pass ends, meaning is back.
 - **Results**: one `recall` over `doc` and `code`, interleaved by rank (per-kind scores are not
   comparable). The query is searched as typed; a repo name in it (all-repos mode) also filters to
   that repo. The page keeps its search in the URL hash, so Back, reload and bookmarks restore it. One entry per file with "+N more sections", and old/tests last (a dir segment

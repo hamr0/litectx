@@ -14,7 +14,7 @@
 
   var ST = window.litectxState;
   var s = {
-    q: "", sub: "", kinds: { doc: true, code: true }, ext: null, repos: [], folder: null, demote: true,
+    q: "", sub: "", kinds: { doc: false, code: false }, ext: null, repos: [], folder: null, demote: true,
     view: "table", open: null, openOthers: false, hits: [], facets: { exts: [], folders: [] }, ms: 0,
     st: null, settings: false, msg: "", searched: false, busy: null, result: ""
   };
@@ -31,7 +31,6 @@
     var b = el("button", "chip", label); b.type = "button"; b.setAttribute("aria-pressed", on ? "true" : "false");
     if (title) b.title = title; b.onclick = fn; return b;
   }
-  function sep() { return el("span", "dim", "│"); }
 
   // ---- data ---------------------------------------------------------------------------------------
   function loadState() {
@@ -49,12 +48,13 @@
     s.searched = true;
     if (!s.q.trim() || !s.st || !s.st.current) { s.hits = []; renderResults(); renderTop(); return Promise.resolve(); }
     var kinds = Object.keys(s.kinds).filter(function (k) { return s.kinds[k]; });
+    if (!kinds.length) kinds = ["doc", "code"]; // none picked = no filter: search both
     var p = new URLSearchParams({ q: s.q, kinds: kinds.join(","), demote: s.demote ? "1" : "0" });
     if (s.repos.length) p.set("repos", s.repos.join(","));
     if (s.ext) p.set("ext", s.ext);
     if (s.folder) p.set("folder", s.folder);
     return api("GET", "/api/search?" + p).then(function (r) {
-      s.hits = r.hits; s.facets = r.facets; s.ms = r.ms; s.msg = "";
+      s.hits = r.hits; s.facets = r.facets; s.ms = r.ms; s.kwOnly = !!r.keywordsOnly; s.msg = "";
       if (s.open && !s.hits.some(function (h) { return h.path === s.open; })) s.open = null;
       renderTop(); renderFilters(); renderResults();
     }).catch(function (e) { s.msg = e.message; renderResults(); });
@@ -112,6 +112,7 @@
     else info.textContent = "no source yet";
     left.appendChild(info);
     if (c && c.embeddings && c.meaningOff && !s.busy) left.appendChild(el("span", "err", "meaning unavailable: install the optional peer `npm i @huggingface/transformers` (searching by keywords only)"));
+    if (s.kwOnly && s.busy && s.searched && s.q) left.appendChild(el("span", "dim", "searching by keywords only while building (meaning is back when it finishes)"));
     if (c && c.error) left.appendChild(el("span", "err", "index error: " + c.error));
     var right = el("div", "row end");
     if (c) {
@@ -181,14 +182,14 @@
     k.appendChild(chip("docs", s.kinds.doc, go(function () { s.kinds.doc = !s.kinds.doc; })));
     k.appendChild(chip("code", s.kinds.code, go(function () { s.kinds.code = !s.kinds.code; })));
     k.appendChild(chip("old/tests last", s.demote, go(function () { s.demote = !s.demote; }), "archive, poc, tests and logs go to the bottom"));
-    k.appendChild(sep());
+    var group = function (fn) { var n = k.children.length; fn(); if (k.children.length > n) k.children[n].className += " gs"; }; // groups read apart by spacing, no separators
+    group(function () {
     s.repos.forEach(function (r) { k.appendChild(chip(r + " ✕", true, go(function () { s.repos = s.repos.filter(function (x) { return x !== r; }); }), "remove filter")); });
     k.appendChild(repoInput());
-    k.appendChild(sep());
-    s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); });
-    k.appendChild(sep());
-    s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); });
-    if (ST.hasFilters(s)) { var ca = chip("✕ clear", false, go(function () { ST.clearFilters(s); }), "reset repos, docs/code, type, folder and old/tests last; keeps the query"); ca.className += " clear"; k.appendChild(ca); }
+    });
+    group(function () { s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); }); });
+    group(function () { s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); }); });
+    if (ST.hasFilters(s)) { var ca = chip("✕ clear", false, go(function () { ST.clearFilters(s); }), "reset repos, docs/code, type, folder and old/tests last; keeps the query"); ca.className += " clear gs"; k.appendChild(ca); }
   }
   // escape the name and the query separately, then wrap the first case-insensitive match (real-case letters kept)
   function hilite(name, q) {

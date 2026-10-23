@@ -17,6 +17,7 @@ import { LiteCtx } from "../src/index.js";
 import { createUi } from "../src/ui/server.js";
 import { detectMode } from "../src/ui/config.js";
 import { isNoisy, search } from "../src/ui/search.js";
+import { Embedder } from "../src/embedder.js";
 
 const BIN = fileURLToPath(new URL("../bin/litectx.js", import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), "litectx-ui-"));
@@ -593,8 +594,14 @@ test("page state round-trips through the URL hash: special chars, several repos,
     repos: ["bare,agent", "x&y=z", "plain"], kinds: { doc: false, code: true }, demote: false, view: "roomy",
   };
   assert.deepEqual(decodeState(encodeState(full)), { ...full });
-  const def = { q: "", sub: "", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, demote: true, view: "table" };
+  const def = { q: "", sub: "", ext: null, folder: null, open: null, repos: [], kinds: { doc: false, code: false }, demote: true, view: "table" };
   assert.equal(encodeState(def), "", "defaults leave the URL clean");
+  assert.deepEqual(decodeState(encodeState({ ...def, kinds: { doc: true, code: true } })).kinds, { doc: true, code: true }, "both chips on round-trips");
+  assert.deepEqual(decodeState(encodeState({ ...def, kinds: { doc: true, code: false } })).kinds, { doc: true, code: false });
+  // old hashes: no key (both were on) = no filter; doc=0 / code=0 (that kind was off) = only the other kind
+  assert.deepEqual(decodeState("#q=x").kinds, { doc: false, code: false });
+  assert.deepEqual(decodeState("#doc=0").kinds, { doc: false, code: true });
+  assert.deepEqual(decodeState("#code=0").kinds, { doc: true, code: false });
   assert.deepEqual(decodeState(""), def);
   assert.deepEqual(decodeState(encodeState({ ...def, q: "x" })), { ...def, q: "x" });
 });
@@ -627,9 +634,9 @@ test("repos named in a query are ADDED to the picked ones (deduped), never repla
 
 test("clear all resets every filter, keeps the query, and hasFilters tells when it is needed", () => {
   const { clearFilters, hasFilters, encodeState } = pageState();
-  const def = { q: "find me", sub: "find me", ext: null, folder: null, open: null, repos: [], kinds: { doc: true, code: true }, demote: true, view: "table" };
+  const def = { q: "find me", sub: "find me", ext: null, folder: null, open: null, repos: [], kinds: { doc: false, code: false }, demote: true, view: "table" };
   assert.equal(hasFilters(def), false, "nothing set: the control stays hidden");
-  for (const dirty of [{ repos: ["a"] }, { ext: "md" }, { folder: "docs" }, { kinds: { doc: false, code: true } }, { kinds: { doc: true, code: false } }, { demote: false }]) {
+  for (const dirty of [{ repos: ["a"] }, { ext: "md" }, { folder: "docs" }, { kinds: { doc: false, code: true } }, { kinds: { doc: true, code: false } }, { kinds: { doc: true, code: true } }, { demote: false }]) {
     assert.equal(hasFilters({ ...def, ...dirty }), true, JSON.stringify(dirty));
   }
   const s = { ...def, repos: ["a", "b"], ext: "md", folder: "docs", kinds: { doc: false, code: true }, demote: false };
@@ -788,6 +795,57 @@ test("page: filter-line order is fixed (docs, code, old/tests last, repos, types
     const click = app.slice(app.indexOf('$("qx").onclick'), app.indexOf('document.addEventListener("keydown"'));
     assert.ok(!/s\.repos|s\.kinds|s\.demote/.test(click), "× leaves repos, docs/code and old/tests last alone");
   } finally {
+    await ui.close();
+  }
+});
+
+test("page: no pipe separators in the filter line; docs/code start OFF; none picked searches both kinds", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    const filters = app.slice(app.indexOf("function renderFilters"), app.indexOf("// escape the name"));
+    assert.ok(!filters.includes("│") && !app.includes("function sep("), "no separator glyphs or helper");
+    assert.match(app, /kinds: \{ doc: false, code: false \}/, "both chips start deselected");
+    assert.match(app, /if \(!kinds\.length\) kinds = \["doc", "code"\]/, "none selected is sent as both kinds");
+    assert.ok(/\.filters \.gs\{margin-left/.test((await get(ui, "/app.css")).text), "groups read apart by spacing");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("search while a meaning pass runs skips the query embed (keywords only); after the pass meaning is back", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  Embedder.prototype.embed = async function (text) {
+    seen.push(text);
+    await gate; // the pass is parked inside a file embed, like the real model blocking behind it
+    return new Float32Array(384).fill(0.05);
+  };
+  const pre = new LiteCtx({ root, childRepos: true });
+  await pre.index(); // already keyword-indexed, so the meaning pass is a backfill and hits exist while it is parked
+  pre.close();
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(seen.length > 0, "precondition: the pass is inside a file embed");
+    assert.equal((await get(ui, "/api/sources")).json().current.indexing, true, "precondition: a pass is running");
+    seen.length = 0;
+    const r = await Promise.race([find(ui, "quokka"), new Promise((_, no) => setTimeout(() => no(new Error("search waited on the embedder")), 3000))]);
+    assert.equal(r.keywordsOnly, true);
+    assert.ok(r.hits.length > 0, "keywords still answer");
+    assert.deepEqual(seen, [], "the query was never embedded during the pass");
+    release();
+    await ui.idle();
+    const after = await find(ui, "quokka");
+    assert.equal(after.keywordsOnly, false);
+    assert.ok(seen.includes("quokka"), "once the pass is done the query is embedded again");
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
     await ui.close();
   }
 });

@@ -31,6 +31,7 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {import("./config.js").Mode} mode
  * @property {boolean} embeddings
  * @property {LiteCtx} ctx
+ * @property {LiteCtx | null} kwCtx   embeddings-off handle on the same db, opened on the first search during a meaning pass
  * @property {string[]} repoNames
  * @property {Promise<void> | null} running   the in-flight index pass, if any
  * @property {string | null} error            last index error
@@ -65,6 +66,7 @@ export async function createUi(opts = {}) {
       mode: m.mode,
       embeddings: s.embeddings === true,
       ctx,
+      kwCtx: null,
       repoNames: m.mode.mode === "repos" ? childRepos(s.path) : [s.name],
       running: null,
       error: null,
@@ -76,6 +78,7 @@ export async function createUi(opts = {}) {
     const old = cur;
     cur = null;
     if (!old) return;
+    old.kwCtx?.close();
     // never close a store under a running index pass
     if (old.running) void old.running.finally(() => old.ctx.close());
     else old.ctx.close();
@@ -346,7 +349,11 @@ export async function createUi(opts = {}) {
     const list = (/** @type {string} */ k) => (sp.get(k) ?? "").split(",").map((x) => x.trim()).filter(Boolean);
     const t = Date.now();
     const o = cur;
-    const r = await search(o.ctx, o.path, o.mode.mode, o.name, sp.get("q") ?? "", {
+    // While a pass runs with meaning on, the in-flight file embed blocks the event loop and a query embed
+    // would wait behind it (~2 s): search by keywords on a second, embeddings-off handle on the same db.
+    const kwOnly = o.embeddings && o.running !== null;
+    if (kwOnly && !o.kwCtx) o.kwCtx = new LiteCtx({ root: o.path, childRepos: o.mode.mode === "repos", embeddings: false });
+    const r = await search(kwOnly && o.kwCtx ? o.kwCtx : o.ctx, o.path, o.mode.mode, o.name, sp.get("q") ?? "", {
       repos: list("repos"),
       kinds: list("kinds"),
       ext: sp.get("ext") || undefined,
@@ -354,7 +361,7 @@ export async function createUi(opts = {}) {
       demote: sp.get("demote") !== "0",
       group: sp.get("group") !== "0",
     });
-    return json(res, 200, { hits: r.rows, facets: r.facets, ms: Date.now() - t, indexing: o.running !== null, source: o.name });
+    return json(res, 200, { hits: r.rows, facets: r.facets, ms: Date.now() - t, indexing: o.running !== null, keywordsOnly: kwOnly, source: o.name });
   }
 
   /** @param {import("node:http").ServerResponse} res @param {URLSearchParams} sp */

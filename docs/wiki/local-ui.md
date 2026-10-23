@@ -94,9 +94,9 @@ environment variable). These are the UI's own settings, separate from
 - **Search line**: a `×` at the end of the box clears the query text only (filters stay; the
   per-search type/folder chips go with the old results), focuses the box and adds a history entry.
   Hidden while the box is empty.
-- **One filter line**, fixed order, groups separated by `│` (the always-there controls never move;
+- **One filter line**, fixed order, groups set apart by spacing (no separator glyphs; the always-there controls never move;
   the per-search suggestions come after):
-  - docs, code, "old/tests last" (archive, poc, tests and logs go to the bottom)
+  - docs, code, "old/tests last" (archive, poc, tests and logs go to the bottom). docs and code start OFF = no filter (both kinds are searched); click one to search only that kind, both on = both. `✕ clear` resets them
   - a typed repo picker with live suggestions (multi-select, ✕ to remove)
   - file-type chips (taken from the results)
   - folder chips (suggested from the current results)
@@ -108,6 +108,7 @@ environment variable). These are the UI's own settings, separate from
   `.env` in the root is refused), or in PyCharm at that line. "open in pycharm" is a button: it POSTs `/api/open {path, line}` and the
   server starts the editor (`<editor> --line N <abs path>`, detached, no shell), with "opening…" →
   "opened" or the error shown beside it. Only indexed files of the active source open.
+- **Keywords only while building**: while the active source runs a pass with meaning on, a search skips the query embedding (the in-flight file embed blocks the event loop, so it would wait ~2 s) and runs on a second embeddings-off handle on the same db; the response carries `keywordsOnly: true` and the top bar says so. After the pass, searches use meaning again.
 - **URL state**: the search lives in the URL hash (query, repos, docs/code, type, folder,
   old/tests last, view, open side view), so Back from the file view, reload and a bookmark restore
   the page and its scroll position. Enter adds a history entry; filter changes replace it.

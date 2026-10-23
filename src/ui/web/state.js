@@ -7,19 +7,26 @@
     var p = new URLSearchParams();
     KEYS.forEach(function (k) { if (s[k]) p.set(k, s[k]); });
     (s.repos || []).forEach(function (r) { p.append("repo", r); });
-    var kinds = s.kinds || { doc: true, code: true };
-    if (!kinds.doc) p.set("doc", "0");
-    if (!kinds.code) p.set("code", "0");
+    var kinds = s.kinds || {};
+    if (kinds.doc) p.set("doc", "1");
+    if (kinds.code) p.set("code", "1");
     if (s.demote === false) p.set("demote", "0");
     if (s.view === "roomy") p.set("view", "roomy");
     var out = p.toString();
     return out ? "#" + out : "";
   }
+  // docs/code are a filter: ON = only that kind, none ON = no filter. An old hash (doc=0 / code=0 meant
+  // "that kind off") maps to the kind still on; an old both-on hash had no key and means no filter.
+  function kindsOf(p) {
+    var doc = p.get("doc"), code = p.get("code");
+    if (doc === "1" || code === "1") return { doc: doc === "1", code: code === "1" };
+    return { doc: code === "0", code: doc === "0" };
+  }
   function decodeState(hash) {
     var p = new URLSearchParams(String(hash || "").replace(/^#/, ""));
     var d = {
       q: p.get("q") || "", sub: p.get("sub") || "", ext: p.get("ext") || null, folder: p.get("folder") || null, open: p.get("open") || null,
-      repos: p.getAll("repo"), kinds: { doc: p.get("doc") !== "0", code: p.get("code") !== "0" },
+      repos: p.getAll("repo"), kinds: kindsOf(p),
       demote: p.get("demote") !== "0", view: p.get("view") === "roomy" ? "roomy" : "table"
     };
     return d;
@@ -32,12 +39,12 @@
   }
   // True when any filter differs from its default (the query itself is not a filter).
   function hasFilters(s) {
-    var k = s.kinds || { doc: true, code: true };
-    return !!((s.repos && s.repos.length) || s.ext || s.folder || !k.doc || !k.code || s.demote === false);
+    var k = s.kinds || {};
+    return !!((s.repos && s.repos.length) || s.ext || s.folder || k.doc || k.code || s.demote === false);
   }
   // "clear all": reset every filter to its default, keep the query. Mutates and returns s.
   function clearFilters(s) {
-    s.repos = []; s.ext = null; s.folder = null; s.kinds = { doc: true, code: true }; s.demote = true;
+    s.repos = []; s.ext = null; s.folder = null; s.kinds = { doc: false, code: false }; s.demote = true;
     return s;
   }
   // "+3 ~1 -0 · 2.1 s" from the server's last index pass

@@ -21,6 +21,7 @@ input.q{width:100%;font:inherit;font-size:15px;background:transparent;color:var(
 .chip[aria-pressed="true"]{color:var(--bg);background:var(--blue);border-color:var(--blue)}
 .chip:disabled{opacity:.7;cursor:progress}
 .chip.clear{color:var(--mute)}
+.filters .gs{margin-left:12px}
 .spin{display:inline-block;width:.8em;height:.8em;border:2px solid var(--mute);border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:4px}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.spin{animation:none;border-top-color:var(--mute);border-style:dotted}}
