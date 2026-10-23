@@ -1015,3 +1015,34 @@ test("regression: the roomy view renders every hit, same results as the table vi
     await ui.close();
   }
 });
+
+test("regression: toggling meaning while a pass is mid-embed does not start a second pass on the same db until the first ends", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  const seen = [];
+  let release;
+  const gate = new Promise((r) => (release = r));
+  Embedder.prototype.embed = async function (text) {
+    seen.push(text);
+    await gate; // the first pass's in-flight embed
+    return new Float32Array(384).fill(0.05);
+  };
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(seen.length, 1, "precondition: the first pass is parked inside its first embed");
+    const name = (await get(ui, "/api/sources")).json().current.name;
+    await req(ui, "POST", "/api/sources", { body: { name, embeddings: false } });
+    await req(ui, "POST", "/api/sources", { body: { name, embeddings: true } }); // a second meaning pass, while the first is still in flight
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(seen.length, 1, "the new pass waits: it has not started embedding while the old pass is in flight");
+    release();
+    await ui.idle();
+    assert.ok(seen.length > 1, "after the old pass ended, the new pass ran");
+    assert.equal((await get(ui, "/api/sources")).json().current.indexing, false);
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});

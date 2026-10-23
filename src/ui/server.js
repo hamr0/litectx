@@ -50,6 +50,8 @@ export async function createUi(opts = {}) {
   let cur = null;
   /** @type {string | null} */
   let curError = null;
+  /** Settles when every pass of a closed source has finished (each ends within one in-flight embed of its abort). @type {Promise<unknown>} */
+  let settling = Promise.resolve();
   let cfg = loadConfig();
 
   /** @param {import("./config.js").Source} s */
@@ -83,8 +85,10 @@ export async function createUi(opts = {}) {
     old.kwCtx?.close();
     old.abort?.abort(); // a pass for a source nobody is looking at stops at its next file/embed; its vectors so far are kept
     // never close a store under a running index pass
-    if (old.running) void old.running.finally(() => old.ctx.close());
-    else old.ctx.close();
+    if (old.running) {
+      void old.running.finally(() => old.ctx.close());
+      settling = Promise.all([settling, old.running]); // a new pass waits for this one (never two passes on one db)
+    } else old.ctx.close();
   }
 
   /** One incremental index pass of the active source; concurrent callers share it. @returns {Promise<void>} */
@@ -97,6 +101,13 @@ export async function createUi(opts = {}) {
     o.running = (async () => {
       const t = Date.now();
       try {
+        // the previous pass (aborted, finishing its in-flight embed) must end first; an abort of THIS pass
+        // (cancel, Ctrl+C) cuts the wait short so close() stays prompt
+        await new Promise((ok) => {
+          settling.then(ok, ok);
+          ac.signal.addEventListener("abort", ok, { once: true });
+        });
+        if (ac.signal.aborted) return;
         const r = await o.ctx.index({ yield: true, signal: ac.signal }); // a cold pass is long; yield so the page + API keep answering
         o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, skipped: r.skipped, aborted: r.aborted, embedded: r.embedded, embedPending: r.embedPending, ms: Date.now() - t };
         for (const k of r.skipped) console.error(`litectx ui: warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
