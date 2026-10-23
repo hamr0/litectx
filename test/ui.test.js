@@ -799,6 +799,22 @@ test("page: filter-line order is fixed (docs, code, old/tests last, repos, types
   }
 });
 
+test("page: the side view is sticky in the viewport, so it sits across from a result clicked far down a long list", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const css = (await get(ui, "/app.css")).text;
+    const rule = css.match(/(?:^|\n)aside\{([^}]*)\}/)?.[1] ?? "";
+    assert.match(rule, /position:sticky/, "stays in view while the list scrolls");
+    assert.match(rule, /align-self:start/, "not stretched to the full height of the list");
+    assert.match(rule, /max-height:calc\(100vh/, "a tall file view scrolls inside it");
+    const phone = css.slice(css.indexOf("@media (max-width:700px)"));
+    assert.match(phone, /aside\{[^}]*position:static/, "stacked phone layout is not sticky");
+  } finally {
+    await ui.close();
+  }
+});
+
 test("page: no pipe separators in the filter line; docs/code start OFF; none picked searches both kinds", async () => {
   scratch();
   const ui = await createUi({ port: 0 });

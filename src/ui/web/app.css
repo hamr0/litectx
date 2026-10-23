@@ -45,7 +45,7 @@ tr.hit.cur,article.cur{background:var(--sel)}
 article.hit{padding:12px 6px;border-bottom:1px dashed var(--line);cursor:pointer}
 article .title{font-size:16px;color:var(--blue)}
 article pre{border-left:2px solid var(--line);padding-left:10px}
-aside{border-left:1px solid var(--line);padding-left:12px}
+aside{border-left:1px solid var(--line);padding-left:12px;position:sticky;top:12px;align-self:start;max-height:calc(100vh - 24px);overflow:auto}
 aside pre.code{color:var(--text);background:var(--panel);padding:8px;margin:8px 0}
 .between-line{display:flex;justify-content:space-between;gap:8px}
 .suggest{position:absolute;top:100%;left:0;z-index:40;background:var(--panel);border:1px solid var(--line);min-width:14em}
@@ -56,7 +56,7 @@ aside pre.code{color:var(--text);background:var(--panel);padding:8px;margin:8px 
 .panel input[type=text]{font:inherit;background:var(--bg);color:var(--text);border:1px solid var(--line);padding:3px 8px;min-height:28px}
 .panel .src{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:4px 0;border-top:1px solid var(--line)}
 .others a{display:block}
-@media (max-width:700px){.split.open{grid-template-columns:1fr}.hide-sm{display:none}aside{border-left:0;padding-left:0}}
+@media (max-width:700px){.split.open{grid-template-columns:1fr}.hide-sm{display:none}aside{border-left:0;padding-left:0;position:static;max-height:none;overflow:visible}}
 /* file viewer */
 body.viewer pre.file{color:var(--text);font-size:13px;margin:8px 0}
 .ln{white-space:pre-wrap}.ln.on{background:var(--sel)}.ln .no{display:inline-block;width:5em;color:var(--mute);user-select:none}
