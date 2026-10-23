@@ -38,7 +38,7 @@
       s.st = st; $("title").innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
       if (!st.sources.length) s.settings = true;
       var ix = !!(st.current && st.current.indexing);
-      if (ix && !s.busy) s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; // a pass the server started itself
+      if (ix && !s.busy) { s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; clearInterval(tickTimer); tickTimer = setInterval(tick, 1000); } // a pass the server started itself
       if (!ix && s.busy && !s.busy.pending) endBusy(st);
       renderTop(); renderPanel(); renderFilters();
       return st;
@@ -102,8 +102,9 @@
   function refresh() { return loadState().then(function () { poll(); return runSearch(); }); }
 
   // ---- top bar + settings -------------------------------------------------------------------------
+  var topSig = null;
   function renderTop() {
-    var t = $("top"); t.innerHTML = "";
+    var t = $("top");
     var st = s.st, c = st && st.current;
     var bar = el("div", "topbar");
     var left = el("div", "row");
@@ -148,7 +149,12 @@
     }, "auto → light → dark");
     th.textContent = "theme: " + (document.documentElement.getAttribute("data-theme") || "auto");
     right.appendChild(th);
-    bar.appendChild(left); bar.appendChild(right); t.appendChild(bar);
+    bar.appendChild(left); bar.appendChild(right);
+    // status polls re-render this bar every 1.5 s: if nothing visible changed (the elapsed seconds aside, which tick() keeps
+    // current), keep the live DOM so a focused chip stays focused and a click never lands on a replaced element
+    var sig = bar.outerHTML.replace(/<span id="elapsed">[^<]*<\/span>/, "") + "|" + (st && st.active);
+    if (sig === topSig && t.firstChild) return;
+    topSig = sig; t.innerHTML = ""; t.appendChild(bar);
   }
   function fail(e) { s.msg = e.message; renderPanel(); renderResults(); }
 

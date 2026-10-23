@@ -17,6 +17,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **`litectx ui`: a focused top-bar chip (e.g. "cancel re-index") keeps focus while a pass runs.** The status poll rebuilt the whole top bar every 1.5 s, dropping keyboard focus and replacing the button under a click. The bar is now left alone when nothing visible changed except the elapsed seconds.
 - **`litectx ui`: Ctrl+C now stops it at once, even during a long first build, and keeps the work done.** Shutdown used to wait for the whole running index/meaning pass (about 15 minutes on a 7,000-file source). It now aborts the pass (after at most one in-flight embed) and exits.
 - **`litectx ui`: removing a source no longer shows "removing …" until the next source's pass ends.** The label is dropped when the remove call returns; a pass started for the next source shows as its own "re-indexing…".
 - **`litectx ui`: typing a repo name no longer gets cut off.** Any rebuild of the filter line (the status poll while an index pass runs, a search reply) replaced the repo box, dropping what you had typed and closing the suggestions. The box is now kept across rebuilds, with its text, caret, focus and open list.
