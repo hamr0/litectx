@@ -4,11 +4,12 @@
 // string HTML-escaped, JSON for the API, and no user input ever reaches a shell.
 
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LiteCtx } from "../index.js";
 import { childRepos } from "../indexer.js";
-import { detectMode, describeMode, loadConfig, logPath, saveConfig } from "./config.js";
+import { detectMode, describeMode, loadConfig, logPath, resolveEditor, saveConfig } from "./config.js";
 import { search } from "./search.js";
 
 const MAX_BODY = 64 * 1024;
@@ -302,7 +303,41 @@ export async function createUi(opts = {}) {
       appendFileSync(logPath(), JSON.stringify(line) + "\n");
       return json(res, 200, { ok: true });
     }
+    if (p === "/api/open" && method === "POST") {
+      const b = obj(await readJson(req));
+      if (typeof b.path !== "string" || !Number.isInteger(b.line) || /** @type {number} */ (b.line) < 1) throw new HttpError(400, "expected {path, line} with line a positive integer");
+      const { target } = indexedFile(b.path);
+      const ed = resolveEditor(cfg.editor);
+      if (!ed.ok) throw new HttpError(404, ed.error);
+      await launch(ed.path, ["--line", String(b.line), target]);
+      return json(res, 200, { ok: true });
+    }
     throw new HttpError(404, "not found");
+  }
+
+  /**
+   * Resolve a root-relative path to a file of the ACTIVE source's index. Confinement: resolve symlinks on
+   * BOTH sides, then require the target to sit inside the root (a lexical `../` check alone is not enough --
+   * a tracked symlink can point anywhere). Membership: only indexed files (an untracked `.env` inside the
+   * root is not), by one store lookup keyed by the canonical root-relative path -- no git per request.
+   * @param {string} rel
+   * @returns {{ target: string, rp: string }}
+   */
+  function indexedFile(rel) {
+    if (!cur) throw new HttpError(400, "no active source");
+    if (!rel || rel.includes("\0")) throw new HttpError(400, "bad path");
+    let rootReal, target;
+    try {
+      rootReal = realpathSync(cur.path);
+      target = realpathSync(resolve(rootReal, rel));
+    } catch {
+      throw new HttpError(404, "not found");
+    }
+    const rp = relative(rootReal, target);
+    if (rp === "" || rp === ".." || rp.startsWith(`..${sep}`) || isAbsolute(rp)) throw new HttpError(403, "outside the source root");
+    const node = cur.ctx.getNode(rp.split(sep).join("/"));
+    if (!node || node.source !== "file") throw new HttpError(404, "not an indexed file");
+    return { target, rp };
   }
 
   /** @param {import("node:http").ServerResponse} res @param {URLSearchParams} sp */
@@ -324,24 +359,8 @@ export async function createUi(opts = {}) {
 
   /** @param {import("node:http").ServerResponse} res @param {URLSearchParams} sp */
   function view(res, sp) {
-    if (!cur) throw new HttpError(400, "no active source");
+    const { target } = indexedFile(sp.get("p") ?? "");
     const rel = sp.get("p") ?? "";
-    if (!rel || rel.includes("\0")) throw new HttpError(400, "bad path");
-    // Confinement: resolve symlinks on BOTH sides, then require the target to sit inside the root. A
-    // lexical `../` check alone is not enough — a tracked symlink can point anywhere.
-    let rootReal, target;
-    try {
-      rootReal = realpathSync(cur.path);
-      target = realpathSync(resolve(rootReal, rel));
-    } catch {
-      throw new HttpError(404, "not found");
-    }
-    const rp = relative(rootReal, target);
-    if (rp === "" || rp === ".." || rp.startsWith(`..${sep}`) || isAbsolute(rp)) throw new HttpError(403, "outside the source root");
-    // Membership: only files in the active source's index are served (an untracked `.env` inside the root
-    // is not). One lookup in the store, keyed by the canonical root-relative path -- no git per request.
-    const node = cur.ctx.getNode(rp.split(sep).join("/"));
-    if (!node || node.source !== "file") throw new HttpError(404, "not an indexed file");
     const st = statSync(target);
     if (!st.isFile()) throw new HttpError(404, "not a file");
     if (st.size > MAX_VIEW_BYTES) throw new HttpError(413, "file too large to view");
@@ -384,6 +403,21 @@ export async function createUi(opts = {}) {
       closeCurrent();
     },
   };
+}
+
+/**
+ * Start the editor detached, no shell, argv only. Settles once the process has spawned (or failed to).
+ * @param {string} bin @param {string[]} args @returns {Promise<void>}
+ */
+function launch(bin, args) {
+  return new Promise((ok, fail) => {
+    const c = spawn(bin, args, { detached: true, stdio: "ignore" });
+    c.once("error", (e) => fail(new HttpError(500, `could not start the editor: ${e.message}`)));
+    c.once("spawn", () => {
+      c.unref();
+      ok();
+    });
+  });
 }
 
 class HttpError extends Error {

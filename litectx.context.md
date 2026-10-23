@@ -1333,8 +1333,11 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   `localhost:<port>` are refused (DNS rebinding); POST/DELETE with a foreign `Origin` are refused;
   `/view` serves only files that are in the active source's index (an untracked `.env` in the root
   is refused) and whose real path is inside the source root (`../` and symlink escapes are rejected); everything rendered is HTML-escaped and a strict CSP is set. There is no
-  authentication, so do not forward the port. The *open in PyCharm* link uses
-  `pycharm://open?file=<abs>&line=<n>` and needs the IDE's URL handler.
+  authentication, so do not forward the port. The *open in PyCharm* button
+  POSTs `/api/open {path, line}` and the server runs `<editor> --line N <abs path>` detached (no shell; same
+  Host/Origin checks and indexed-only rule as `/view`). The launcher is the `editor` field of
+  `~/.litectx/ui.json`, else auto-detected (`pycharm` on PATH, `/opt/pycharm/bin/pycharm`, JetBrains Toolbox,
+  snap); none found is an error naming the setting.
 
 ### `litectx-mcp` (MCP server)
 

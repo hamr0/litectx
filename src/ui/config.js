@@ -1,7 +1,7 @@
 // `litectx ui` settings: the sources list (~/.litectx/ui.json) and per-path mode detection.
 // These are the UI's own settings, separate from LiteCtxConfig (docs/wiki/local-ui.md).
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { childRepos } from "../indexer.js";
@@ -12,7 +12,7 @@ import { childRepos } from "../indexer.js";
  * @property {string} path         absolute directory
  * @property {boolean} [embeddings]  meaning re-rank on for this source (default off)
  */
-/** @typedef {{ active: string | null, sources: Source[] }} UiConfig */
+/** @typedef {{ active: string | null, sources: Source[], editor?: string }} UiConfig  `editor`: absolute path of the IDE launcher */
 /** @typedef {{ mode: "repo" | "repos", repos: number }} Mode */
 
 /** Where the settings live. `LITECTX_UI_CONFIG` overrides the default (tests; relocated homes). @returns {string} */
@@ -37,7 +37,7 @@ export function loadConfig() {
       }
     }
     const active = typeof j?.active === "string" && sources.some((s) => s.name === j.active) ? j.active : (sources[0]?.name ?? null);
-    return { active, sources };
+    return { active, sources, ...(typeof j?.editor === "string" && j.editor ? { editor: j.editor } : {}) };
   } catch {
     return { active: null, sources: [] };
   }
@@ -81,4 +81,40 @@ export function detectMode(path) {
 /** @param {Mode} m @returns {string} e.g. "all repos (45 found)" */
 export function describeMode(m) {
   return m.mode === "repo" ? "one repo" : `all repos (${m.repos} found)`;
+}
+
+const NO_EDITOR = 'PyCharm not found; set "editor" in ~/.litectx/ui.json';
+
+/** @param {string} p @returns {boolean} an existing, executable regular file */
+function runnable(p) {
+  try {
+    if (!statSync(p).isFile()) return false;
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the editor launcher to run for "open in PyCharm". The `editor` setting (absolute path) wins and is
+ * never second-guessed; otherwise: `pycharm` on PATH, then the usual Linux install locations.
+ * @param {string | undefined} editor  the `editor` field of ui.json
+ * @returns {{ ok: true, path: string } | { ok: false, error: string }}
+ */
+export function resolveEditor(editor) {
+  if (editor !== undefined) {
+    if (isAbsolute(editor) && runnable(editor)) return { ok: true, path: editor };
+    return { ok: false, error: `editor '${editor}' in ~/.litectx/ui.json is not an executable file` };
+  }
+  const onPath = (process.env.PATH ?? "").split(":").filter(Boolean).map((d) => join(d, "pycharm"));
+  const candidates = [
+    ...onPath,
+    "/opt/pycharm/bin/pycharm",
+    join(homedir(), ".local/share/JetBrains/Toolbox/scripts/pycharm"),
+    "/snap/bin/pycharm-professional",
+    "/snap/bin/pycharm-community",
+  ];
+  for (const c of candidates) if (isAbsolute(c) && runnable(c)) return { ok: true, path: c };
+  return { ok: false, error: NO_EDITOR };
 }

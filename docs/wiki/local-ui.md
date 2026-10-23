@@ -67,9 +67,15 @@ environment variable). These are the UI's own settings, separate from
   "sources": [
     { "name": "litectx", "path": "/home/hamr/PycharmProjects/litectx" },
     { "name": "pycharm", "path": "/home/hamr/PycharmProjects" }
-  ]
+  ],
+  "editor": "/opt/pycharm/bin/pycharm"
 }
 ```
+
+- **`editor`** (optional): absolute path of the launcher that "open in pycharm" runs. Unset, the
+  server tries `pycharm` on PATH, `/opt/pycharm/bin/pycharm`, the JetBrains Toolbox script,
+  then `/snap/bin/pycharm-professional` and `-community`; none found → the page shows
+  `PyCharm not found; set "editor" in ~/.litectx/ui.json`.
 
 - **First run** (no sources): the page opens on the Add form. Submit a name and a path; it is
   checked, the mode is detected, and the source is indexed.
@@ -85,16 +91,23 @@ environment variable). These are the UI's own settings, separate from
 
 - **Top bar**: source dropdown, file count and timing; re-index and meaning controls on the right.
 - **Search line**.
-- **One filter line**, groups separated by `│`:
-  - docs/code and file type (taken from the results)
+- **Search line**: a `×` at the end of the box clears the query text only (filters stay; the
+  per-search type/folder chips go with the old results), focuses the box and adds a history entry.
+  Hidden while the box is empty.
+- **One filter line**, fixed order, groups separated by `│` (the always-there controls never move;
+  the per-search suggestions come after):
+  - docs, code, "old/tests last" (archive, poc, tests and logs go to the bottom)
   - a typed repo picker with live suggestions (multi-select, ✕ to remove)
-  - folder chips suggested from the current results
-  - "old/tests last" (archive, poc, tests and logs go to the bottom)
+  - file-type chips (taken from the results)
+  - folder chips (suggested from the current results)
+  - `✕ clear` last, only while a filter is set (resets filters, keeps the query)
 - **View switch** (sliding, `table ●— roomy`) on the line above the results.
 - **Table view**: hover a row for a quick-look popup. Roomy view shows the top 5 with a 3-line
   preview. Click any result to open a side view with line numbers, "+N more sections" and two
   links: open the file in the browser (same tab, `/view`; only indexed files open, so an untracked
-  `.env` in the root is refused), or in PyCharm at that line.
+  `.env` in the root is refused), or in PyCharm at that line. "open in pycharm" is a button: it POSTs `/api/open {path, line}` and the
+  server starts the editor (`<editor> --line N <abs path>`, detached, no shell), with "opening…" →
+  "opened" or the error shown beside it. Only indexed files of the active source open.
 - **URL state**: the search lives in the URL hash (query, repos, docs/code, type, folder,
   old/tests last, view, open side view), so Back from the file view, reload and a bookmark restore
   the page and its scroll position. Enter adds a history entry; filter changes replace it.

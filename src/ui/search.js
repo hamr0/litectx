@@ -22,7 +22,7 @@ export function isNoisy(segs, file) {
  * @property {string} folder    directory inside the repo ("" at the top)
  * @property {string} file
  * @property {string} path      index-relative path (the handle for /view)
- * @property {string} abs       absolute path on disk (for the PyCharm link)
+ * @property {string} abs       absolute path on disk (display only; the editor is launched by the server from `path`)
  * @property {string} kind
  * @property {number} score
  * @property {boolean} keyword

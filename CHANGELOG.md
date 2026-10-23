@@ -14,6 +14,8 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **`litectx ui`: "open in PyCharm" now works without a registered `pycharm://` URL handler.** The button POSTs `/api/open` and the server launches the editor (`--line N <abs path>`, detached, no shell) for an indexed file of the active source; the launcher is the `editor` field of `ui.json` or auto-detected, with a clear error if none is found. The filter line has a fixed control order, and a `×` in the search box clears the query only.
+
 - **`litectx ui`: naming a repo buried its docs behind its code.** Results were interleaved doc/code by global rank before the repo filter ran, so a repo's code held early slots and its docs late ones. The filter now runs first, then the interleave (a doc-heavy query naming a repo went from rank 54 to 7 for the repo's README in the investigated case).
 - **`litectx ui`: picked repos reset on every new search.** Repos picked by hand now stay until removed (✕) or cleared; repo names typed in the query are added, not substituting. New `✕ clear` on the filter line resets repos, docs/code, type, folder and old/tests last (the query stays).
 - **`litectx ui`: buttons now respond instantly.** re-index, meaning, source switch/add/remove show a busy state (spinner, label, elapsed seconds; static under reduced motion) at click time, and the result ("+3 ~1 -0 · 2.1 s") when the pass ends. If the optional peer `@huggingface/transformers` is missing, the page says so instead of silently showing "meaning: on" while searching by keywords only.

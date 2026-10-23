@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -672,5 +672,122 @@ test("naming a repo: its docs and code alternate from the top (filter BEFORE the
     assert.deepEqual(rows.slice(0, 2).map((r) => r.kind).sort(), ["code", "doc"], "first two = one doc + one code of alpha");
   } finally {
     ctx.close();
+  }
+});
+
+// ---- open in PyCharm: the server launches the editor ----------------------------------------------------
+
+/** a fake editor: an executable script that appends its argv (one arg per line) to a file */
+function fakeEditor(dir) {
+  const out = join(dir, "argv.txt");
+  const bin = join(dir, "fake-editor");
+  writeFileSync(bin, `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done > '${out}'\n`);
+  chmodSync(bin, 0o755);
+  return { bin, out };
+}
+async function waitFor(file) {
+  for (let i = 0; i < 100 && !existsSync(file); i++) await new Promise((r) => setTimeout(r, 20));
+  return existsSync(file) ? readFileSync(file, "utf8") : null;
+}
+/** a one-repo server with a fake editor configured; `.env` is on disk but untracked */
+async function editorUi(editor) {
+  const dir = scratch();
+  const root = join(dir, "r");
+  repo(root, { "a.js": "export const a = 1;\nexport const b = 2;\n" });
+  writeFileSync(join(root, ".env"), "SECRET=1\n");
+  const fake = fakeEditor(dir);
+  mkdirSync(join(dir, "cfg"), { recursive: true });
+  writeFileSync(process.env.LITECTX_UI_CONFIG, JSON.stringify({ active: "r", sources: [{ name: "r", path: root }], editor: editor ?? fake.bin }));
+  const ui = await createUi({ port: 0 });
+  await ui.idle();
+  return { ui, root, fake };
+}
+
+test("/api/open launches the configured editor with `--line N <abs path>` (no shell)", async () => {
+  const { ui, root, fake } = await editorUi();
+  try {
+    const r = await post(ui, "/api/open", { path: "a.js", line: 2 });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(await waitFor(fake.out), `--line\n2\n${join(root, "a.js")}\n`);
+    assert.equal(cfg().editor, fake.bin, "editor survives a config rewrite");
+    await post(ui, "/api/sources", { path: root }); // a state-changing save must keep the editor field
+    assert.equal(cfg().editor, fake.bin);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("/api/open refuses an untracked file, an outside path, and a bad line", async () => {
+  const { ui, fake } = await editorUi();
+  try {
+    assert.equal((await post(ui, "/api/open", { path: ".env", line: 1 })).status, 404);
+    assert.equal((await post(ui, "/api/open", { path: "../x", line: 1 })).status, 404);
+    for (const line of [0, -1, 1.5, "3", null, undefined]) assert.equal((await post(ui, "/api/open", { path: "a.js", line })).status, 400, String(line));
+    assert.equal((await post(ui, "/api/open", { line: 1 })).status, 400);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(!existsSync(fake.out), "the editor was never started");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("/api/open: a foreign Origin is refused and the editor is not started; bad Host too", async () => {
+  const { ui, fake } = await editorUi();
+  try {
+    assert.equal((await post(ui, "/api/open", { path: "a.js", line: 1 }, { origin: "http://evil.example.com" })).status, 403);
+    assert.equal((await post(ui, "/api/open", { path: "a.js", line: 1 }, { host: "evil.example.com" })).status, 403);
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(!existsSync(fake.out), "the editor was never started");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("/api/open: a missing editor gives a clear error", async () => {
+  const { ui } = await editorUi("/nonexistent/dir/pycharm");
+  try {
+    const r = await post(ui, "/api/open", { path: "a.js", line: 1 });
+    assert.equal(r.status, 404);
+    assert.match(r.json().error, /editor '\/nonexistent\/dir\/pycharm' in ~\/\.litectx\/ui\.json is not an executable file/);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("resolveEditor: nothing configured and nothing installed says where to set it", async () => {
+  const { resolveEditor } = await import("../src/ui/config.js");
+  const oldPath = process.env.PATH, oldHome = process.env.HOME;
+  process.env.PATH = "/nonexistent-bin";
+  process.env.HOME = join(tmp, "nohome");
+  try {
+    const r = resolveEditor(undefined);
+    // /opt and /snap are absolute system locations: only assert the message when none exists here
+    if (!existsSync("/opt/pycharm/bin/pycharm") && !existsSync("/snap/bin/pycharm-professional") && !existsSync("/snap/bin/pycharm-community")) {
+      assert.deepEqual(r, { ok: false, error: 'PyCharm not found; set "editor" in ~/.litectx/ui.json' });
+    }
+    writeFileSync(join(tmp, "pycharm"), "#!/bin/sh\n");
+    chmodSync(join(tmp, "pycharm"), 0o755);
+    process.env.PATH = tmp;
+    assert.deepEqual(resolveEditor(undefined), { ok: true, path: join(tmp, "pycharm") }, "found on PATH");
+  } finally {
+    process.env.PATH = oldPath;
+    process.env.HOME = oldHome;
+  }
+});
+
+test("page: filter-line order is fixed (docs, code, old/tests last, repos, types, folders, clear) and × clears the query only", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    const at = (needle) => app.indexOf(needle, app.indexOf("function renderFilters"));
+    const order = [at('chip("docs"'), at('chip("code"'), at('chip("old/tests last"'), at("repoInput()"), at("s.facets.exts.forEach"), at("s.facets.folders.slice"), at("ST.hasFilters(s)")];
+    assert.ok(order.every((i) => i > 0), "all controls present");
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), "controls in the fixed order");
+    assert.ok(app.includes('aria-label="clear search"') && app.includes("$(\"qx\").onclick"));
+    const click = app.slice(app.indexOf('$("qx").onclick'), app.indexOf('document.addEventListener("keydown"'));
+    assert.ok(!/s\.repos|s\.kinds|s\.demote/.test(click), "× leaves repos, docs/code and old/tests last alone");
+  } finally {
+    await ui.close();
   }
 });

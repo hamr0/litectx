@@ -15,6 +15,7 @@ a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}
 .topbar .row>.dim,.topbar .row>.err{min-width:0;overflow-wrap:anywhere}
 .row.filters{margin:8px 0}
 input.q{width:100%;font:inherit;font-size:15px;background:transparent;color:var(--fg);border:0;outline:0;padding:6px 0;min-height:36px}
+.qx{font:inherit;font-size:18px;line-height:1;background:transparent;color:var(--mute);border:0;cursor:pointer;padding:0 6px;min-height:28px}.qx:hover,.qx:focus-visible{color:var(--fg)}.qx[hidden]{display:none}
 .searchbox{display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--line)}
 .chip{font:inherit;font-size:13px;background:transparent;color:var(--text);border:1px solid var(--line);padding:2px 8px;cursor:pointer;min-height:28px;border-radius:0}
 .chip[aria-pressed="true"]{color:var(--bg);background:var(--blue);border-color:var(--blue)}

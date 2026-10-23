@@ -7,7 +7,7 @@
   var app = $("app");
   app.innerHTML =
     '<div id="title" class="dim"></div><div id="top"></div><div id="panel"></div>' +
-    '<label class="searchbox"><span class="kw" aria-hidden="true">$</span><input id="q" class="q" aria-label="search" autocomplete="off" autofocus></label>' +
+    '<label class="searchbox"><span class="kw" aria-hidden="true">$</span><input id="q" class="q" aria-label="search" autocomplete="off" autofocus><button type="button" id="qx" class="qx" aria-label="clear search" title="clear search" hidden>×</button></label>' +
     '<div id="filters" class="row filters"></div><div id="viewrow" class="row"></div><div id="results"></div>';
   var tip = document.createElement("div");
   tip.id = "tip"; tip.setAttribute("role", "tooltip"); document.body.appendChild(tip);
@@ -177,16 +177,17 @@
   function renderFilters() {
     var k = $("filters"); k.innerHTML = "";
     var go = function (fn) { return function () { fn(); runSearch(); }; };
+    // fixed order: the always-there controls first so they never move; the per-search suggestions after
     k.appendChild(chip("docs", s.kinds.doc, go(function () { s.kinds.doc = !s.kinds.doc; })));
     k.appendChild(chip("code", s.kinds.code, go(function () { s.kinds.code = !s.kinds.code; })));
-    s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); });
+    k.appendChild(chip("old/tests last", s.demote, go(function () { s.demote = !s.demote; }), "archive, poc, tests and logs go to the bottom"));
     k.appendChild(sep());
     s.repos.forEach(function (r) { k.appendChild(chip(r + " ✕", true, go(function () { s.repos = s.repos.filter(function (x) { return x !== r; }); }), "remove filter")); });
     k.appendChild(repoInput());
     k.appendChild(sep());
-    s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); });
+    s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); });
     k.appendChild(sep());
-    k.appendChild(chip("old/tests last", s.demote, go(function () { s.demote = !s.demote; }), "archive, poc, tests and logs go to the bottom"));
+    s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); });
     if (ST.hasFilters(s)) { var ca = chip("✕ clear", false, go(function () { ST.clearFilters(s); }), "reset repos, docs/code, type, folder and old/tests last; keeps the query"); ca.className += " clear"; k.appendChild(ca); }
   }
   // escape the name and the query separately, then wrap the first case-insensitive match (real-case letters kept)
@@ -219,10 +220,13 @@
   }
 
   // ---- results ------------------------------------------------------------------------------------
-  function pycharmUrl(h) {
-    // pycharm://open?file=<abs>&line=<n>  -- the JetBrains URL handler. TODO(owner): verify this scheme
-    // opens the file at that line on your machine (needs the Toolbox/IDE URL handler registered).
-    return "pycharm://open?file=" + encodeURIComponent(h.abs) + "&line=" + h.start;
+  // "open in pycharm": the server launches the editor (no URL handler needed); feedback shows beside the button
+  function openInEditor(h, btn, note) {
+    btn.disabled = true; note.className = "dim"; note.textContent = " opening…";
+    api("POST", "/api/open", { path: h.path, line: h.start })
+      .then(function () { note.textContent = " opened"; })
+      .catch(function (e) { note.className = "err"; note.textContent = " " + e.message; })
+      .then(function () { btn.disabled = false; });
   }
   function viewUrl(h, a, b) { return "/view?p=" + encodeURIComponent(h.path) + "&s=" + a + "&e=" + b + "#L" + a; }
   function marker(h) { return h.keyword ? '<span class="kw">keyword match</span>' : '<span class="mo">meaning only</span>'; }
@@ -253,6 +257,8 @@
       n.onclick = function () { openHit(i); };
       n.onkeydown = function (e) { if (e.key === "Enter") openHit(i); };
     });
+    var eb = out.querySelector("[data-editor]");
+    if (eb && cur) eb.onclick = function () { openInEditor(cur, eb, out.querySelector("[data-editor-note]")); };
     var x = out.querySelector("[data-close]"); if (x) x.onclick = function () { s.open = null; renderResults(); };
     var m = out.querySelector("[data-more]"); if (m) m.onclick = function () { s.openOthers = !s.openOthers; renderResults(); };
   }
@@ -284,7 +290,7 @@
       '<pre class="code">' + lines + "</pre>" +
       (h.more ? '<button class="lnk" data-more>+' + h.more + " more sections in this file</button><br>" : "") +
       (h.more && s.openOthers ? '<div class="others">' + h.others.map(function (o) { return '<a href="' + esc(viewUrl(h, o.start, o.end)) + '">' + esc(o.symbol || "lines") + ' <span class="dim">' + o.start + "–" + o.end + "</span></a>"; }).join("") + "</div>" : "") +
-      '<a href="' + esc(viewUrl(h, h.start, h.end)) + '">open full file</a> · <a href="' + esc(pycharmUrl(h)) + '">open in pycharm</a>';
+      '<a href="' + esc(viewUrl(h, h.start, h.end)) + '">open full file</a> · <button class="lnk" data-editor>open in pycharm</button><span data-editor-note></span>';
   }
   function showTip(h, e) {
     tip.innerHTML = '<div class="dim">' + esc(h.repo) + "/" + esc(h.folder) + "/" + esc(h.file) + "</div><div>" + (h.symbol ? '<span class="sym">§ ' + esc(h.symbol) + "</span> " : "") +
@@ -317,7 +323,7 @@
     clearTimeout(scrollTimer);
     scrollTimer = setTimeout(function () { history.replaceState({ y: window.scrollY }, "", location.href); }, 100);
   });
-  window.addEventListener("popstate", function () { applyHash(); renderFilters(); runSearch().then(restoreScroll); });
+  window.addEventListener("popstate", function () { applyHash(); syncQx(); renderFilters(); runSearch().then(restoreScroll); });
 
   // ---- wiring -------------------------------------------------------------------------------------
   $("q").onkeydown = function (e) {
@@ -331,8 +337,17 @@
     }
     s.q = q; sync(true); runSearch();
   };
+  // × in the search box: clears the query text only (repos, docs/code, old/tests last stay); the per-search
+  // type/folder suggestions go with the results they came from
+  function syncQx() { $("qx").hidden = !$("q").value; }
+  $("q").addEventListener("input", syncQx);
+  $("qx").onclick = function () {
+    var q = $("q"); q.value = ""; s.q = ""; s.sub = ""; s.open = null; s.folder = null; s.ext = null; s.facets = { exts: [], folders: [] };
+    syncQx(); sync(true); renderFilters(); runSearch(); q.focus();
+  };
   document.addEventListener("keydown", function (e) { if (e.key === "Escape" && s.open) { s.open = null; renderResults(); } });
   applyHash();
+  syncQx();
   renderResults();
   refresh().then(restoreScroll);
 })();
