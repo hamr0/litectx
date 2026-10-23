@@ -83,14 +83,13 @@ environment variable). These are the UI's own settings, separate from
   version is read from litectx's own package.json by the server (also in the tab title).
 - **Top bar**: `pycharm ▾ · 7,108 files · ↻ re-index · meaning: off`. Picking another source makes
   it the remembered default.
-- **Settings page**: lists sources (name, path, mode, file count) with Add, Remove and Set default.
+- **Settings page**: lists sources (name, path, mode) with Add, Remove and Set default.
   Remove never deletes a one-repo index, because agents use it. For an all-repos index, an "also
   delete its index" box is offered, unticked by default.
 
 ## Page (variant F)
 
 - **Top bar**: source dropdown, file count and timing; re-index and meaning controls on the right.
-- **Search line**.
 - **Search line**: a `×` at the end of the box clears the query text only (filters stay; the
   per-search type/folder chips go with the old results), focuses the box and adds a history entry.
   Hidden while the box is empty.
@@ -116,6 +115,7 @@ environment variable). These are the UI's own settings, separate from
 - The repo box survives filter-line rebuilds (status poll during a pass, search replies): text, caret, focus and list are kept.
 - **Repo filters are sticky**: repos picked by hand stay until ✕ or `✕ clear`; repo names typed in the query are added (deduped), never replacing. `✕ clear` (shown only when a filter is set) resets repos, docs/code, type, folder and old/tests last, keeps the query, and re-runs the search. With repos set, the server filters to them before interleaving docs and code.
 - **Instant feedback**: re-index, meaning and source changes show a busy state at click time (button disabled, CSS spinner, label, elapsed seconds; static indicator under reduced motion), then the result (`+3 ~1 -0 · 2.1 s`). No progress bar: `index()` has no progress hook, so elapsed time is all that is honest. If the optional peer `@huggingface/transformers` is missing the library drops to keyword-only and the page shows "meaning unavailable: install ...".
+- **Security**: the server listens on `127.0.0.1` only and refuses any request whose `Host` is not `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding). POST/DELETE with a foreign `Origin` are refused; a request with no `Origin` (curl) is accepted. `/view` and `/api/open` serve only files in the active source's index whose real path is inside the source root (`../` and symlink escapes refused). Everything rendered is HTML-escaped and a strict CSP is set. There is **no authentication**: any local process or user who can reach the port can use it, so do not forward the port or run it on a shared host.
 - **Look**: monospace, Tokyo Night Day (light) / Tokyo Night (dark). Plain JS + CSS, no build step,
   no dependencies.
 

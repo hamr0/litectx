@@ -231,6 +231,7 @@ Builds or **incrementally refreshes** the index over `root`.
   updated: number,    // re-indexed (content changed)
   removed: number,    // dropped (no longer present)
   unchanged: number,  // skipped (mtime/size or content unchanged)
+  skipped: { repo: string, error: string }[], // childRepos only: repos whose `git ls-files` failed this pass; their indexed files are KEPT (never `removed`) and the pass does not stamp the index; [] otherwise
   aborted: boolean,   // true when opts.signal stopped the pass early
   embedded: number,   // vectors written this pass (0 with embeddings off)
   embedPending: number } // files/sections still without a vector (0 unless aborted or the embedder was unavailable)

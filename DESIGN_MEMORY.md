@@ -9,7 +9,7 @@
 - Order from top to bottom:
   - Top bar: always two lines — source + count/status on the left; the control group (re-index, meaning, …) on its own line, right-aligned.
   - Search line.
-  - **One** filter line, groups split by `│`.
+  - **One** filter line, groups set apart by spacing (no separator glyphs).
   - View switch line.
   - Results.
 - Square chips, 1px borders, no shadows.
