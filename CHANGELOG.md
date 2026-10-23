@@ -14,6 +14,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **`litectx ui`: typing a repo name no longer gets cut off.** Any rebuild of the filter line (the status poll while an index pass runs, a search reply) replaced the repo box, dropping what you had typed and closing the suggestions. The box is now kept across rebuilds, with its text, caret, focus and open list.
 - **`litectx ui`: filter line cleanup.** The `│` separators are gone (groups are set apart by spacing); the docs/code chips start deselected and act as a filter (none = search both, click one = only that kind; `✕ clear` resets them; old URL hashes still load). While a meaning build is running, searches use keywords only instead of waiting ~2 s behind the in-flight embed, and the page says so.
 - **`litectx ui`: "open in PyCharm" now works without a registered `pycharm://` URL handler.** The button POSTs `/api/open` and the server launches the editor (`--line N <abs path>`, detached, no shell) for an indexed file of the active source; the launcher is the `editor` field of `ui.json` or auto-detected, with a clear error if none is found. The filter line has a fixed control order, and a `×` in the search box clears the query only.
 

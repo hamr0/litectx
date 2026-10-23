@@ -849,3 +849,21 @@ test("search while a meaning pass runs skips the query embed (keywords only); af
     await ui.close();
   }
 });
+
+test("regression: a filter-line rebuild (status poll while indexing, search reply) must not destroy the repo box mid-typing", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const app = (await get(ui, "/app.js")).text;
+    const rf = app.slice(app.indexOf("function renderFilters"), app.indexOf("// escape the name"));
+    const ri = app.slice(app.indexOf("function repoInput"), app.indexOf("// ---- results"));
+    // the rebuild keeps one persistent box and gives focus + caret back; it never builds a fresh input
+    assert.ok(/document\.activeElement === /.test(rf) && /setSelectionRange/.test(rf) && /\.focus\(\)/.test(rf), "rebuild restores focus and caret");
+    const rest = ri.slice(ri.indexOf("function repoInput"), ri.indexOf("function buildRepoInput"));
+    assert.ok(/if \(!pickEl\) pickEl = buildRepoInput\(\)/.test(rest) && !/el\("input"/.test(rest), "repoInput reuses the one box");
+    assert.ok(/document\.activeElement !== i\) ul\.hidden = true/.test(ri), "blur from the detach does not close the list");
+    assert.ok(!/var names = /.test(rest) && /var names = [^\n]*\n\s*var q = i\.value/.test(ri), "suggestion names are read at typing time, not frozen at build");
+  } finally {
+    await ui.close();
+  }
+});

@@ -176,7 +176,10 @@
 
   // ---- filter line --------------------------------------------------------------------------------
   function renderFilters() {
-    var k = $("filters"); k.innerHTML = "";
+    var k = $("filters");
+    // status ticks and search replies rebuild this line; the repo box is kept (value, caret, list) so typing in it is never cut off
+    var pk = pickEl && pickEl.firstChild, typing = !!pk && document.activeElement === pk, caret = typing ? [pk.selectionStart, pk.selectionEnd] : null;
+    k.innerHTML = "";
     var go = function (fn) { return function () { fn(); runSearch(); }; };
     // fixed order: the always-there controls first so they never move; the per-search suggestions after
     k.appendChild(chip("docs", s.kinds.doc, go(function () { s.kinds.doc = !s.kinds.doc; })));
@@ -190,6 +193,7 @@
     group(function () { s.facets.exts.forEach(function (e) { k.appendChild(chip("." + e, s.ext === e, go(function () { s.ext = s.ext === e ? null : e; }))); }); });
     group(function () { s.facets.folders.slice(0, 6).forEach(function (f) { k.appendChild(chip(f + "/", s.folder === f, go(function () { s.folder = s.folder === f ? null : f; }), "folder " + f)); }); });
     if (ST.hasFilters(s)) { var ca = chip("✕ clear", false, go(function () { ST.clearFilters(s); }), "reset repos, docs/code, type, folder and old/tests last; keeps the query"); ca.className += " clear gs"; k.appendChild(ca); }
+    if (typing) { pk.focus(); pk.setSelectionRange(caret[0], caret[1]); }
   }
   // escape the name and the query separately, then wrap the first case-insensitive match (real-case letters kept)
   function hilite(name, q) {
@@ -197,13 +201,19 @@
     if (at < 0) return esc(name);
     return esc(name.slice(0, at)) + '<span class="kw">' + esc(name.slice(at, at + q.length)) + "</span>" + esc(name.slice(at + q.length));
   }
+  var pickEl = null; // built once, re-attached on every filter-line rebuild
   function repoInput() {
-    var names = (s.st && s.st.current && s.st.current.repoNames) || [];
+    if (!pickEl) pickEl = buildRepoInput();
+    pickEl.firstChild.placeholder = s.repos.length ? "add repo…" : "type a repo name…";
+    return pickEl;
+  }
+  function buildRepoInput() {
     var w = el("span", "pick"), i = el("input", "chip");
-    i.placeholder = s.repos.length ? "add repo…" : "type a repo name…"; i.setAttribute("aria-label", "filter by repo");
+    i.setAttribute("aria-label", "filter by repo");
     var ul = el("div", "suggest"); ul.setAttribute("role", "listbox"); ul.hidden = true;
-    var pick = function (r) { if (s.repos.indexOf(r) < 0) s.repos.push(r); renderFilters(); runSearch(); var n = document.querySelector("[aria-label='filter by repo']"); if (n) n.focus(); };
+    var pick = function (r) { if (s.repos.indexOf(r) < 0) s.repos.push(r); i.value = ""; ul.hidden = true; renderFilters(); runSearch(); i.focus(); };
     i.oninput = function () {
+      var names = (s.st && s.st.current && s.st.current.repoNames) || [];
       var q = i.value.toLowerCase();
       var m = q ? names.filter(function (r) { return r.toLowerCase().indexOf(q) >= 0 && s.repos.indexOf(r) < 0; }).slice(0, 6) : [];
       ul.innerHTML = m.map(function (r, n) { return '<div role="option" data-r="' + esc(r) + '"' + (n === 0 ? ' class="first"' : "") + ">" + hilite(r, q) + "</div>"; }).join("") ||
@@ -216,7 +226,8 @@
       if (e.key === "Enter" && f) pick(f.dataset.r);
       if (e.key === "Escape") { i.value = ""; ul.hidden = true; }
     };
-    i.onblur = function () { setTimeout(function () { ul.hidden = true; }, 120); };
+    // a rebuild detaches the box and blurs it for a moment; only hide the list if focus really went elsewhere
+    i.onblur = function () { setTimeout(function () { if (document.activeElement !== i) ul.hidden = true; }, 120); };
     w.appendChild(i); w.appendChild(ul); return w;
   }
 
