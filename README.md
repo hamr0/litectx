@@ -15,7 +15,7 @@
 
 ## What is litectx
 
-**For agents** — an MCP server that indexes your code and docs and hands the agent only the relevant pieces as `file:lines` handles, instead of whole files. It also answers "what breaks if I change this?" and keeps memory across sessions.
+**For agents** — an MCP server that indexes your code and docs and hands the agent only the relevant pieces as `file:lines` handles, instead of whole files. It also answers "what breaks if I change this?" (callers and a low/medium/high risk bucket — a low reading is a hint, never a promise) and keeps memory across sessions.
 
 **For you** — the same search in a simple local page, with filters by docs, code, file type, folder or repo. Searches take milliseconds, it runs on 127.0.0.1, and there is no LLM in it.
 
