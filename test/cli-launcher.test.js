@@ -642,7 +642,7 @@ test("status: a cold build that was cut short is reported as incomplete; a compl
     db.close();
   };
   stamp(-indexStamp()); // exactly what LiteCtx.index leaves after Ctrl+C mid cold build
-  assert.match(cli(sb, ["status", repo]).out, /index: incomplete — last build was stopped; run litectx index/);
+  assert.match(cli(sb, ["status", repo]).out, /index: incomplete — a build is running or was stopped; run litectx index/);
   stamp(indexStamp());
   assert.doesNotMatch(cli(sb, ["status", repo]).out, /incomplete/);
 });

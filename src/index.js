@@ -1068,7 +1068,13 @@ export class LiteCtx {
    * if (view) console.log(view.risk, view.callers.length) // 'low' | 'medium' | 'high'
    */
   async impact(symbol) {
-    return computeImpact(this.store, this.root, this.include, symbol);
+    const r = await computeImpact(this.store, this.root, this.include, symbol);
+    // a cold build that is running or was cut short (stored -stamp) has indexed only some files: callers in the
+    // rest are invisible, so "low" could be a false isolation. Hedge it, first, so it is never missed.
+    if (r && this.store.storedStamp() === -indexStamp()) {
+      r.hedges.unshift("index is incomplete (a build is running or was stopped) — caller counts may be under-counted; run index");
+    }
+    return r;
   }
 
   /**

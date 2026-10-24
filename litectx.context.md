@@ -635,6 +635,8 @@ dangerous (a false "isolated → safe" breaks hidden consumers). So:
   and tsconfig `paths` to find the real callers (tagged with `caller.alias`) and a hedge naming the
   alias, so it no longer reads as a false isolation. Single-hop barrels and JS/TS only — multi-hop
   barrel chains and Python `from x import y as z` re-export barrels are not yet followed.
+  While a cold build is running or was cut short (Ctrl+C / crash), `hedges[0]` says the index is
+  incomplete and caller counts may be under-counted — run `index()` to finish it.
 
 ### `ctx.getNode(id)` → `GraphNode | null`
 The **graph substrate** (R-G1): describe one node's *structure* — the counterpart to `get`, which

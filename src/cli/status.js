@@ -77,7 +77,7 @@ function indexLines(path) {
   const lines = [`${bold("index:")} ${i.db}`];
   if (i.error) lines.push(`  could not read the index: ${i.error}`);
   else {
-    if (i.incomplete) lines.push(`  ${yellow("index: incomplete — last build was stopped; run litectx index")}`);
+    if (i.incomplete) lines.push(`  ${yellow("index: incomplete — a build is running or was stopped; run litectx index")}`);
     lines.push(`  files indexed: ${i.files}`);
     if (i.repos !== undefined) lines.push(`  repos: ${i.repos} (folder of repos)`);
     lines.push(`  meaning (embeddings): ${i.meaning ? "on" : dim("off")}`);

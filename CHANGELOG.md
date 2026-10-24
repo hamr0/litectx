@@ -20,7 +20,7 @@ All notable changes to this project are documented here, following
 
 - **`litectx setup` / `--remove` no longer touch a user's own hooks.** A hook counted as litectx's if its command merely contained `warm-index.sh` or `pre-edit-impact.mjs`; now the command must run `<pkg>/integrations/claude/<script>` where `<pkg>` is a litectx package (its `package.json` names `litectx`, or, for a stale path whose install is gone, the directory is called `litectx`).
 - **`litectx index ~/proj`** expands `~` (typed at the prompt too), and a folder that does not exist (or is a file) now prints `no such folder: <path>` and exits 1 instead of creating `<cwd>/~/proj/.litectx/`.
-- **`litectx status`** shows `index: incomplete — last build was stopped; run litectx index` when a cold build was cut short (Ctrl+C / crash).
+- **`litectx status`** shows `index: incomplete — a build is running or was stopped; run litectx index` when a cold build is in progress or was cut short (Ctrl+C / crash). `impact()` adds a first hedge to its result in that state ("index is incomplete … caller counts may be under-counted; run index") so a low reading is never taken as safe; the result shape is unchanged.
 
 ## [0.37.0] — 2026-10-23
 
