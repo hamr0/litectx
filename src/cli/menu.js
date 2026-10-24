@@ -2,9 +2,9 @@
 // runs the same code as its subcommand and exits.
 
 import { createInterface } from "node:readline/promises";
-import { claudeSummary, indexInfo, statusLines, uiInfo } from "./status.js";
+import { claudeSummary, indexInfo, moreNote, statusLines, uiInfo } from "./status.js";
 import { runSetup } from "./setup.js";
-import { startUi, stopUi } from "./launcher.js";
+import { liveMessage, startUi, stopUi } from "./launcher.js";
 import { version } from "./paths.js";
 import { bcyan, cyan, dim, green, red, rule, sep, yellow } from "./style.js";
 
@@ -32,7 +32,7 @@ export async function menu(actions) {
     const c = claudeSummary();
     const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("4")}`;
     const u = await uiInfo();
-    const page = u.running ? `page ${green("running")} at ${cyan(u.url)}` : `page ${dim("not running")}`;
+    const page = u.running ? `page ${green("running")} at ${cyan(u.url)}${moreNote(u.extra)}` : `page ${dim("not running")}`;
     const ix = indexInfo(process.cwd());
     const ixLine = !ix ? dim("none here") : ix.error ? red("unreadable") : [`${(ix.files ?? 0).toLocaleString("en-US")} files`, ...(ix.repos !== undefined ? [`${ix.repos} repos`] : []), `meaning ${ix.meaning ? "on" : dim("off")}`].join(sep());
     console.log(`\n${rule()}`);
@@ -52,9 +52,13 @@ export async function menu(actions) {
     try {
       if (a === "1") {
         const r = await startUi({});
-        console.log(r.started ? `  started: ${cyan(r.url)}` : `  already running: ${cyan(r.url)}`);
-      } else if (a === "2") console.log(`  ${(await stopUi()).message}`);
-      else if (a === "3") {
+        if (r.started) console.log(`  started: ${cyan(r.url)}`);
+        else for (const p of r.live) console.log(`  ${liveMessage(p)}`);
+      } else if (a === "2") {
+        const r = await stopUi();
+        for (const l of r.lines) console.log(`  ${l}`);
+        if (!r.ok) return 1;
+      } else if (a === "3") {
         const p = await askFolder(rl);
         if (p === null) return 1;
         await actions.index(p);

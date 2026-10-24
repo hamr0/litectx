@@ -526,7 +526,8 @@ test("an embeddings-OFF index pass (the UI default) keeps the vectors an embeddi
 
 test("CLI: `litectx ui <path> --port 0` prints the URL and mode, serves, and a bad path exits 1", async () => {
   const root = manyRepos();
-  const env = { ...process.env, LITECTX_UI_CONFIG: /** @type {string} */ (process.env.LITECTX_UI_CONFIG) };
+  // the base port is moved off 4747 so a page the owner has running there is never seen (one page at a time)
+  const env = { ...process.env, HOME: scratch(), LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)), LITECTX_UI_CONFIG: /** @type {string} */ (process.env.LITECTX_UI_CONFIG) };
   const p = spawn(process.execPath, [BIN, "ui", root, "--port", "0"], { env, stdio: ["ignore", "pipe", "pipe"] });
   try {
     let err = "";

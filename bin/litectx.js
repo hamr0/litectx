@@ -64,18 +64,23 @@ async function main() {
 
   if (cmd === "start") {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
-    const { startUi } = await import("../src/cli/launcher.js");
-    const r = await startUi({ path: opts.words[0] ? resolve(opts.words[0]) : undefined, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
-    {
-      const { cyan } = await import("../src/cli/style.js");
-      console.log(r.started ? `litectx ui started: ${cyan(r.url)}  (log: ${r.log}; stop with \`litectx stop\`)` : `litectx ui already running: ${cyan(r.url)}`);
+    const { startUi, liveMessage } = await import("../src/cli/launcher.js");
+    const { cyan, yellow } = await import("../src/cli/style.js");
+    const path = opts.words[0] ? resolve(opts.words[0]) : undefined;
+    const r = await startUi({ path, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
+    if (r.started) console.log(`litectx ui started: ${cyan(r.url)}  (log: ${r.log}; stop with \`litectx stop\`)`);
+    else {
+      for (const p of r.live) console.log(liveMessage(p));
+      if (path && r.live[0].source?.path !== path) console.log(yellow(`to search ${path}, run litectx stop first`));
     }
     return;
   }
 
   if (cmd === "stop") {
     const { stopUi } = await import("../src/cli/launcher.js");
-    console.log(`litectx: ${(await stopUi()).message}`);
+    const r = await stopUi();
+    for (const l of r.lines) console.log(l);
+    if (!r.ok) process.exit(1);
     return;
   }
 
@@ -100,9 +105,15 @@ async function main() {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
     // Loaded here so the other commands never pay for the server. Embeddings are OFF for the UI unless
     // --embeddings is passed (the CLI's "default on" does not apply: first build is slow).
+    const { liveUis, liveMessage } = await import("../src/cli/launcher.js");
+    const live = await liveUis();
+    if (live.length) {
+      for (const p of live) console.error(liveMessage(p));
+      process.exit(1);
+    }
     const { createUi } = await import("../src/ui/server.js");
     // no --port: prefer 4747, move to the next free port if it is taken; an explicit --port is never changed
-    const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort(false)).port;
+    const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort()).port;
     const ui = await createUi({ port, path: opts.words[0], embeddings: opts.embeddingsFlag });
     console.error(`litectx ui: ${ui.url}\n  ${ui.describe()}\n  Ctrl+C to stop`);
     // keep serving; the open server handle holds the process alive
@@ -342,8 +353,8 @@ function usage() {
   return (
     "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--lines <A-B>] [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
     "       litectx            (on a terminal) a menu over the commands below\n" +
-    "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser\n" +
-    "       litectx stop                                                    stop the background search page\n" +
+    "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser (one page at a time)\n" +
+    "       litectx stop                                                    stop every running search page\n" +
     "       litectx setup [--remove] [--dev]                                wire litectx into Claude Code (MCP server + hooks); from a git checkout needs --dev\n" +
     "       litectx status [path]                                           what is set up, running and indexed (read-only)\n" +
     "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +

@@ -43,8 +43,8 @@ index: 7,246 files · 44 repos · meaning off
 
 Pick a number, it runs, it exits. The same things as commands:
 
-- `litectx start` — the search page in the background; opens your browser, and takes the next free port if 4747 is taken.
-- `litectx stop` — shuts the page down.
+- `litectx start` — the search page in the background; opens your browser, and takes the next free port if 4747 is taken. Only one page runs at a time: if one is already live, `start` tells you its address and source and opens it instead of starting another.
+- `litectx stop` — shuts down every running search page.
 - `litectx index [path]` — index a folder.
 - `litectx setup` — connects Claude Code once, for every repo: the MCP server, the indexing hook and the pre-edit impact hook. `litectx setup --remove` undoes it.
 - `litectx status` — what is set up, running and indexed.

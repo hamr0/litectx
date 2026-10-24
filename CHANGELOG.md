@@ -5,6 +5,12 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Changed
+
+- **One search page at a time.** `litectx start` (and menu option 1) with any litectx page already live — its own or a foreground `litectx ui`, found through the pid file and the 20-port fallback range — starts nothing: it prints `already live: <url> — source <name> (<path>), pid <pid>`, opens the browser on it, and adds `to search <path>, run litectx stop first` when you passed a different path. A foreground `litectx ui` with a page live prints the same line and exits 1. `litectx stop` (and menu option 2) now stops every live page, one `stopped <url> (pid N)` line each (`no search page running` when none; exit 1 plus `kill <pid>` if one will not exit). The status line shows `(+N more — run litectx stop)` if several are live. `/api/sources` gains `pid` (additive).
+
 ## [0.38.0] — 2026-10-24
 
 ### Added

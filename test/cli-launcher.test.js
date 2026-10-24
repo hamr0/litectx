@@ -379,15 +379,18 @@ test("start/stop: background server, pid file, no second server, browser opener,
 
     const r2 = cli(sb, ["start", repo, "--port", String(port), "--no-open"]);
     assert.equal(r2.code, 0, r2.err);
-    assert.match(r2.out, /already running/);
+    assert.match(r2.out, new RegExp(`already live: http://127\\.0\\.0\\.1:${port} — source \\S+ \\(${repo}\\), pid ${rec.pid}\\n`));
+    assert.doesNotMatch(r2.out, /run litectx stop first/, "same path: no hint");
     assert.equal(JSON.parse(readFileSync(pidFile, "utf8")).pid, rec.pid, "same server, no second spawn");
 
     const s = cli(sb, ["stop"]);
     assert.equal(s.code, 0, s.err);
-    assert.match(s.out, /stopped/);
+    assert.match(s.out, new RegExp(`stopped http://127\\.0\\.0\\.1:${port} \\(pid ${rec.pid}\\)`));
     assert.ok(await until(() => !alive(rec.pid)), "server process is gone");
     assert.equal(existsSync(pidFile), false);
-    assert.match(cli(sb, ["stop"]).out, /nothing running/);
+    const none = cli(sb, ["stop"]);
+    assert.equal(none.code, 0);
+    assert.equal(none.out.trim(), "no search page running");
   } finally {
     if (existsSync(pidFile)) {
       try {
@@ -407,7 +410,7 @@ test("stop: a stale pid file naming a live NON-litectx process does not kill it"
       writeFileSync(pidFile, JSON.stringify({ pid, port: 1, url: "http://127.0.0.1:1", startedAt: "x" }));
       const r = cli(sb, ["stop"]);
       assert.equal(r.code, 0, r.err);
-      assert.match(r.out, /stale pid file/);
+      assert.match(r.out, /no search page running/);
       assert.equal(alive(pid), true, `pid ${pid} must not be signalled`);
       assert.equal(existsSync(pidFile), false, "stale pid file cleaned up");
     }
@@ -481,7 +484,7 @@ test("start: port held by a non-litectx program → next free port; pid file, st
     assert.equal(rec.port, p + 1, "the pid file records the port actually used");
     assert.match(cli(sb, ["status", repo]).out, new RegExp(`UI: running \\(http://127\\.0\\.0\\.1:${p + 1}\\)`));
     const again = cli(sb, ["start", repo, "--no-open"]);
-    assert.match(again.out, /already running/, "a second start reuses it, not P+2");
+    assert.match(again.out, /already live/, "a second start reports it, not P+2");
     assert.equal(JSON.parse(readFileSync(pidFile, "utf8")).pid, rec.pid);
     assert.match(cli(sb, ["stop"]).out, /stopped/);
     assert.ok(await until(() => !alive(rec.pid)));
@@ -509,7 +512,7 @@ test("an explicit --port that is taken is an error, never a silent move (start a
   }
 });
 
-test("foreground `litectx ui` without --port takes the next free port when the base is taken; start reuses a litectx ui already on the base", async () => {
+test("foreground `litectx ui` without --port takes the next free port when the base is taken; start reports a litectx ui already live", async () => {
   const sb = sandbox();
   const repo = join(sb.dir, "repo");
   tinyRepo(repo);
@@ -526,11 +529,164 @@ test("foreground `litectx ui` without --port takes the next free port when the b
     // base P is held by a non-litectx program, P+1 by a litectx ui: start reuses P+1 instead of spawning a server
     const r = cli(sb, ["start", repo, "--no-open"]);
     assert.equal(r.code, 0, r.err);
-    assert.match(r.out, new RegExp(`already running: http://127\\.0\\.0\\.1:${p + 1}`));
+    assert.match(r.out, new RegExp(`already live: http://127\\.0\\.0\\.1:${p + 1} — source \\S+ \\(${repo}\\), pid ${ui.pid}`));
     assert.equal(existsSync(join(sb.home, ".litectx", "ui.pid")), false, "nothing was spawned");
   } finally {
     ui?.kill("SIGINT");
     srv.close();
+  }
+});
+
+// ---- one page at a time ----------------------------------------------------------------------------
+
+/** a foreground `litectx ui` the test owns; resolves once it prints its URL */
+async function fgUi(sb, repo, port) {
+  const ui = spawn(process.execPath, [BIN, "ui", repo, "--port", String(port)], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  ui.stderr?.on("data", (c) => (err += c));
+  assert.ok(await until(() => /litectx ui: http/.test(err), 10000), err);
+  return ui;
+}
+/**
+ * A second litectx ui that slipped in despite the live-page check (a start/ui race): a tiny script named
+ * `litectx.js` that serves the real UI with the argv `litectx.js ui --port N`, so it looks like a foreground ui.
+ */
+async function racedUi(sb, repo, port) {
+  const script = join(sb.dir, "raced", "litectx.js");
+  mkdirSync(join(sb.dir, "raced"), { recursive: true });
+  writeFileSync(script, `import { createUi } from ${JSON.stringify(join(PKG, "src", "ui", "server.js"))};\nconst ui = await createUi({ port: Number(process.argv[4]), path: process.argv[5] });\nconsole.error("litectx ui: " + ui.url);\nprocess.on("SIGTERM", () => ui.close().then(() => process.exit(0)));\n`);
+  const ui = spawn(process.execPath, [script, "ui", "--port", String(port), repo], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  ui.stderr?.on("data", (c) => (err += c));
+  assert.ok(await until(() => /litectx ui: http/.test(err), 10000), err);
+  return ui;
+}
+/** like cli() but async, so the test process can reap the children the command stops (spawnSync would leave them zombies, which look alive) */
+function cliAsync(sb, args) {
+  return new Promise((ok) => {
+    const p = spawn(process.execPath, [BIN, ...args], { env: sb.env, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    p.stdout.on("data", (c) => (out += c));
+    p.stderr.on("data", (c) => (err += c));
+    p.on("close", (code) => ok({ code, out, err }));
+  });
+}
+const portFree = (/** @type {number} */ p) => new Promise((ok) => { const s = net.createServer(); s.once("error", () => ok(false)); s.listen(p, "127.0.0.1", () => s.close(() => ok(true))); });
+/** a base port P with P..P+3 all free */
+async function baseWithRoom() {
+  for (;;) {
+    const p = await freePort();
+    if (p < 61000 && (await Promise.all([1, 2, 3].map((i) => portFree(p + i)))).every(Boolean)) return p;
+  }
+}
+
+test("one page: start twice → second reports url/source/pid, no second server; a different path is not switched", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  const other = join(sb.dir, "other");
+  tinyRepo(repo);
+  tinyRepo(other);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  const pidFile = join(sb.home, ".litectx", "ui.pid");
+  try {
+    assert.equal(cli(sb, ["start", repo, "--no-open"]).code, 0);
+    const rec = JSON.parse(readFileSync(pidFile, "utf8"));
+    const r = cli(sb, ["start", repo, "--no-open"]);
+    assert.equal(r.code, 0);
+    assert.match(r.out, new RegExp(`^already live: http://127\\.0\\.0\\.1:${base} — source \\S+ \\(${repo}\\), pid ${rec.pid}\\n$`));
+    for (let i = 1; i < 4; i++) assert.equal(await portFree(base + i), true, `no server on base+${i}`);
+    const o = cli(sb, ["start", other, "--no-open"]);
+    assert.equal(o.code, 0);
+    assert.match(o.out, /already live: /);
+    assert.match(o.out, new RegExp(`to search ${other}, run litectx stop first`));
+    assert.equal(JSON.parse(readFileSync(pidFile, "utf8")).pid, rec.pid);
+    const st = await (await fetch(`${rec.url}/api/sources`)).json();
+    assert.equal(st.sources.find((x) => x.name === st.active).path, repo, "not switched");
+    assert.equal(st.pid, rec.pid);
+  } finally {
+    cli(sb, ["stop"]);
+  }
+});
+
+test("one page: a foreground ui is live → start reports it and spawns nothing; a second foreground ui exits 1", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  let ui = null;
+  try {
+    ui = await fgUi(sb, repo, base + 1);
+    const r = cli(sb, ["start", repo, "--no-open"]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, new RegExp(`already live: http://127\\.0\\.0\\.1:${base + 1} — source \\S+ \\(${repo}\\), pid ${ui.pid}`));
+    assert.equal(existsSync(join(sb.home, ".litectx", "ui.pid")), false, "nothing spawned");
+    assert.equal(await portFree(base), true);
+    const second = cli(sb, ["ui", repo, "--port", String(base + 2)], { timeout: 15000 });
+    assert.equal(second.code, 1);
+    assert.match(second.err, /already live: /);
+    assert.equal(await portFree(base + 2), true, "second ui never bound");
+  } finally {
+    ui?.kill("SIGKILL");
+  }
+});
+
+test("one page: stop stops every live page (start's and a foreground one), clears the pid file, frees both ports; bystanders are never signalled", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  const pidFile = join(sb.home, ".litectx", "ui.pid");
+  const victim = spawn("sleep", ["30"], { stdio: "ignore" });
+  const plain = await occupy(base + 2); // a non-litectx http server inside the scanned range
+  // a litectx-mcp process (not a UI) that must never be touched
+  const mcp = spawn(process.execPath, [join(PKG, "bin", "litectx-mcp.js")], { env: sb.env, stdio: ["pipe", "ignore", "ignore"] });
+  let fg = null;
+  try {
+    assert.equal(cli(sb, ["start", repo, "--no-open"]).code, 0);
+    const rec = JSON.parse(readFileSync(pidFile, "utf8"));
+    fg = await racedUi(sb, repo, base + 1);
+    const banner = cli(sb, ["status", repo]).out;
+    assert.match(banner, /\(\+1 more — run litectx stop\)/);
+    const s = await cliAsync(sb, ["stop"]);
+    assert.equal(s.code, 0, s.err + s.out);
+    assert.match(s.out, new RegExp(`stopped http://127\\.0\\.0\\.1:${base} \\(pid ${rec.pid}\\)`));
+    assert.match(s.out, new RegExp(`stopped http://127\\.0\\.0\\.1:${base + 1} \\(pid ${fg.pid}\\)`));
+    assert.ok(await until(() => !alive(rec.pid) && !alive(/** @type {number} */ (fg?.pid))));
+    assert.equal(existsSync(pidFile), false);
+    assert.equal(await portFree(base), true);
+    assert.equal(await portFree(base + 1), true);
+    assert.equal(alive(/** @type {number} */ (victim.pid)), true, "bystander untouched");
+    assert.equal(alive(/** @type {number} */ (mcp.pid)), true, "litectx-mcp untouched");
+    assert.equal(plain.listening, true, "non-litectx server untouched");
+    assert.equal(cli(sb, ["stop"]).out.trim(), "no search page running");
+  } finally {
+    cli(sb, ["stop"]);
+    fg?.kill("SIGKILL");
+    victim.kill("SIGKILL");
+    mcp.kill("SIGKILL");
+    plain.close();
+  }
+});
+
+test("one page: the stop guard refuses a page whose pid is not a litectx ui process", async () => {
+  // a fake "litectx ui" API that reports the pid of a plain `sleep` — the guard must not signal it
+  const sb = sandbox();
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  const victim = spawn("sleep", ["30"], { stdio: "ignore" });
+  const fake = spawn(process.execPath, ["-e", `require("http").createServer((q,r)=>r.end(JSON.stringify({version:"x",pid:${victim.pid},active:null,sources:[]}))).listen(${base},"127.0.0.1",()=>console.log("up"))`], { stdio: ["ignore", "pipe", "ignore"] });
+  await new Promise((ok) => fake.stdout.once("data", ok));
+  try {
+    const r = cli(sb, ["stop"]);
+    assert.equal(r.code, 1);
+    assert.match(r.out, /not stopping/);
+    assert.equal(alive(/** @type {number} */ (victim.pid)), true, "never signalled");
+  } finally {
+    fake.kill("SIGKILL");
+    victim.kill("SIGKILL");
   }
 });
 

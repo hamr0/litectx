@@ -219,6 +219,7 @@ export async function createUi(opts = {}) {
   function state() {
     return {
       version: VERSION,
+      pid: process.pid, // lets `litectx start|stop` tell which process serves this page
       active: cfg.active,
       sources: cfg.sources.map((s) => {
         const m = detectMode(s.path);
