@@ -79,7 +79,7 @@ async function probe(url) {
 }
 
 /** Does `url` answer as a litectx ui? @param {string} url @returns {Promise<boolean>} */
-export async function answers(url) {
+async function answers(url) {
   return (await probe(url)) !== null;
 }
 
