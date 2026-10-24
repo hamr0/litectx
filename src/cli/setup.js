@@ -4,7 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { red } from "./style.js";
 import { claudeJson, claudeSettings, pkgDir } from "./paths.js";
 
@@ -32,8 +32,25 @@ function readJson(file) {
   }
 }
 
-/** @param {unknown} h @param {string} file */
-const isOurs = (h, file) => typeof (/** @type {Hook} */ (h))?.command === "string" && /** @type {string} */ (/** @type {Hook} */ (h).command).includes(file);
+/**
+ * Is this hook litectx's? Its command must run `<pkg>/integrations/claude/<file>` where `<pkg>` is a litectx
+ * package: its package.json names "litectx", or — a stale path whose install is gone — the dir is called
+ * `litectx`. A user's own `/my/other/warm-index.sh` is never matched.
+ * @param {unknown} h @param {string} file
+ */
+function isOurs(h, file) {
+  const command = /** @type {Hook} */ (h)?.command;
+  if (typeof command !== "string") return false;
+  const script = command.trim().replace(/^node\s+/, "").replace(/^(["'])(.*)\1$/, "$2");
+  const tail = `/integrations/claude/${file}`;
+  if (!script.endsWith(tail)) return false;
+  const pkg = script.slice(0, -tail.length);
+  try {
+    return JSON.parse(readFileSync(join(pkg, "package.json"), "utf8")).name === "litectx";
+  } catch (e) {
+    return /** @type {NodeJS.ErrnoException} */ (e).code === "ENOENT" && basename(pkg) === "litectx";
+  }
+}
 
 /** @returns {string | null} absolute path of `claude` on PATH */
 function findClaude() {

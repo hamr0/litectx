@@ -106,8 +106,8 @@ test("setup: unrelated keys/hooks survive; a litectx hook with an OLD path is up
   fakeClaude(sb);
   mkdirSync(join(sb.home, ".claude"));
   const old = structuredClone(UNRELATED);
-  old.hooks.PreToolUse.push({ matcher: "Edit", hooks: [{ type: "command", command: "node /old/place/integrations/claude/pre-edit-impact.mjs" }, { type: "command", command: "/usr/bin/second-edit-hook" }] });
-  old.hooks.SessionStart = [{ matcher: "", hooks: [{ type: "command", command: "/old/place/integrations/claude/warm-index.sh" }] }];
+  old.hooks.PreToolUse.push({ matcher: "Edit", hooks: [{ type: "command", command: "node /old/place/litectx/integrations/claude/pre-edit-impact.mjs" }, { type: "command", command: "/usr/bin/second-edit-hook" }] });
+  old.hooks.SessionStart = [{ matcher: "", hooks: [{ type: "command", command: "/old/place/litectx/integrations/claude/warm-index.sh" }] }];
   writeFileSync(settingsFile(sb), JSON.stringify(old, null, 2));
   const r = cli(sb, ["setup", "--dev"]);
   assert.equal(r.code, 0, r.err);
@@ -121,6 +121,42 @@ test("setup: unrelated keys/hooks survive; a litectx hook with an OLD path is up
   const baks = readdirSync(join(sb.home, ".claude")).filter((f) => f.startsWith("settings.json.bak-"));
   assert.equal(baks.length, 1);
   assert.deepEqual(JSON.parse(readFileSync(join(sb.home, ".claude", baks[0]), "utf8")), old, "the backup is the pre-change file");
+});
+
+test("setup/--remove: a user's own warm-index.sh / non-litectx integrations path is never touched; stale litectx paths still update", () => {
+  const sb = sandbox();
+  fakeClaude(sb);
+  mkdirSync(join(sb.home, ".claude"));
+  // a real non-litectx package that happens to ship integrations/claude/warm-index.sh
+  const other = join(sb.dir, "otherpkg");
+  mkdirSync(other);
+  writeFileSync(join(other, "package.json"), JSON.stringify({ name: "something-else" }));
+  const mine = [
+    { matcher: "", hooks: [{ type: "command", command: "/my/other/warm-index.sh" }] },
+    { matcher: "", hooks: [{ type: "command", command: "/x/integrations/claude/warm-index.sh" }] },
+    { matcher: "", hooks: [{ type: "command", command: join(other, "integrations/claude", WARM) }] },
+  ];
+  const pre = [{ matcher: "Edit", hooks: [{ type: "command", command: "node /my/other/pre-edit-impact.mjs" }] }];
+  const stale = { SessionStart: [{ matcher: "", hooks: [{ type: "command", command: "/home/u/.local/lib/node_modules/litectx/integrations/claude/warm-index.sh" }] }] };
+  const orig = { hooks: { SessionStart: mine, PreToolUse: pre } };
+  writeFileSync(settingsFile(sb), JSON.stringify(orig, null, 2));
+  assert.equal(cli(sb, ["setup", "--dev"]).code, 0);
+  const s = readSettings(sb);
+  assert.deepEqual(s.hooks.SessionStart.slice(0, 3), mine, "unrelated hooks kept byte-for-byte");
+  assert.deepEqual(s.hooks.PreToolUse[0], pre[0]);
+  assert.equal(ours(s).filter((c) => c.startsWith(PKG)).length + ours(s).filter((c) => c.startsWith("node " + PKG)).length, 2, "litectx's own two hooks were ADDED, nothing rewritten");
+  assert.equal(cli(sb, ["setup", "--remove"]).code, 0);
+  const after = readSettings(sb);
+  assert.deepEqual(after.hooks.SessionStart, mine, "--remove leaves them");
+  assert.deepEqual(after.hooks.PreToolUse, pre);
+
+  // stale litectx-shaped path (install gone) is updated in place
+  const sb2 = sandbox();
+  fakeClaude(sb2);
+  mkdirSync(join(sb2.home, ".claude"));
+  writeFileSync(settingsFile(sb2), JSON.stringify({ hooks: stale }));
+  assert.equal(cli(sb2, ["setup", "--dev"]).code, 0);
+  assert.deepEqual(readSettings(sb2).hooks.SessionStart, [{ matcher: "", hooks: [{ type: "command", command: join(PKG, "integrations/claude", WARM) }] }]);
 });
 
 test("setup: malformed settings.json aborts, leaves the file alone and does not call claude", () => {
