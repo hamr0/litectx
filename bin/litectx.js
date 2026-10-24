@@ -23,7 +23,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LiteCtx, KINDS } from "../src/index.js";
-import { pkgDir } from "../src/cli/paths.js";
+import { pkgDir, resolveFolder } from "../src/cli/paths.js";
 
 /** @param {string[]} argv */
 function parse(argv) {
@@ -266,6 +266,13 @@ async function main() {
  * @param {string} root @param {boolean} embeddings @param {boolean} force @param {boolean} [hint]
  */
 async function runIndex(root, embeddings, force, hint = true) {
+  try {
+    root = resolveFolder(root);
+  } catch (e) {
+    const { red } = await import("../src/cli/style.js");
+    console.error(red(e instanceof Error ? e.message : String(e)));
+    process.exit(1);
+  }
   const ctx = new LiteCtx({ root, embeddings });
   const t = Date.now();
   const r = await ctx.index({ force });

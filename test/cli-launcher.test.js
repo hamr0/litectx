@@ -603,3 +603,25 @@ test("bare `litectx` without a terminal still prints usage and exits 0 (scripts 
   assert.match(r.out, /litectx start \[path\]/);
   assert.match(r.out, /litectx setup \[--remove\] \[--dev\]/);
 });
+
+// ---- index path resolution ---------------------------------------------------------------------------
+
+test("index: a leading ~ expands to HOME; a nonexistent folder exits 1 and creates nothing", () => {
+  const sb = sandbox();
+  mkdirSync(join(sb.home, "proj"));
+  writeFileSync(join(sb.home, "proj", "a.js"), "export function alpha() { return 1; }\n");
+  const r = cli(sb, ["index", "~/proj", "--no-embeddings"], { cwd: sb.dir });
+  assert.equal(r.code, 0, r.err);
+  assert.match(r.err, /indexed 1 files from /);
+  assert.ok(existsSync(join(sb.home, "proj", ".litectx", "index.db")), "indexed under HOME");
+  assert.ok(!existsSync(join(sb.dir, "~")), "no literal ~ directory in cwd");
+
+  const before = readdirSync(sb.dir).sort();
+  const bad = cli(sb, ["index", "~/nope/deeper", "--no-embeddings"], { cwd: sb.dir });
+  assert.equal(bad.code, 1);
+  assert.match(bad.err, /no such folder: ~\/nope\/deeper/);
+  assert.deepEqual(readdirSync(sb.dir).sort(), before, "cwd listing unchanged");
+  assert.ok(!existsSync(join(sb.home, "nope")));
+  const file = cli(sb, ["index", join(sb.home, "proj", "a.js"), "--no-embeddings"], { cwd: sb.dir });
+  assert.equal(file.code, 1, "a file is not a folder");
+});
