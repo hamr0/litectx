@@ -5,7 +5,11 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.39.0] - 2026-10-24
+
+### Added
+
+- **Pages registry.** Every `litectx ui` process writes `~/.litectx/pages/<pid>.json` once listening and removes it on exit; `/api/sources` gains a `pid` field (additive).
 
 ### Changed
 
