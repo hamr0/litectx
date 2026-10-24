@@ -555,13 +555,25 @@ test("foreground `litectx ui` without --port takes the next free port when the b
 
 // ---- one page at a time ----------------------------------------------------------------------------
 
+/**
+ * Resolve `ui` once `ready()` holds. If it never does, kill the child BEFORE throwing: the caller's handle is
+ * still null when this throws, so its `finally` could not clean up a child that was spawned inside a helper.
+ */
+async function readyOrKill(ui, ready, why) {
+  try {
+    assert.ok(await until(ready, 10000), why());
+  } catch (e) {
+    ui.kill("SIGKILL");
+    throw e;
+  }
+  return ui;
+}
 /** a foreground `litectx ui` the test owns; resolves once it prints its URL */
 async function fgUi(sb, repo, port) {
   const ui = spawn(process.execPath, [BIN, "ui", repo, "--port", String(port)], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
   let err = "";
   ui.stderr?.on("data", (c) => (err += c));
-  assert.ok(await until(() => /litectx ui: http/.test(err), 10000), err);
-  return ui;
+  return readyOrKill(ui, () => /litectx ui: http/.test(err), () => err);
 }
 /**
  * A second litectx ui that slipped in despite the live-page check (a start/ui race): a tiny script named
@@ -574,8 +586,7 @@ async function racedUi(sb, repo, port) {
   const ui = spawn(process.execPath, [script, "ui", "--port", String(port), repo], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
   let err = "";
   ui.stderr?.on("data", (c) => (err += c));
-  assert.ok(await until(() => /litectx ui: http/.test(err), 10000), err);
-  return ui;
+  return readyOrKill(ui, () => /litectx ui: http/.test(err), () => err);
 }
 /** like cli() but async, so the test process can reap the children the command stops (spawnSync would leave them zombies, which look alive) */
 function cliAsync(sb, args) {
