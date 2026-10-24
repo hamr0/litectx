@@ -5,6 +5,23 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.38.0] — 2026-10-24
+
+### Added
+
+- **One `litectx` command from anywhere.** Bare `litectx` on a terminal shows a coloured status block and a numbered menu (start/stop the search page, index a folder, set up Claude, status) — one choice, then it runs and exits; without a terminal it still prints usage. New subcommands: `litectx start [path] [--port N] [--embeddings] [--no-open]` (search page in the background, pid file and log in `~/.litectx/`, opens the browser), `litectx stop` (signals only a live `litectx ui` process), `litectx setup [--remove] [--dev]` (MCP server user-scope through the `claude` CLI plus the SessionStart and PreToolUse hooks merged into `~/.claude/settings.json`; idempotent, backs the file up first, aborts on malformed JSON) and `litectx status [path]` (read-only). `litectx setup` run from a git checkout never wires the working tree: it redirects to the installed `litectx` on PATH (asks `[Y/n]` on a terminal) or refuses with `npm i -g litectx`; `--dev` wires the checkout on purpose, `--remove` works anywhere. Colour only on a terminal (`NO_COLOR` honoured). `litectx index` with no path on a terminal asks for a folder (no default; blank twice exits 1) and prints the generic MCP registration snippet afterwards. `litectx ui` keeps its behaviour, except that with no `--port` (and for `start`) a taken 4747 now falls back to the next free port (up to 20 tries); an explicit `--port` that is taken is still an error.
+- **`index({ onProgress })`**: `onProgress({ done, total })` is called once with `done: 0` and after each file is chunked. `litectx ui` shows it in the busy label ("building index: 2,100 of 7,244 files").
+
+### Changed
+
+- **Cold builds commit in batches** (~500 files, internal constant). A first build of a large tree used to land in one transaction at the very end, so a concurrent reader (the `litectx ui` page, another process) saw nothing for the whole pass (36 s to minutes on ~7,000 files); results now fill in as it runs. A rebuild over an existing index is unchanged (one atomic transaction), as is a `paths`-scoped pass (never batched). A batched build holds the negated stamp until its last batch commits, so a cancelled build keeps what it committed and the next `index()` finishes the rest incrementally rather than starting over. The finished index is identical to an unbatched one.
+
+### Fixed
+
+- **`litectx setup` / `--remove` no longer touch a user's own hooks.** A hook counted as litectx's if its command merely contained `warm-index.sh` or `pre-edit-impact.mjs`; now the command must run `<pkg>/integrations/claude/<script>` where `<pkg>` is a litectx package (its `package.json` names `litectx`, or, for a stale path whose install is gone, the directory is called `litectx`).
+- **`litectx index ~/proj`** expands `~` (typed at the prompt too), and a folder that does not exist (or is a file) now prints `no such folder: <path>` and exits 1 instead of creating `<cwd>/~/proj/.litectx/`.
+- **`litectx status`** shows `index: incomplete — a build is running or was stopped; run litectx index` when a cold build is in progress or was cut short (Ctrl+C / crash). `impact()` adds a first hedge to its result in that state ("index is incomplete … caller counts may be under-counted; run index") so a low reading is never taken as safe; the result shape is unchanged.
+
 ## [0.37.0] — 2026-10-23
 
 ### Added

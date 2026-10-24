@@ -211,7 +211,9 @@ Builds or **incrementally refreshes** the index over `root`.
   run the instance in your own worker thread instead.
 - `opts.signal?: AbortSignal` — **cancel a long pass.** Checked between files while
   chunking and between embeds. Aborting before the index commit writes nothing; the
-  commit is one atomic transaction and is never cut. With embeddings on, vectors are
+  commit is one atomic transaction and is never cut (the exception is a cold build,
+  which commits in batches — see **Cold builds commit in batches** below: a cancel
+  keeps the batches already committed). With embeddings on, vectors are
   written **file by file after** that commit, so an abort (or a crash) mid-embed keeps
   the complete keyword index and every vector already written, and the next `index()`
   embeds only the files still without one. An aborted pass **resolves** (not throws)
@@ -221,6 +223,20 @@ Builds or **incrementally refreshes** the index over `root`.
   phase, and a file edited mid-pass stays keyword-only until the next pass (a vector
   computed from superseded content is dropped, never written). Once the pass finishes
   uninterrupted the final index is byte-identical to a single-transaction build.
+- **Cold builds commit in batches.** A whole-index pass with no file-indexed rows to
+  protect (a first build, or resuming a cancelled one) commits every ~500 files, so a
+  concurrent reader (another connection to the same db) sees results fill in instead of
+  nothing until the end. A rebuild over an **existing** index stays one atomic
+  transaction (readers keep the old index until the new one lands), and a
+  `paths`-scoped pass never batches. The batch size is an internal constant, not an
+  option. A batched build stores the *negated* stamp until its last batch lands, so
+  cancelling it keeps the committed batches and the next `index()` finishes the
+  remainder incrementally instead of restarting; the finished index equals an
+  unbatched one.
+- `opts.onProgress?: ({ done, total }) => void` — **progress.** Called once with
+  `done: 0`, then after each file is chunked. `total` is the number of files this pass
+  will (re)index (a warm pass with nothing changed reports `0` of `0`). Covers the
+  keyword pass, not the embeddings backfill.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 
@@ -621,6 +637,8 @@ dangerous (a false "isolated → safe" breaks hidden consumers). So:
   and tsconfig `paths` to find the real callers (tagged with `caller.alias`) and a hedge naming the
   alias, so it no longer reads as a false isolation. Single-hop barrels and JS/TS only — multi-hop
   barrel chains and Python `from x import y as z` re-export barrels are not yet followed.
+  While a cold build is running or was cut short (Ctrl+C / crash), `hedges[0]` says the index is
+  incomplete and caller counts may be under-counted — run `index()` to finish it.
 
 ### `ctx.getNode(id)` → `GraphNode | null`
 The **graph substrate** (R-G1): describe one node's *structure* — the counterpart to `get`, which
@@ -1301,8 +1319,23 @@ litectx promotions [--threshold <n>]           # hot agent episodes to distil in
 litectx impact <symbol>
 litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--no-embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
-litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare
+litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare when not on a terminal
 ```
+
+**Launcher commands** (one `litectx` from anywhere; `~` = `os.homedir()`):
+
+```
+litectx                                   # on a terminal (stdin AND stdout): title/status block + numbered menu (one choice, then it runs and exits; blank or unknown input is re-asked once) over the commands below
+litectx start [path] [--port <n>] [--embeddings] [--no-open]
+litectx stop
+litectx setup [--remove] [--dev]
+litectx status [path]
+```
+- `start` runs `litectx ui` detached in the background (output in `~/.litectx/ui.out`, `{pid, port, url, startedAt}` in `~/.litectx/ui.pid`), waits until it answers, prints the URL and opens the browser (`xdg-open` / `open` / `cmd /c start`; failure ignored, the URL is always printed; `--no-open` skips it). A litectx ui already answering (pid file, or a foreground `litectx ui` on the port) is reused, not duplicated; a stale pid file is cleaned up. The preferred port is 4747; with no `--port`, a port held by anything that is not litectx moves on to the next free one (4748, … up to 20 tries, then an error), for `start` and for foreground `litectx ui` alike. An explicit `--port` that is taken is an error, never moved. The pid file records the port actually used; `stop`, `status` and the menu banner read it from there.
+- `stop` signals (SIGTERM) only a pid that is alive AND is a `litectx ui` process (checked through `/proc/<pid>/cmdline` on Linux, otherwise by its URL answering as litectx). A stale pid file is removed without signalling anything. Nothing running → says so, exit 0.
+- `setup` wires Claude Code, all three parts, idempotently: the MCP server (`claude mcp add --scope user litectx -- node <pkg>/bin/litectx-mcp.js --embeddings`; if `claude` is not on PATH the command is printed instead), a `SessionStart` hook (`integrations/claude/warm-index.sh`) and a `PreToolUse` `Edit` hook (`pre-edit-impact.mjs`), merged into `~/.claude/settings.json` (other keys and hooks untouched; an existing litectx entry is found by script filename and its path updated, never duplicated; a `settings.json.bak-<timestamp>` is written first; unparseable JSON aborts without writing). `<pkg>` is the running package's own directory, so it works from a global install. **Checkout guard:** run from a git checkout (the package dir has `.git`), `setup` would point the hooks and MCP at your working tree, so it does not. It looks for the installed `litectx` on PATH (entries inside the checkout skipped; a link into a checkout does not count): on a terminal it asks `Set up Claude with the installed litectx at <dir>? [Y/n]` and, on yes, wires the installed paths; without a terminal, or with no installed copy, it refuses and writes nothing ("run `npm i -g litectx`, or pass `--dev`"). `--dev` wires the checkout on purpose; `--remove` works from anywhere. Setup is user-global (one registration + hooks covering every repo). `--remove` takes out only litectx's entries and runs `claude mcp remove --scope user litectx`. Only `~` is consulted (`CLAUDE_CONFIG_DIR` is not). A hook counts as litectx's only if its command runs `<pkg>/integrations/claude/<script>` where `<pkg>` is a litectx package (its `package.json` names `litectx`, or, for a stale path whose install is gone, the directory is called `litectx`) — a user's own `warm-index.sh` / `pre-edit-impact.mjs` elsewhere is never rewritten or removed.
+- `status [path]` (default cwd) is read-only: version and install dir; whether the search page is running; for the path, whether an index exists, files indexed, repos (folder-of-repos index), meaning on/off (any stored vectors) and when it was last indexed; whether the MCP server and both hooks are registered. It prints `index: incomplete — a build is running or was stopped; run litectx index` when a cold build is in progress or was cut short. It never creates a database or file.
+- `index` with no path on a terminal asks for a folder (no default; blank is asked once more, then `no folder given`, exit 1), and ends by printing the JSON to register `litectx-mcp` in any MCP client plus a note that the server re-indexes on start. Scripted use (no terminal) is unchanged (no path = cwd). A leading `~` / `~/` (typed or passed) is the home directory; a folder that does not exist (or is a file) prints `no such folder: <path>` and exits 1 without creating anything. Colour (bold/cyan/green/yellow/red/dim) only when stdout is a terminal and `NO_COLOR` is unset (`FORCE_COLOR` forces it on).
 All commands take `--root <dir>` (default: cwd). `remember` reads its body from the arguments
 or, when absent, from piped stdin (`git log -1 --format=%s | litectx remember ep:release
 --kind episode`). Exit 1: unknown id (`get`), nothing matched (`forget`), unknown symbol
@@ -1317,7 +1350,7 @@ hits append `provenance use:N`); `recent` → `age(m|h|d)  edits×  kind  path  
 ### `litectx ui` (localhost search page)
 
 ```
-litectx ui [path] [--port <n>] [--embeddings]    # default port 4747; Ctrl+C stops it
+litectx ui [path] [--port <n>] [--embeddings]    # preferred port 4747 (next free one if taken; an explicit --port is never moved); Ctrl+C stops it
 ```
 A search page for a **person** (a ranked list, not an answer): type a word or a question, get
 matching docs and code across one repo or every repo under one folder. Prints the URL and the
@@ -1336,7 +1369,9 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   git-tracked files are read. **Removing a source never deletes a one-repo index**; for an
   all-repos index the Remove box can also delete it (unticked by default).
 - **Indexing** runs once on start (incremental: only changed files are re-read) and on the
-  *re-index* button. **Embeddings are off** unless you pass `--embeddings` or switch *meaning* on
+  *re-index* button. While a pass has files to index the busy label reads "building index: 2,100
+  of 7,244 files" (`index({ onProgress })`), and a first build commits in batches, so search
+  results fill in as it runs. **Embeddings are off** unless you pass `--embeddings` or switch *meaning* on
   (remembered per source); the first build is slow (about 15 minutes for ~7k files). An
   embeddings-off pass leaves vectors an embeddings-on writer (the CLI/MCP default) already built
   for unchanged files; a changed file loses its stale vector until the next embeddings-on `index()`.

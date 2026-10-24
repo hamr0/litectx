@@ -78,7 +78,7 @@
       "category": "index",
       "when": "Build or refresh the graph from source before recall/impact — call after files change.",
       "import": "import { LiteCtx } from 'litectx'",
-      "signature": "liteCtx.index(opts?: { paths?, force?, yield?, signal? }) => Promise<IndexResult>",
+      "signature": "liteCtx.index(opts?: { paths?, force?, yield?, signal?, onProgress? }) => Promise<IndexResult>",
       "fails": "Throws `RipgrepMissingError` only via later `impact()`, not here; a bad `root` throws at construction.",
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst { added, updated, unchanged } = await ctx.index()\n// incremental: only re-chunk two files\nawait ctx.index({ paths: ['src/a.js', 'src/b.js'] })"
     },

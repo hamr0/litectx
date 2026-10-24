@@ -66,6 +66,11 @@
     clearInterval(tickTimer); tickTimer = setInterval(tick, 1000);
     renderTop();
   }
+  // "building index: 2,100 of 7,244 files" while the server reports a pass with files to index; else the plain label
+  function progressLabel(c, label) {
+    var p = c && c.indexing && c.progress;
+    return p && p.total > 0 && p.done < p.total ? "building index: " + p.done.toLocaleString() + " of " + p.total.toLocaleString() + " files" : label;
+  }
   function tick() { var e = $("elapsed"); if (e && s.busy) e.textContent = " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"; }
   function endBusy(st) {
     var b = s.busy, c = st && st.current; s.busy = null; clearInterval(tickTimer);
@@ -117,7 +122,7 @@
     }
     var info = el("span", "dim");
     if (s.busy) {
-      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : s.busy.label)));
+      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : progressLabel(c, s.busy.label))));
       var ev = el("span", "", " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"); ev.id = "elapsed"; info.appendChild(ev);
     }
     else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText + (s.result ? " · " + s.result : "");

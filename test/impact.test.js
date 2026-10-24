@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiteCtx } from "../src/index.js";
+import { indexStamp } from "../src/indexer.js";
 import { riskBucket, rgSpawnFailed, RipgrepMissingError } from "../src/impact.js";
 
 // A small non-git fixture (indexed via the filesystem-walk fallback). `helper` is called 3× from
@@ -83,6 +84,22 @@ test("callers are confirmed call sites with their enclosing symbol", async () =>
     const callerSyms = r.callers.map((c) => c.symbol).sort();
     assert.deepEqual(callerSyms, ["caller1", "caller2", "caller3"], "enclosing caller symbols");
     assert.ok(r.callers.every((c) => c.path === "app.js"), "all calls are in app.js");
+  });
+});
+
+test("impact hedges an incomplete (running / cut-short) cold build; a complete index has no such hedge", async () => {
+  const INCOMPLETE = /index is incomplete/;
+  await withCtx(async (ctx) => {
+    const normal = await ctx.impact("helper");
+    assert.ok(normal && !normal.hedges.some((h) => INCOMPLETE.test(h)));
+    ctx.store.setStoredStamp(-indexStamp());
+    const cut = await ctx.impact("helper");
+    assert.ok(cut);
+    assert.match(cut.hedges[0], INCOMPLETE);
+    assert.equal(cut.risk, normal.risk, "risk bucket unchanged");
+    assert.equal(cut.confirmed, normal.confirmed);
+    ctx.store.setStoredStamp(indexStamp());
+    assert.ok(!(await ctx.impact("helper")).hedges.some((h) => INCOMPLETE.test(h)));
   });
 });
 
