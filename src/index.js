@@ -451,7 +451,8 @@ export class LiteCtx {
     const resuming = stored === -stamp;
     const stale = stored !== stamp && !resuming;
     // file-indexed rows that exist BEFORE this pass (independent of the `prev` snapshot, which a clearAll empties)
-    const existingFiles = this.store.loadIndex().size;
+    const loaded = this.store.loadIndex();
+    const existingFiles = loaded.size;
     const rebuild = opts.force === true || (stale && !partial);
     // Whether to physically WIPE the whole file index first. Diverges from `rebuild` on exactly one case —
     // `force` + `paths` (a scoped force pass): that re-chunks the scoped files (rebuild) but must NOT clear
@@ -463,7 +464,7 @@ export class LiteCtx {
     // here, so the old complete index stays queryable through the seconds-long chunk loop and a concurrent
     // reader (e.g. the MCP warm-index) never sees an empty index mid-rebuild. A scoped force pass does NOT
     // wipe, so it loads `prev` and invalidates just its in-scope entries below (like the stale-stamp path).
-    const prev = clearAll ? new Map() : this.store.loadIndex();
+    const prev = clearAll ? new Map() : loaded;
     // A scoped pass that must re-chunk its files — an explicit `force`, or a stale stamp — can't empty
     // `prev` (that would drop out-of-scope files). Invalidate the in-scope entries instead: a sentinel
     // (hash "", mtime/size -1) matches neither `diffFiles`' (mtime, size) fast-skip nor the hash, forcing a
