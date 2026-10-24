@@ -15,13 +15,9 @@
 
 ## What is litectx
 
-**For agents** — a fast MCP server that chunks, ranks and indexes your code and text files, then hands the agent the scattered relevant pieces from across the repo as `file:lines` handles, so it reads only those instead of wading through (or skipping) whole docs. It also answers "what breaks if I change this?" (`impact`: callers, blast radius, a risk bucket; tree-sitter + ripgrep, no LSP; a low reading is hedged, never a promise) and keeps memory across sessions (`remember` / `recall`, found by meaning when embeddings are on; notes that keep proving useful are flagged as promotion candidates, a human confirms).
+**For agents** — an MCP server that indexes your code and docs and hands the agent only the relevant pieces as `file:lines` handles, instead of whole files. It also answers "what breaks if I change this?" and keeps memory across sessions.
 
-**For you** — the same speed in a simple, lightweight local search page: keyword ranking (BM25) with an optional re-rank by meaning, and filters by docs, code, file type, folder or repo. It runs locally on 127.0.0.1, with no LLM.
-
-Searches take milliseconds. On docs, an agent with litectx plus grep answered as well as grep alone at roughly 25-35% lower total cost (about a third fewer tokens when the question's wording differs from the docs, about 7% when it matches; the saving held as the docs grew about 30x). Docs and code hits must share a query word; meaning only re-ranks (embeddings are off by default in the library, on in the CLI and MCP server).
-
-One SQLite file, two production dependencies (`better-sqlite3` for storage and search, `web-tree-sitter` for parsing code), no LLM inside, no always-on server. litectx makes the *context* better, not the model smarter. Pre-1.0: the surface is stable and CI-gated, but may still evolve — see the [CHANGELOG](CHANGELOG.md).
+**For you** — the same search in a simple local page, with filters by docs, code, file type, folder or repo. Searches take milliseconds, it runs on 127.0.0.1, and there is no LLM in it.
 
 ## Lightning-fast local search
 
@@ -38,7 +34,7 @@ litectx
 
 ```text
 ────────────────────────────────────────────────────────
-litectx 0.38.0 · Claude ✓ · page running at http://127.0.0.1:4747
+litectx · Claude ✓ · page running at http://127.0.0.1:4747
 index: 7,246 files · 44 repos · meaning off
 ────────────────────────────────────────────────────────
   1 start   2 stop   3 index   4 setup   5 status   q quit
@@ -78,6 +74,8 @@ One substrate — a typed code+context graph in one file — and the verbs that 
 
 Two recipes cover most uses: mount litectx as a host's memory store (one line, host code never changes), or budget-fit a transcript for the next model call (deterministic, accounts for every elision).
 
+One SQLite file, two production dependencies (`better-sqlite3` for storage and search, `web-tree-sitter` for parsing code), no LLM inside, no always-on server. litectx makes the *context* better, not the model smarter. Pre-1.0: the surface is stable and CI-gated, but may still evolve — see the [CHANGELOG](CHANGELOG.md).
+
 ## Proof — measured, not asserted
 
 Every claim below is a committed benchmark; the core ones run in CI on every push.
@@ -89,7 +87,7 @@ Every claim below is a committed benchmark; the core ones run in CI on every pus
 | `assemble` keeps a needed unit a tight budget would drop | rescued as a signature (1/1 vs 0/1 without) |
 | `summaryWindow` retains decisions from dropped turns | **3/3** vs **0/3** for a plain trim |
 
-**Docs search saves cost without losing answers.** The pre-registered test: 24 fresh questions about two projects' docs, 2 runs each, at about 50 and about 1,500 docs. An agent with litectx plus grep answered as well as grep alone, at the cost and token savings above. Caveat: in that test the litectx arm read each hit together with its neighbouring sections (test-wrapper behaviour, not shipped), which explains much of its correctness edge. Treat it as "no loss, lower cost", not "better answers".
+**Docs search saves cost without losing answers.** The pre-registered test: 24 fresh questions about two projects' docs, 2 runs each, at about 50 and about 1,500 docs. An agent with litectx plus grep answered as well as grep alone at roughly 25-35% lower total cost (about a third fewer tokens when the question's wording differs from the docs, about 7% when it matches; the saving held as the docs grew about 30x). Caveat: in that test the litectx arm read each hit together with its neighbouring sections (test-wrapper behaviour, not shipped), which explains much of its correctness edge. Treat it as "no loss, lower cost", not "better answers". Docs and code hits must share a query word; meaning only re-ranks (embeddings are off by default in the library, on in the CLI and MCP server).
 
 **What it doesn't claim.** litectx scaffolds *search* — it doesn't replace the model's reasoning. A strong model saw no net speed win from in-loop recall; a weaker model got a consistent nudge, not a rescue. The durable wins are cross-session memory and impact's safety check.
 
