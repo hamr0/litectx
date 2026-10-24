@@ -221,6 +221,20 @@ Builds or **incrementally refreshes** the index over `root`.
   phase, and a file edited mid-pass stays keyword-only until the next pass (a vector
   computed from superseded content is dropped, never written). Once the pass finishes
   uninterrupted the final index is byte-identical to a single-transaction build.
+- **Cold builds commit in batches.** A whole-index pass with no file-indexed rows to
+  protect (a first build, or resuming a cancelled one) commits every ~500 files, so a
+  concurrent reader (another connection to the same db) sees results fill in instead of
+  nothing until the end. A rebuild over an **existing** index stays one atomic
+  transaction (readers keep the old index until the new one lands), and a
+  `paths`-scoped pass never batches. The batch size is an internal constant, not an
+  option. A batched build stores the *negated* stamp until its last batch lands, so
+  cancelling it keeps the committed batches and the next `index()` finishes the
+  remainder incrementally instead of restarting; the finished index equals an
+  unbatched one.
+- `opts.onProgress?: ({ done, total }) => void` — **progress.** Called once with
+  `done: 0`, then after each file is chunked. `total` is the number of files this pass
+  will (re)index (a warm pass with nothing changed reports `0` of `0`). Covers the
+  keyword pass, not the embeddings backfill.
 - Default (no opts): re-reads only files whose content changed (fast skip on
   `(mtime, size)`, `content_hash` as the arbiter) and drops files that disappeared.
 

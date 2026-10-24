@@ -5,6 +5,16 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **`index({ onProgress })`**: `onProgress({ done, total })` is called once with `done: 0` and after each file is chunked. `litectx ui` shows it in the busy label ("building index: 2,100 of 7,244 files").
+
+### Changed
+
+- **Cold builds commit in batches** (~500 files, internal constant). A first build of a large tree used to land in one transaction at the very end, so a concurrent reader (the `litectx ui` page, another process) saw nothing for the whole pass (36 s to minutes on ~7,000 files); results now fill in as it runs. A rebuild over an existing index is unchanged (one atomic transaction), as is a `paths`-scoped pass (never batched). A batched build holds the negated stamp until its last batch commits, so a cancelled build keeps what it committed and the next `index()` finishes the rest incrementally rather than starting over. The finished index is identical to an unbatched one.
+
 ## [0.37.0] — 2026-10-23
 
 ### Added

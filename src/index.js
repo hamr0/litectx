@@ -260,6 +260,9 @@ export class StalePointerError extends Error {
  *   `aborted` or the embedder became unavailable)
  */
 
+/** Files per commit when a cold build commits in batches (see `index()`). Internal, deliberately not a config option. */
+const COLD_BATCH_FILES = 500;
+
 /**
  * The store. One instance = one SQLite-backed code+context graph; every verb
  * (recall/impact/get/remember/…) hangs off it. Local-first, single file.
@@ -281,6 +284,8 @@ export class LiteCtx {
     this.include = config.include ?? DEFAULT_INCLUDE;
     this.pathspecs = config.pathspecs;
     this.childRepos = config.childRepos ?? false;
+    /** Files per commit on a COLD build (internal constant; a test hook, not config). @type {number} */
+    this._batchFiles = COLD_BATCH_FILES;
     this.dbPath = config.dbPath ?? join(this.root, ".litectx", "index.db");
     if (this.dbPath !== ":memory:") mkdirSync(dirname(this.dbPath), { recursive: true });
     // scope keys (§4.4 Isolate): the actor + run this instance acts as. Default null = unscoped
@@ -397,12 +402,24 @@ export class LiteCtx {
    * the next `index()` embeds only the files still without one. An aborted pass RESOLVES with
    * `aborted: true` (it is a stop, not an error).
    *
-   * @param {{ paths?: string[], force?: boolean, yield?: boolean, signal?: AbortSignal }} [opts]
+   * **Cold builds commit in batches.** When there is no file-indexed data to protect — a first build, or the
+   * resumption of a cancelled one — a whole-index pass commits every ~500 files instead of once at the end, so a
+   * concurrent reader (another connection, or search served while the pass runs) sees results fill in. A rebuild
+   * over an EXISTING index stays one atomic transaction (readers keep the old index until the new one lands), and
+   * a `paths`-scoped pass never batches. A batched build is stamped "in progress" until its last batch lands, so
+   * cancelling it keeps the committed batches and the next `index()` finishes the remainder incrementally rather
+   * than starting over. The finished index is identical to an unbatched one.
+   *
+   * **Progress.** `onProgress({ done, total })` is called once with `done: 0` and then after each file is
+   * chunked (`total` = files this pass will (re)index; a warm pass with nothing changed reports `0` of `0`).
+   * It covers the keyword pass, not the embeddings backfill.
+   *
+   * @param {{ paths?: string[], force?: boolean, yield?: boolean, signal?: AbortSignal, onProgress?: (p: { done: number, total: number }) => void }} [opts]
    * @returns {Promise<IndexResult>}
    * @category index
    * @when Build or refresh the graph from source before recall/impact — call after files change.
    * @fails Throws `RipgrepMissingError` only via later `impact()`, not here; a bad `root` throws at construction.
-   * @signature liteCtx.index(opts?: { paths?, force?, yield?, signal? }) => Promise<IndexResult>
+   * @signature liteCtx.index(opts?: { paths?, force?, yield?, signal?, onProgress? }) => Promise<IndexResult>
    * @example
    * import { LiteCtx } from 'litectx'
    * const ctx = new LiteCtx({ root: process.cwd() })
@@ -428,7 +445,13 @@ export class LiteCtx {
     // cleared or stamped over, so it narrows the pass exactly like `paths` (without suppressing deletes elsewhere).
     const partial = opts.paths !== undefined || skipped.length > 0;
     const stamp = indexStamp();
-    const stale = this.store.storedStamp() !== stamp;
+    const stored = this.store.storedStamp();
+    // -stamp = a cold build by THIS version that was cut short (see the batched commit below): its committed
+    // batches are current, so it is neither stale (no rebuild from zero) nor complete (not stamped current).
+    const resuming = stored === -stamp;
+    const stale = stored !== stamp && !resuming;
+    // file-indexed rows that exist BEFORE this pass (independent of the `prev` snapshot, which a clearAll empties)
+    const existingFiles = this.store.loadIndex().size;
     const rebuild = opts.force === true || (stale && !partial);
     // Whether to physically WIPE the whole file index first. Diverges from `rebuild` on exactly one case —
     // `force` + `paths` (a scoped force pass): that re-chunks the scoped files (rebuild) but must NOT clear
@@ -473,22 +496,11 @@ export class LiteCtx {
     // chunk each changed file into symbol/section nodes + collect its import specifiers, in one
     // parse (slice 2 + 4). Chunks are additive substrate; imports become edges below.
     const noop = () => ({ files: this.store.count(), added: 0, updated: 0, removed: 0, unchanged, skipped, aborted: true, embedded: 0, embedPending: 0 });
-    for (const u of upserts) {
-      if (opts.signal?.aborted) return noop(); // before the commit: nothing written, the old index stays whole
-      const r = await chunkAndImports(u.path, u.body);
-      u.nodes = r.chunks;
-      u.imports = r.imports;
-      // opt-in cooperative yield (LC-3): parsing is the bulk of the sync block (~74% on a force
-      // pass), and it's the one place with a per-item boundary to release the loop at. Yields the
-      // macrotask queue so a co-hosted timer/socket can fire between files.
-      if (opts.yield) await yieldToLoop();
-    }
 
     // resolve each changed file's imports to intra-repo edges (slice 4). The resolver indexes
     // the FULL current file list (paths only), so a changed file's imports resolve against the
     // whole repo — not just the other files that changed this pass.
-    const ctx = buildResolveCtx(files);
-    for (const u of upserts) u.edges = resolveImports(u.format, u.path, u.imports ?? [], ctx);
+    const rctx = buildResolveCtx(files);
 
     // git activity metadata for the changed files (slice 4) — one `git log` pass, scoped like the
     // index. Grounding shown on hits, never scored (§4.1). Skipped when nothing changed.
@@ -497,16 +509,55 @@ export class LiteCtx {
       for (const u of upserts) u.git = sig.get(u.path);
     }
 
-    // embeddings tier (slice 6): vectors are NOT part of the commit below. They are written afterwards, file by
-    // file, by the backfill (which embeds every indexed file/section still without a vector — exactly this
-    // pass's upserts plus any older gap), so an abort or crash mid-embed keeps what was written and the next
-    // pass resumes. The keyword index commits whole first; recall already handles files without vectors.
-    if (opts.signal?.aborted) return noop();
-
-    // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
-    // first build or a whole rebuild mass-inserts every chunk, which is loading, not editing. `prev` is
-    // empty exactly when the index was physically wiped (clearAll), so its size is the cold-build test.
-    this.store.applyChanges({ upserts, touch, deletes }, Date.now(), prev.size > 0, stamp, clearAll);
+    // Commit shape. DEFAULT = ONE atomic transaction for the whole pass (readers see the old index until the
+    // new one lands). The exception is a COLD build — no file-indexed rows to protect (empty file_index, or the
+    // resumable "-stamp" state below) and a whole-index pass: there is no old index a reader could be served, only
+    // nothing, so the work commits in batches and results fill in as the pass runs. Scoped passes never batch.
+    const batched = !partial && (existingFiles === 0 || (resuming && !rebuild));
+    const slices = [];
+    if (batched) for (let i = 0; i < upserts.length; i += this._batchFiles) slices.push(upserts.slice(i, i + this._batchFiles));
+    if (!slices.length) slices.push(upserts); // atomic pass (or a cold pass with nothing to add): exactly one commit
+    const total = upserts.length;
+    let done = 0;
+    opts.onProgress?.({ done, total });
+    for (let si = 0; si < slices.length; si++) {
+      const slice = slices[si];
+      for (const u of slice) {
+        if (opts.signal?.aborted) return noop(); // before the commit: nothing more written, what is committed stays whole
+        const r = await chunkAndImports(u.path, u.body);
+        u.nodes = r.chunks;
+        u.imports = r.imports;
+        u.edges = resolveImports(u.format, u.path, r.imports ?? [], rctx);
+        done++;
+        opts.onProgress?.({ done, total });
+        // opt-in cooperative yield (LC-3): parsing is the bulk of the sync block (~74% on a force
+        // pass), and it's the one place with a per-item boundary to release the loop at. Yields the
+        // macrotask queue so a co-hosted timer/socket can fire between files.
+        if (opts.yield) await yieldToLoop();
+      }
+      // embeddings tier (slice 6): vectors are NOT part of the commit. They are written afterwards, file by
+      // file, by the backfill (which embeds every indexed file/section still without a vector — exactly this
+      // pass's upserts plus any older gap), so an abort or crash mid-embed keeps what was written and the next
+      // pass resumes. The keyword index commits first; recall already handles files without vectors.
+      if (opts.signal?.aborted) return noop();
+      const first = si === 0;
+      // a batched build is "in progress" until the LAST batch lands: store the NEGATED stamp (a real stamp is
+      // never 0, so -stamp cannot collide with it or with any positive stamp). A cancel/crash then leaves a db
+      // that is neither "current" nor "rebuild me from zero": the next pass sees -stamp, keeps the committed
+      // batches and finishes them incrementally (mtime/size diff). Any OTHER litectx version sees a mismatch and
+      // rebuilds, as ever.
+      if (batched && first) this.store.setStoredStamp(-stamp);
+      // record per-chunk edits (slice 5a) only on an incremental pass over an existing index — a cold
+      // first build, a resumed one, or a whole rebuild mass-inserts every chunk, which is loading, not editing.
+      // `prev` is empty exactly when the index was physically wiped (clearAll). deletes/touch/clear ride batch 1.
+      this.store.applyChanges(
+        { upserts: slice, touch: first ? touch : [], deletes: first ? deletes : [] },
+        Date.now(),
+        prev.size > 0 && !batched,
+        stamp,
+        first && clearAll
+      );
+    }
     if (!partial) this.store.setStoredStamp(stamp); // only a pass over the WHOLE index can vouch for it
 
     // embeddings backfill: a file indexed while embeddings were OFF (the library default) has no vector,

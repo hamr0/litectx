@@ -37,6 +37,7 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {AbortController | null} abort   stops the in-flight pass (Cancel, Ctrl+C, switching away)
  * @property {string | null} error            last index error
  * @property {{ files: number, added: number, updated: number, removed: number, unchanged: number, skipped: { repo: string, error: string }[], aborted: boolean, embedded: number, embedPending: number, ms: number } | null} last
+ * @property {{ done: number, total: number } | null} progress  files done / to do in the running pass (keyword phase), else null
  */
 
 /**
@@ -75,6 +76,7 @@ export async function createUi(opts = {}) {
       abort: null,
       error: null,
       last: null,
+      progress: null,
     };
   }
 
@@ -108,7 +110,7 @@ export async function createUi(opts = {}) {
           ac.signal.addEventListener("abort", ok, { once: true });
         });
         if (ac.signal.aborted) return;
-        const r = await o.ctx.index({ yield: true, signal: ac.signal }); // a cold pass is long; yield so the page + API keep answering
+        const r = await o.ctx.index({ yield: true, signal: ac.signal, onProgress: (p) => { o.progress = p; } }); // a cold pass is long; yield so the page + API keep answering
         o.last = { files: r.files, added: r.added, updated: r.updated, removed: r.removed, unchanged: r.unchanged, skipped: r.skipped, aborted: r.aborted, embedded: r.embedded, embedPending: r.embedPending, ms: Date.now() - t };
         for (const k of r.skipped) console.error(`litectx ui: warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
         o.error = null;
@@ -118,6 +120,7 @@ export async function createUi(opts = {}) {
       } finally {
         o.running = null;
         o.abort = null;
+        o.progress = null;
       }
     })();
     return o.running;
@@ -237,6 +240,7 @@ export async function createUi(opts = {}) {
             indexing: cur.running !== null,
             error: cur.error,
             last: cur.last,
+            progress: cur.running !== null ? cur.progress : null,
             embeddings: cur.embeddings,
             // the tier was asked for but dropped at runtime (optional peer '@huggingface/transformers' missing): BM25 only
             meaningOff: cur.embeddings && !cur.ctx.embeddings,

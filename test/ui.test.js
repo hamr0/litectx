@@ -577,6 +577,30 @@ test("regression: the page and status answer WHILE a cold index pass is running 
   }
 });
 
+test("/api/sources reports index progress while a pass runs, and none once it is done", async () => {
+  const root = join(scratch(), "big");
+  /** @type {Record<string,string>} */
+  const files = {};
+  for (let i = 0; i < 600; i++) files[`src/m${i}.js`] = `export function f${i}(a) {\n  return a + ${i};\n}\n`;
+  repo(root, files);
+  const ui = await createUi({ port: 0, path: root });
+  try {
+    let p = null;
+    for (let i = 0; i < 200 && !p; i++) {
+      const c = (await get(ui, "/api/sources")).json().current;
+      if (c.indexing && c.progress) p = c.progress;
+      else if (!c.indexing) break;
+    }
+    assert.ok(p, "a mid-pass status carried progress");
+    assert.equal(p.total, 600);
+    assert.ok(p.done >= 0 && p.done <= 600);
+    await ui.idle();
+    assert.equal((await get(ui, "/api/sources")).json().current.progress, null);
+  } finally {
+    await ui.close();
+  }
+});
+
 // ---- page state <-> URL hash (Back / reload / bookmark restore the search) --------------------------
 
 /** state.js is a browser classic script: run it against a fake window and take what it publishes. */
