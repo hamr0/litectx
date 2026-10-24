@@ -5,6 +5,25 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.39.0] - 2026-10-24
+
+### Added
+
+- **Pages registry.** Every `litectx ui` process writes `~/.litectx/pages/<pid>.json` once listening and removes it on exit; `/api/sources` gains a `pid` field (additive).
+
+### Changed
+
+- **One search page at a time.** `litectx start` (and menu option 1) with any litectx page already live — its own or a foreground `litectx ui`, found through the pages registry `~/.litectx/pages/<pid>.json` (every `litectx ui` process writes it once listening and removes it on exit, so a foreground `litectx ui --port <any>` is seen on any port; the pid file and the 20-port fallback range still find pages from an older litectx) — starts nothing: it prints `already live: <url> — source <name> (<path>), pid <pid>`, opens the browser on it, and adds `to search <path>, run litectx stop first` when you passed a different path. A foreground `litectx ui` with a page live prints the same line and exits 1. `litectx stop` (and menu option 2) now stops every live page, one `stopped <url> (pid N)` line each (`no search page running` when none; exit 1 plus `kill -9 <pid>` if one will not exit). The status line shows `(+N more — run litectx stop)` if several are live, and so does the end of `litectx start`'s output. `/api/sources` gains `pid` (additive).
+
+### Fixed
+
+- **`litectx ui`**: switching the active source while a search was waiting on its query embed closed the database under it (a 500, "The database connection is not open"). The old source's handles now close once its in-flight searches (and any index pass) end.
+- **`litectx start` / `litectx ui`**: two started at the same moment could both pass the "is a page live?" check and both launch. The check-and-start now runs under an exclusive lock (`~/.litectx/start.lock`, created atomically with its content, stale after a dead pid or the start timeout; a stale lock is taken over atomically, so two waiters cannot delete each other's fresh lock, and the holder re-checks it still owns the lock just before spawning); the loser reports `already live`.
+- **`litectx ui`**: a POST body over the 64 KiB cap now gets a real `413 body too large` (the connection was reset, so the page showed "Failed to fetch").
+- **`litectx ui`**: `/view?p=<file>` without `s`/`e` no longer highlights line 1 and prints `lines 1–1`; with no range it shows the plain file.
+- **`litectx ui`**: the CSP adds `frame-ancestors 'none'`, so another site can no longer frame the page (clickjacking "remove"/"cancel"/"open in PyCharm").
+- **`litectx setup`**: a `~/.claude/settings.json` whose `hooks` (or a hook event) is the wrong type now stops with `… nothing was changed` instead of a raw `TypeError`.
+
 ## [0.38.0] — 2026-10-24
 
 ### Added

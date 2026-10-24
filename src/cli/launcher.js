@@ -2,10 +2,12 @@
 // pid file (~/.litectx/ui.pid). Every function throws a plain Error on failure; the caller prints it.
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import net from "node:net";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { logFile, pidFile, pkgDir, stateDir } from "./paths.js";
+import { cyan } from "./style.js";
+import { lockFile, logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
 
 const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
@@ -26,20 +28,22 @@ function isFree(port) {
 }
 
 /**
- * Walk base, base+1, … (bounded) to the first usable port. A port where a litectx ui already answers is
- * returned as `{ reuse: true }` when `reuse` is set; any other occupied port is skipped.
- * @param {boolean} reuse @returns {Promise<{ port: number, reuse: boolean }>}
+ * Walk base, base+1, … (bounded) to the first port that can be bound; occupied ports are skipped.
+ * @returns {Promise<{ port: number }>}
  */
-export async function pickPort(reuse) {
+export async function pickPort() {
   const base = basePort();
-  for (let p = base; p < base + PORT_TRIES; p++) {
-    if (reuse && (await answers(`http://127.0.0.1:${p}`))) return { port: p, reuse: true };
-    if (await isFree(p)) return { port: p, reuse: false };
-  }
+  for (let p = base; p < base + PORT_TRIES; p++) if (await isFree(p)) return { port: p };
   throw new Error(`no free port in ${base}-${base + PORT_TRIES - 1}; pass --port <n>`);
 }
 const START_TIMEOUT_MS = 15000;
 const STOP_TIMEOUT_MS = 5000;
+
+/** How long `stop` waits for a page to exit. `LITECTX_STOP_TIMEOUT_MS` is an internal override (tests); not documented config. @returns {number} */
+function stopTimeoutMs() {
+  const n = Number(process.env.LITECTX_STOP_TIMEOUT_MS);
+  return Number.isInteger(n) && n > 0 ? n : STOP_TIMEOUT_MS;
+}
 
 /** @typedef {{ pid: number, port: number, url: string, startedAt: string }} UiRecord */
 
@@ -56,31 +60,122 @@ function alive(pid) {
   }
 }
 
-/** Does `url` answer as a litectx ui? (its state endpoint has a version and a sources list) @param {string} url @returns {Promise<boolean>} */
-export async function answers(url) {
+/**
+ * What `url` says about itself if it answers as a litectx ui (its state endpoint has a version and a sources
+ * list), else null. `pid` is absent from an older litectx ui.
+ * @param {string} url
+ * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null } | null>}
+ */
+async function probe(url) {
   try {
     const r = await fetch(`${url}/api/sources`, { signal: AbortSignal.timeout(1500) });
-    if (!r.ok) return false;
+    if (!r.ok) return null;
     const j = /** @type {any} */ (await r.json());
-    return typeof j?.version === "string" && Array.isArray(j?.sources);
+    if (typeof j?.version !== "string" || !Array.isArray(j?.sources)) return null;
+    const src = j.sources.find((/** @type {any} */ x) => x?.name === j.active);
+    return { pid: Number.isInteger(j.pid) ? j.pid : null, source: src ? { name: String(src.name), path: String(src.path) } : null };
   } catch {
-    return false;
+    return null;
   }
 }
 
+/** Does `url` answer as a litectx ui? @param {string} url @returns {Promise<boolean>} */
+async function answers(url) {
+  return (await probe(url)) !== null;
+}
+
+/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null }} LivePage */
+
+/** @typedef {{ pid: number, url: string, port: number, path: string | null, startedAt: string }} PageEntry */
+
 /**
- * Is `pid` a `litectx ui` process? On Linux the command line says so; elsewhere (no /proc) fall back to
- * "its recorded URL answers as litectx". Never signal a pid for which this is false.
- * @param {UiRecord} rec @returns {Promise<boolean>}
+ * Record this process in the page registry (`~/.litectx/pages/<pid>.json`) so `start`/`stop`/`status` find it on
+ * any port. Called by `litectx ui` once it is listening; the entry is removed on exit. Best effort: a registry
+ * that cannot be written only means the page is found through the pid file / port range instead.
+ * @param {{ url: string, path?: string | null }} o
  */
-async function isLitectxUi(rec) {
+export function registerPage(o) {
+  try {
+    mkdirSync(pagesDir(), { recursive: true });
+    const file = join(pagesDir(), `${process.pid}.json`);
+    /** @type {PageEntry} */
+    const entry = { pid: process.pid, url: o.url, port: Number(new URL(o.url).port), path: o.path ?? null, startedAt: new Date().toISOString() };
+    writeFileSync(file, JSON.stringify(entry, null, 2) + "\n");
+    process.on("exit", () => rmSync(file, { force: true }));
+  } catch {
+    // registry unavailable
+  }
+}
+
+/** @returns {PageEntry[]} the registry's well-formed entries (unverified: a killed page leaves its file behind) */
+function readRegistry() {
+  /** @type {PageEntry[]} */
+  const out = [];
+  let names = [];
+  try {
+    names = readdirSync(pagesDir());
+  } catch {
+    return out;
+  }
+  for (const n of names) {
+    try {
+      const j = JSON.parse(readFileSync(join(pagesDir(), n), "utf8"));
+      if (Number.isInteger(j?.pid) && typeof j?.url === "string") out.push({ pid: j.pid, url: j.url, port: Number(j.port), path: j.path ?? null, startedAt: String(j.startedAt ?? "") });
+    } catch {
+      // malformed entry: ignored
+    }
+  }
+  return out;
+}
+
+/**
+ * Every litectx search page that is live right now: the registry's pages, the pid file's URL (older versions)
+ * and every port in the fallback range (older versions). A registry entry whose pid is dead, or whose URL
+ * answers as a different pid, is stale and its file is deleted; one that merely does not answer right now (a
+ * busy page) is left in place but not reported.
+ * @returns {Promise<LivePage[]>}
+ */
+export async function liveUis() {
+  const rec = readRecord();
+  const reg = readRegistry();
+  const base = basePort();
+  const urls = new Set([...reg.map((e) => e.url), ...(rec ? [rec.url] : []), ...Array.from({ length: PORT_TRIES }, (_, i) => `http://127.0.0.1:${base + i}`)]);
+  const found = await Promise.all([...urls].map(async (url) => ({ url, info: await probe(url) })));
+  for (const e of reg) {
+    const info = found.find((f) => f.url === e.url)?.info;
+    if (!alive(e.pid) || (info && info.pid !== null && info.pid !== e.pid)) rmSync(join(pagesDir(), `${e.pid}.json`), { force: true });
+  }
+  /** @type {LivePage[]} */
+  const pages = [];
+  for (const { url, info } of found) {
+    if (!info) continue;
+    const pid = info.pid ?? reg.find((e) => e.url === url)?.pid ?? (rec && rec.url === url ? rec.pid : null);
+    pages.push({ url, pid, source: info.source });
+  }
+  return pages;
+}
+
+/** @param {LivePage} p @returns {string} the "already live" line */
+export function liveMessage(p) {
+  const src = p.source ? `source ${p.source.name} (${p.source.path})` : "no source yet";
+  return `already live: ${cyan(p.url)} — ${src}, pid ${p.pid ?? "unknown"}`;
+}
+
+/**
+ * May `pid` be signalled as the litectx ui serving `page`? Linux: its command line is `litectx[.js] ui` (never
+ * `litectx-mcp`, never anything else) AND the page itself reported that pid. Elsewhere (no /proc): the page
+ * reporting that pid is the evidence. Never signal a pid for which this is false.
+ * @param {LivePage} page @returns {boolean}
+ */
+function isLitectxUi(page) {
+  if (page.pid === null) return false;
   let cmd;
   try {
-    cmd = readFileSync(`/proc/${rec.pid}/cmdline`, "utf8").split("\0");
+    cmd = readFileSync(`/proc/${page.pid}/cmdline`, "utf8").split("\0");
   } catch {
-    return answers(rec.url);
+    return true; // no /proc: the URL answered as litectx and named this pid
   }
-  const i = cmd.findIndex((a) => /(^|[\\/])litectx\.js$/.test(a));
+  const i = cmd.findIndex((a) => /(^|[\\/])litectx(\.js)?$/.test(a));
   return i >= 0 && cmd[i + 1] === "ui";
 }
 
@@ -93,25 +188,6 @@ function readRecord() {
     // absent or malformed
   }
   return null;
-}
-
-/**
- * The background UI recorded by `litectx start`, if it is really running. A stale pid file (dead pid, or a pid
- * that is no longer a litectx ui) is removed.
- * @returns {Promise<UiRecord | null>}
- */
-export async function runningUi() {
-  const rec = readRecord();
-  if (!rec) return null;
-  if (alive(rec.pid) && (await isLitectxUi(rec))) return rec;
-  rmSync(pidFile(), { force: true });
-  return null;
-}
-
-/** Read-only variant for `status`: never removes the stale pid file. @returns {Promise<UiRecord | null>} */
-export async function peekRunningUi() {
-  const rec = readRecord();
-  return rec && alive(rec.pid) && (await isLitectxUi(rec)) ? rec : null;
 }
 
 /** Open `url` in the default browser. Failure is ignored (the URL is printed either way). @param {string} url */
@@ -127,37 +203,189 @@ export function openBrowser(url) {
   }
 }
 
+/** A lock older than this is stale even if its pid is alive (start gives up at START_TIMEOUT_MS). */
+const LOCK_STALE_MS = START_TIMEOUT_MS + 5000;
+
+/** @typedef {{ pid: number, at: number, nonce?: string }} LockRec */
+/** @typedef {(existing: string, created: string) => void} LinkFn */
+
+/** @returns {{ raw: string, rec: LockRec | null } | null} the start lock's raw text and its parsed holder (null when unparseable), or null if there is no lock */
+export function readLockRaw() {
+  let raw;
+  try {
+    raw = readFileSync(lockFile(), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    const j = JSON.parse(raw);
+    if (Number.isInteger(j?.pid) && Number.isFinite(j?.at)) return { raw, rec: { pid: j.pid, at: j.at, nonce: typeof j.nonce === "string" ? j.nonce : undefined } };
+  } catch {
+    // corrupt
+  }
+  return { raw, rec: null };
+}
+
 /**
+ * Put `content` at the lock name by hard-linking `src` to it (fails with EEXIST if anyone holds it). On a
+ * filesystem without hard links (FAT, some SMB, WSL drvfs) any other link error falls back to an exclusive
+ * create (`wx`), which still fails with EEXIST when the lock is held.
+ * @param {string} src @param {string} content @param {LinkFn} link
+ * @returns {boolean} whether the lock name was created
+ */
+function linkOrCreate(src, content, link) {
+  try {
+    link(src, lockFile());
+    return true;
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === "EEXIST") return false;
+  }
+  try {
+    const fd = openSync(lockFile(), "wx");
+    try {
+      writeFileSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
+    return true;
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EEXIST") throw e;
+    return false;
+  }
+}
+
+/**
+ * Create the lock with its content already in place: write a private temp file, then hard-link it to the lock
+ * name (fails with EEXIST if anyone holds it). The lock is never visible empty or half-written.
+ * Exported (with readLockRaw and removeStaleLock) for the interleaving test; `link` is its injection point.
+ * @param {string} nonce
+ * @param {LinkFn} [link]
+ * @returns {boolean} whether this process now holds the lock
+ */
+export function tryCreateLock(nonce, link = linkSync) {
+  const tmp = `${lockFile()}.${process.pid}.${nonce}.tmp`;
+  const content = JSON.stringify({ pid: process.pid, at: Date.now(), nonce });
+  writeFileSync(tmp, content);
+  try {
+    return linkOrCreate(tmp, content, link);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Remove the lock only if it still holds the content `staleRaw` that the caller judged stale. The lock is
+ * first renamed to a private tombstone (of several waiters renaming one file, exactly one succeeds), then its
+ * content is checked: if it is not what was judged stale (a fresh lock was taken in between), it is linked back.
+ * @param {string} staleRaw
+ * @param {LinkFn} [link]
+ */
+export function removeStaleLock(staleRaw, link = linkSync) {
+  const tomb = `${lockFile()}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
+  try {
+    renameSync(lockFile(), tomb);
+  } catch {
+    return; // already gone: someone else removed it
+  }
+  try {
+    let got = null;
+    try {
+      got = readFileSync(tomb, "utf8");
+    } catch {
+      // unreadable tombstone: treat as not matching
+    }
+    if (got === staleRaw) return;
+    try {
+      if (got === null) link(tomb, lockFile());
+      else linkOrCreate(tomb, got, link); // not what we judged stale: put it back
+    } catch {
+      // someone created a newer lock meanwhile; its holder's pre-spawn check sorts out who owns what
+    }
+  } finally {
+    rmSync(tomb, { force: true });
+  }
+}
+
+/**
+ * Take the start lock (`~/.litectx/start.lock`, created atomically with its content) so only one process at a
+ * time runs the "is a page live? → start one" sequence. Waits (bounded) for a live holder; a lock whose pid is
+ * dead or that is older than the start timeout plus a margin is stale and is taken over atomically (see
+ * removeStaleLock); a corrupt lock is stale once the same content has been seen for a second. A lock held by
+ * this process's parent is the parent's `start` waiting for us (the spawned `litectx ui`): proceed without
+ * owning it.
+ * @returns {Promise<(() => void) & { owned: () => boolean }>} release (idempotent); `.owned()` re-reads the lock and says whether it is still this process's
+ */
+export async function acquireStartLock() {
+  mkdirSync(stateDir(), { recursive: true });
+  const t0 = Date.now();
+  const nonce = randomBytes(8).toString("hex");
+  let corruptRaw = ""; // the corrupt content last seen, and when it was first seen
+  let corruptSince = 0;
+  for (;;) {
+    if (tryCreateLock(nonce)) {
+      const owned = () => readLockRaw()?.rec?.nonce === nonce;
+      return Object.assign(
+        () => {
+          if (owned()) rmSync(lockFile(), { force: true });
+        },
+        { owned },
+      );
+    }
+    const cur = readLockRaw();
+    if (!cur) continue; // released between our attempt and the read
+    const held = cur.rec;
+    if (held?.pid === process.ppid) return Object.assign(() => {}, { owned: () => true });
+    let stale;
+    if (held) {
+      stale = !alive(held.pid) || Date.now() - held.at > LOCK_STALE_MS;
+    } else {
+      if (!corruptSince || corruptRaw !== cur.raw) {
+        corruptRaw = cur.raw;
+        corruptSince = Date.now();
+      }
+      stale = Date.now() - corruptSince > 1000;
+    }
+    if (stale) {
+      removeStaleLock(cur.raw);
+      continue;
+    }
+    if (Date.now() - t0 > LOCK_STALE_MS) throw new Error(`another litectx start is in progress (${lockFile()}); try again`);
+    await sleep(50);
+  }
+}
+
+/**
+ * Start the background search page, unless one is already live (only one at a time): then start nothing and
+ * return the live pages (opening the browser on the first one).
  * @param {{ path?: string, port?: number, embeddings?: boolean, open?: boolean }} o
- * @returns {Promise<{ url: string, started: boolean, log: string }>}
+ * @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>}
  */
 export async function startUi(o) {
-  const open = o.open !== false;
-  const rec = await runningUi();
-  if (rec && (await answers(rec.url))) {
-    if (open) openBrowser(rec.url);
-    return { url: rec.url, started: false, log: logFile() };
+  const release = await acquireStartLock();
+  try {
+    return await startUiLocked(o, release);
+  } finally {
+    release();
   }
-  // a litectx ui already on the port (a foreground `litectx ui`, say) is reused; a port held by anything
-  // else moves on to the next free one, unless the caller chose the port explicitly
-  let port = o.port;
-  if (port === undefined) {
-    const pick = await pickPort(true);
-    port = pick.port;
-    if (pick.reuse) {
-      const url = `http://127.0.0.1:${port}`;
-      if (open) openBrowser(url);
-      return { url, started: false, log: logFile() };
-    }
-  } else if (port !== 0) {
-    const url = `http://127.0.0.1:${port}`;
-    if (await answers(url)) {
-      if (open) openBrowser(url);
-      return { url, started: false, log: logFile() };
-    }
-    if (!(await isFree(port))) throw new Error(`port ${port} is in use by another program; pick another with --port`);
-  }
+}
 
+/** @param {{ path?: string, port?: number, embeddings?: boolean, open?: boolean }} o @param {{ owned: () => boolean }} release @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>} */
+async function startUiLocked(o, release) {
+  const open = o.open !== false;
+  const live = await liveUis();
+  if (live.length) {
+    if (open) openBrowser(live[0].url);
+    return { url: live[0].url, started: false, log: logFile(), live };
+  }
+  rmSync(pidFile(), { force: true }); // nothing is live, so any pid file is stale
+  // a port held by anything that is not litectx moves on to the next free one, unless the caller chose the
+  // port explicitly
+  let port = o.port;
+  if (port === undefined) port = (await pickPort()).port;
+  else if (port !== 0 && !(await isFree(port))) throw new Error(`port ${port} is in use by another program; pick another with --port`);
+
+  // belt and braces: if the lock was taken from us (a stale-takeover race), do not start a second page
+  if (!release.owned()) throw new Error(`another litectx start is in progress (${lockFile()}); try again`);
   mkdirSync(stateDir(), { recursive: true });
   const log = logFile();
   const out = openSync(log, "w");
@@ -191,26 +419,41 @@ export async function startUi(o) {
   }
   writeFileSync(pidFile(), JSON.stringify({ pid, port: Number(new URL(url).port), url, startedAt: new Date().toISOString() }, null, 2) + "\n");
   if (open) openBrowser(url);
-  return { url, started: true, log };
+  return { url, started: true, log, live: [] };
 }
 
-/** @returns {Promise<{ stopped: boolean, message: string }>} */
+/**
+ * Stop every live litectx search page (the pid file's and any foreground `litectx ui`). One line per page.
+ * @returns {Promise<{ ok: boolean, lines: string[] }>} ok is false when a page could not be stopped
+ */
 export async function stopUi() {
+  const pages = await liveUis();
   const rec = readRecord();
-  if (!rec) {
-    if (await answers(`http://127.0.0.1:${basePort()}`)) {
-      return { stopped: false, message: `a litectx ui answers on port ${basePort()} but was not started by \`litectx start\` — stop it with Ctrl+C in its terminal` };
+  /** @type {string[]} */
+  const lines = [];
+  let ok = true;
+  for (const p of pages) {
+    if (!isLitectxUi(p) || p.pid === null) {
+      ok = false;
+      lines.push(`not stopping ${p.url}: its process could not be confirmed as a litectx ui — stop it with Ctrl+C in its terminal`);
+      continue;
     }
-    return { stopped: false, message: "nothing running" };
+    try {
+      process.kill(p.pid, "SIGTERM");
+    } catch (e) {
+      ok = false;
+      lines.push(`could not signal ${p.url} (pid ${p.pid}): ${/** @type {Error} */ (e).message}`);
+      continue;
+    }
+    const t0 = Date.now();
+    const limit = stopTimeoutMs();
+    while (alive(p.pid) && Date.now() - t0 < limit) await sleep(50);
+    if (alive(p.pid)) {
+      ok = false;
+      lines.push(`${p.url} (pid ${p.pid}) did not exit within ${limit / 1000}s after SIGTERM — run: kill -9 ${p.pid}`);
+    } else lines.push(`stopped ${p.url} (pid ${p.pid})`);
   }
-  if (!alive(rec.pid) || !(await isLitectxUi(rec))) {
-    rmSync(pidFile(), { force: true });
-    return { stopped: false, message: "nothing running (removed a stale pid file)" };
-  }
-  process.kill(rec.pid, "SIGTERM");
-  const t0 = Date.now();
-  while (alive(rec.pid) && Date.now() - t0 < STOP_TIMEOUT_MS) await sleep(50);
-  if (alive(rec.pid)) throw new Error(`pid ${rec.pid} did not exit within ${STOP_TIMEOUT_MS / 1000}s after SIGTERM; pid file kept`);
-  if (existsSync(pidFile())) rmSync(pidFile(), { force: true });
-  return { stopped: true, message: `stopped the search page (pid ${rec.pid})` };
+  if (!pages.length) lines.push("no search page running");
+  if (rec && !pages.some((p) => p.pid === rec.pid && alive(p.pid)) && existsSync(pidFile())) rmSync(pidFile(), { force: true });
+  return { ok, lines };
 }

@@ -105,7 +105,7 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
       symbol: ch?.symbol ?? null,
       start: s,
       end: e,
-      preview: preview(join(root, h.path), s, e),
+      preview: [], // filled after the limit slice: only the rows that are shown cost a file read
       more: 0,
       others: [],
       noisy: isNoisy(split, file),
@@ -122,7 +122,9 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
   const f = o.folder;
   if (f) rows = rows.filter((x) => x.folder === f || x.folder.startsWith(f + "/"));
   if (o.demote !== false) rows = [...rows.filter((x) => !x.noisy), ...rows.filter((x) => x.noisy)];
-  return { rows: rows.slice(0, o.limit ?? 50), facets };
+  rows = rows.slice(0, o.limit ?? 50);
+  for (const r of rows) r.preview = preview(r.abs, r.start, r.end);
+  return { rows, facets };
 }
 
 /** @param {string} file @returns {string} extension without the dot, "" if none */

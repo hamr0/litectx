@@ -357,6 +357,10 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
     assert.match(ok.text, /<div id="L2" class="ln">/);
     assert.ok(!ok.text.includes("<script>alert(1)"), "file text is HTML-escaped");
     assert.ok(ok.text.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    const bare = await get(ui, "/view?p=a.md");
+    assert.equal(bare.status, 200);
+    assert.doesNotMatch(bare.text, /class="ln on"/, "no range → nothing highlighted");
+    assert.doesNotMatch(bare.text, /lines \d/, "no range → no 'lines N–M' label");
 
     for (const bad of ["../secret.txt", "../../etc/passwd", "a.md/../../secret.txt", "..%2Fsecret.txt"]) {
       const r = await get(ui, `/view?p=${bad.startsWith("..%") ? bad : encodeURIComponent(bad)}`);
@@ -477,9 +481,23 @@ test("static assets are served with a locked-down CSP", async () => {
     }
     const res = await new Promise((ok) => http.get({ host: "127.0.0.1", port: ui.port, path: "/" }, ok));
     assert.match(res.headers["content-security-policy"], /default-src 'none'/);
+    assert.match(res.headers["content-security-policy"], /frame-ancestors 'none'/, "no other site can frame the page");
     assert.equal(res.headers["x-content-type-options"], "nosniff");
     res.resume();
     assert.equal((await get(ui, "/nope")).status, 404);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("an over-cap POST body gets a real 413, and the server keeps serving", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const big = await post(ui, "/api/log", { x: "a".repeat(200000) });
+    assert.equal(big.status, 413);
+    assert.match(big.text, /body too large/);
+    assert.equal((await get(ui, "/api/sources")).status, 200);
   } finally {
     await ui.close();
   }
@@ -526,7 +544,8 @@ test("an embeddings-OFF index pass (the UI default) keeps the vectors an embeddi
 
 test("CLI: `litectx ui <path> --port 0` prints the URL and mode, serves, and a bad path exits 1", async () => {
   const root = manyRepos();
-  const env = { ...process.env, LITECTX_UI_CONFIG: /** @type {string} */ (process.env.LITECTX_UI_CONFIG) };
+  // the base port is moved off 4747 so a page the owner has running there is never seen (one page at a time)
+  const env = { ...process.env, HOME: scratch(), LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)), LITECTX_UI_CONFIG: /** @type {string} */ (process.env.LITECTX_UI_CONFIG) };
   const p = spawn(process.execPath, [BIN, "ui", root, "--port", "0"], { env, stdio: ["ignore", "pipe", "pipe"] });
   try {
     let err = "";
@@ -1064,6 +1083,38 @@ test("regression: toggling meaning while a pass is mid-embed does not start a se
     await ui.idle();
     assert.ok(seen.length > 1, "after the old pass ended, the new pass ran");
     assert.equal((await get(ui, "/api/sources")).json().current.indexing, false);
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});
+
+test("regression: switching sources while a search is parked in its query embed does not close the database under it", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  let parked = false;
+  Embedder.prototype.embed = async function (text) {
+    if (text === "quokka") {
+      parked = true;
+      await gate; // the query embed (the model load / a busy event loop in real life)
+    }
+    return new Float32Array(384).fill(0.05);
+  };
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    await ui.idle(); // the meaning pass is finished: the search below uses the embeddings-on handle
+    const inflight = get(ui, "/api/search?q=quokka");
+    for (let i = 0; i < 200 && !parked; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(parked, "precondition: the search is parked inside its query embed");
+    const sw = await post(ui, "/api/sources", { path: join(root, "alpha") }); // switch the active source under it
+    assert.equal(sw.status, 200, sw.text);
+    release();
+    const res = await inflight;
+    assert.equal(res.status, 200, res.text);
+    assert.ok(res.json().hits.length > 0, "the in-flight search still answers from its own source");
   } finally {
     release();
     Embedder.prototype.embed = real;

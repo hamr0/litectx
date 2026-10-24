@@ -7,23 +7,24 @@ import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { indexStamp } from "../indexer.js";
 import { detectMode } from "../ui/config.js";
-import { answers, basePort, peekRunningUi } from "./launcher.js";
+import { basePort, liveUis } from "./launcher.js";
 import { claudeState } from "./setup.js";
 import { pkgDir, version } from "./paths.js";
 import { bold, cyan, dim, green, yellow, yn } from "./style.js";
 
-/** @returns {Promise<{ running: boolean, url: string, note: string }>} the search page, whoever started it */
+/** @returns {Promise<{ running: boolean, url: string, extra: number }>} the search page, whoever started it; `extra` = further live pages */
 export async function uiInfo() {
-  const rec = await peekRunningUi();
-  if (rec) return { running: true, url: rec.url, note: "" };
-  const url = `http://127.0.0.1:${basePort()}`;
-  return (await answers(url)) ? { running: true, url, note: ", started with `litectx ui`" } : { running: false, url, note: "" };
+  const pages = await liveUis();
+  return pages.length ? { running: true, url: pages[0].url, extra: pages.length - 1 } : { running: false, url: `http://127.0.0.1:${basePort()}`, extra: 0 };
 }
+
+/** @param {number} extra @returns {string} e.g. " (+1 more — run litectx stop)", yellow; "" for none */
+export const moreNote = (extra) => (extra > 0 ? ` ${yellow(`(+${extra} more — run litectx stop)`)}` : "");
 
 /** @returns {Promise<string>} e.g. "running (http://127.0.0.1:4747)" or "not running" */
 export async function uiLine() {
   const u = await uiInfo();
-  return u.running ? `${green("running")} (${cyan(u.url)}${u.note})` : dim("not running");
+  return u.running ? `${green("running")} (${cyan(u.url)})${moreNote(u.extra)}` : dim("not running");
 }
 
 /** @returns {"yes" | "partial" | "no"} */
