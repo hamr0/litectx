@@ -83,7 +83,7 @@ export async function answers(url) {
   return (await probe(url)) !== null;
 }
 
-/** @typedef {{ url: string, port: number, pid: number | null, source: { name: string, path: string } | null, origin: "start" | "foreground" }} LivePage */
+/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null }} LivePage */
 
 /** @typedef {{ pid: number, url: string, port: number, path: string | null, startedAt: string }} PageEntry */
 
@@ -149,7 +149,7 @@ export async function liveUis() {
   for (const { url, info } of found) {
     if (!info) continue;
     const pid = info.pid ?? reg.find((e) => e.url === url)?.pid ?? (rec && rec.url === url ? rec.pid : null);
-    pages.push({ url, port: Number(new URL(url).port), pid, source: info.source, origin: rec && pid === rec.pid ? "start" : "foreground" });
+    pages.push({ url, pid, source: info.source });
   }
   return pages;
 }
