@@ -14,6 +14,14 @@ The **MCP server is not Claude-specific** — `bin/litectx-mcp.js` is a generic 
 server that works with any MCP client (Claude Code, Cursor, etc.). It is documented here only
 because registering it is how you'd use litectx tools from Claude Code.
 
+## Easy path: `litectx setup`
+
+`litectx setup` does everything below in one step: registers the MCP server (user scope, through
+the `claude` CLI), and adds the `SessionStart` and `PreToolUse:Edit` hooks to `~/.claude/settings.json`
+(a `.bak-<timestamp>` copy is written first; other settings are untouched; running it again changes
+nothing, and a moved install is updated in place). `litectx setup --remove` takes litectx's entries out
+again; `litectx status` shows what is wired. The manual steps below are the alternative.
+
 ## MCP server (any MCP client)
 
 Register globally so it auto-scopes to whatever repo you're in (the server defaults `--root` to the

@@ -24,6 +24,17 @@ litectx makes the *context* better, not the model smarter — it owns no loop an
 
 Around those three sit small helpers for fitting evidence into a window: **compress** (render code full, as a signature, or drop it), **isolate** (park a payload and page it back), and budget-fit assembly of a transcript. [bareloop](https://github.com/hamr0/bareloop) leans on the memory side for workflows that improve across runs.
 
+## Quick start
+
+```sh
+npm i -g litectx
+litectx            # a small menu: start the search page, index a folder, set up Claude, check status
+litectx start      # the search page, running in the background; opens your browser
+litectx setup      # one step to connect litectx to Claude Code
+```
+
+`litectx stop` shuts the search page down; `litectx status` shows what is set up, running and indexed.
+
 ## Start here
 
 - **MCP client** (Claude Code, Cursor…) → run `litectx-mcp --root /path/to/repo`. Tools: index · recall · impact · get · recent · promotions · remember · forget.

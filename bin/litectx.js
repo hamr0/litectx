@@ -13,16 +13,23 @@
 //   litectx impact <symbol> [--root <dir>]
 //   litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--root <dir>] [--no-embeddings]
 //   litectx forget <id> [--root <dir>]   |   litectx forget --kind <k> / --by <b>  (bulk)
+//   litectx                                  # on a terminal: a menu over everything below
+//   litectx start [path] [--port <n>] [--embeddings] [--no-open]   # search page in the background (+ opens the browser)
+//   litectx stop
+//   litectx setup [--remove]                 # wire litectx into Claude Code (MCP server + two hooks)
+//   litectx status [path]
 //   litectx ui [path] [--port <n>] [--embeddings]   # localhost search page (127.0.0.1:4747); embeddings OFF unless --embeddings
 
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { LiteCtx, KINDS } from "../src/index.js";
+import { pkgDir } from "../src/cli/paths.js";
 
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, embeddings: boolean, embeddingsFlag: boolean, port: number|undefined, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, embeddings: true, embeddingsFlag: false, port: undefined, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, remove: boolean, noOpen: boolean, embeddings: boolean, embeddingsFlag: boolean, port: number|undefined, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, remove: false, noOpen: false, embeddings: true, embeddingsFlag: false, port: undefined, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "--lines") opts.lines = rest[++i];
@@ -32,6 +39,8 @@ function parse(argv) {
     else if (rest[i] === "--kind") opts.kind = rest[++i];
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
+    else if (rest[i] === "--remove") opts.remove = true;
+    else if (rest[i] === "--no-open") opts.noOpen = true;
     else if (rest[i] === "--embeddings") opts.embeddings = opts.embeddingsFlag = true; // default; kept for back-compat (`ui` is the exception: off unless this flag)
     else if (rest[i] === "--port") opts.port = Number(rest[++i]);
     else if (rest[i] === "--no-embeddings") opts.embeddings = false;
@@ -44,14 +53,49 @@ function parse(argv) {
 async function main() {
   const { cmd, opts } = parse(process.argv.slice(2));
 
+  if (!cmd && process.stdin.isTTY && process.stdout.isTTY) {
+    const { menu } = await import("../src/cli/menu.js");
+    await menu({ index: (p) => runIndex(p, opts.embeddings, false) });
+    return;
+  }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") help();
+
+  if (cmd === "start") {
+    if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
+    const { startUi } = await import("../src/cli/launcher.js");
+    const r = await startUi({ path: opts.words[0] ? resolve(opts.words[0]) : undefined, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
+    console.log(r.started ? `litectx ui started: ${r.url}  (log: ${r.log}; stop with \`litectx stop\`)` : `litectx ui already running: ${r.url}`);
+    return;
+  }
+
+  if (cmd === "stop") {
+    const { stopUi } = await import("../src/cli/launcher.js");
+    console.log(`litectx: ${(await stopUi()).message}`);
+    return;
+  }
+
+  if (cmd === "setup") {
+    const { setup } = await import("../src/cli/setup.js");
+    const r = setup({ remove: opts.remove });
+    for (const l of r.lines) console.log(l);
+    if (!r.ok) process.exit(1);
+    return;
+  }
+
+  if (cmd === "status") {
+    const { statusLines } = await import("../src/cli/status.js");
+    for (const l of await statusLines(opts.words[0])) console.log(l);
+    return;
+  }
 
   if (cmd === "ui") {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
     // Loaded here so the other commands never pay for the server. Embeddings are OFF for the UI unless
     // --embeddings is passed (the CLI's "default on" does not apply: first build is slow).
     const { createUi } = await import("../src/ui/server.js");
-    const ui = await createUi({ port: opts.port, path: opts.words[0], embeddings: opts.embeddingsFlag });
+    // no --port: prefer 4747, move to the next free port if it is taken; an explicit --port is never changed
+    const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort(false)).port;
+    const ui = await createUi({ port, path: opts.words[0], embeddings: opts.embeddingsFlag });
     console.error(`litectx ui: ${ui.url}\n  ${ui.describe()}\n  Ctrl+C to stop`);
     // keep serving; the open server handle holds the process alive
     process.on("SIGINT", () => void ui.close().then(() => process.exit(0)));
@@ -60,15 +104,16 @@ async function main() {
   }
 
   if (cmd === "index") {
-    const root = opts.words[0] ?? opts.root;
-    const ctx = new LiteCtx({ root, embeddings: opts.embeddings });
-    const t = Date.now();
-    const r = await ctx.index({ force: opts.force });
-    ctx.close();
-    console.error(
-      `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
-    );
-    for (const k of r.skipped) console.error(`warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
+    const interactive = !!(process.stdin.isTTY && process.stdout.isTTY);
+    let root = opts.words[0] ?? opts.root;
+    if (interactive && opts.words[0] === undefined && !process.argv.includes("--root")) {
+      const { createInterface } = await import("node:readline/promises");
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      const a = (await rl.question(`folder to index [${process.cwd()}]: `)).trim();
+      rl.close();
+      root = a || process.cwd();
+    }
+    await runIndex(root, opts.embeddings, opts.force, interactive);
     return;
   }
 
@@ -206,6 +251,25 @@ async function main() {
   fail(`unknown command: ${cmd ?? "(none)"}`);
 }
 
+/**
+ * Index `root`; on a terminal, finish with how to register the MCP server in any client.
+ * @param {string} root @param {boolean} embeddings @param {boolean} force @param {boolean} [hint]
+ */
+async function runIndex(root, embeddings, force, hint = true) {
+  const ctx = new LiteCtx({ root, embeddings });
+  const t = Date.now();
+  const r = await ctx.index({ force });
+  ctx.close();
+  console.error(
+    `indexed ${r.files} files from ${root} (+${r.added} ~${r.updated} -${r.removed}, ${r.unchanged} unchanged) in ${Date.now() - t}ms`
+  );
+  for (const k of r.skipped) console.error(`warning: repo '${k.repo}' skipped (git ls-files failed: ${k.error}); its indexed files were kept`);
+  if (hint && process.stdout.isTTY) {
+    const bin = `${pkgDir()}/bin/litectx-mcp.js`;
+    console.log(`\nTo use litectx from any MCP client, register the server:\n  ${JSON.stringify({ mcpServers: { litectx: { command: "node", args: [bin] } } })}\nThe MCP server re-indexes the repo when it starts, so the index stays fresh without Claude.`);
+  }
+}
+
 // A thrown error is a RUNTIME failure, not a usage error — the argv was fine. Print the message and
 // nothing else: `fail` would append the usage block, and the errors that reach here are the ones whose
 // message IS the recovery (StalePointerError says how to re-index). Burying that under five lines of
@@ -260,6 +324,11 @@ function relAge(sec) {
 function usage() {
   return (
     "usage: litectx index [root] [--force] [--no-embeddings] | litectx recall <query...> [--kind <k>] [-n <n>] [--no-embeddings] [--no-log] | litectx get <id> [--lines <A-B>] [--no-log] | litectx recent [--since <days>] [-n <n>] | litectx promotions [--threshold <n>] | litectx impact <symbol> | litectx remember <id> [text...] [--kind <fact|episode|doc>] [--by <human|agent>] [--no-embeddings] | litectx forget <id> | --kind/--by (all take --root <dir>; embeddings ON by default — --no-embeddings for BM25-only)\n" +
+    "       litectx            (on a terminal) a menu over the commands below\n" +
+    "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser\n" +
+    "       litectx stop                                                    stop the background search page\n" +
+    "       litectx setup [--remove]                                        wire litectx into Claude Code (MCP server + hooks)\n" +
+    "       litectx status [path]                                           what is set up, running and indexed (read-only)\n" +
     "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +
     "\noutput columns (tab-separated):\n" +
     "  recall  score  kind/format  path  → chunk-symbol:start-end  git:Ncommits/age(m|h|d)   (memory hits also: provenance use:N)\n" +

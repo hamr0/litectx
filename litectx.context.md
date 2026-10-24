@@ -1315,8 +1315,23 @@ litectx promotions [--threshold <n>]           # hot agent episodes to distil in
 litectx impact <symbol>
 litectx remember <id> [text...] [--kind fact|episode|doc] [--by human|agent] [--no-embeddings]
 litectx forget <id>            # or bulk: litectx forget --kind <k> / --by <b>
-litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare
+litectx help | --help | -h     # usage + the output-column legend (exit 0); also shown bare when not on a terminal
 ```
+
+**Launcher commands** (one `litectx` from anywhere; `~` = `os.homedir()`):
+
+```
+litectx                                   # on a terminal (stdin AND stdout): banner + numbered menu over the commands below
+litectx start [path] [--port <n>] [--embeddings] [--no-open]
+litectx stop
+litectx setup [--remove]
+litectx status [path]
+```
+- `start` runs `litectx ui` detached in the background (output in `~/.litectx/ui.out`, `{pid, port, url, startedAt}` in `~/.litectx/ui.pid`), waits until it answers, prints the URL and opens the browser (`xdg-open` / `open` / `cmd /c start`; failure ignored, the URL is always printed; `--no-open` skips it). A litectx ui already answering (pid file, or a foreground `litectx ui` on the port) is reused, not duplicated; a stale pid file is cleaned up. The preferred port is 4747; with no `--port`, a port held by anything that is not litectx moves on to the next free one (4748, … up to 20 tries, then an error), for `start` and for foreground `litectx ui` alike. An explicit `--port` that is taken is an error, never moved. The pid file records the port actually used; `stop`, `status` and the menu banner read it from there.
+- `stop` signals (SIGTERM) only a pid that is alive AND is a `litectx ui` process (checked through `/proc/<pid>/cmdline` on Linux, otherwise by its URL answering as litectx). A stale pid file is removed without signalling anything. Nothing running → says so, exit 0.
+- `setup` wires Claude Code, all three parts, idempotently: the MCP server (`claude mcp add --scope user litectx -- node <pkg>/bin/litectx-mcp.js --embeddings`; if `claude` is not on PATH the command is printed instead), a `SessionStart` hook (`integrations/claude/warm-index.sh`) and a `PreToolUse` `Edit` hook (`pre-edit-impact.mjs`), merged into `~/.claude/settings.json` (other keys and hooks untouched; an existing litectx entry is found by script filename and its path updated, never duplicated; a `settings.json.bak-<timestamp>` is written first; unparseable JSON aborts without writing). `<pkg>` is the running package's own directory, so it works from a global install. `--remove` takes out only litectx's entries and runs `claude mcp remove --scope user litectx`. Only `~` is consulted (`CLAUDE_CONFIG_DIR` is not).
+- `status [path]` (default cwd) is read-only: version and install dir; whether the search page is running; for the path, whether an index exists, files indexed, repos (folder-of-repos index), meaning on/off (any stored vectors) and when it was last indexed; whether the MCP server and both hooks are registered. It never creates a database or file.
+- `index` with no path on a terminal asks for one (default cwd), and ends by printing the JSON to register `litectx-mcp` in any MCP client plus a note that the server re-indexes on start. Scripted use (no terminal) is unchanged.
 All commands take `--root <dir>` (default: cwd). `remember` reads its body from the arguments
 or, when absent, from piped stdin (`git log -1 --format=%s | litectx remember ep:release
 --kind episode`). Exit 1: unknown id (`get`), nothing matched (`forget`), unknown symbol

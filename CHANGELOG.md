@@ -9,6 +9,7 @@ All notable changes to this project are documented here, following
 
 ### Added
 
+- **One `litectx` command from anywhere.** Bare `litectx` on a terminal shows a banner, a one-line status and a numbered menu (start/stop the search page, index a folder, set up Claude, status); without a terminal it still prints usage. New subcommands: `litectx start [path] [--port N] [--embeddings] [--no-open]` (search page in the background, pid file and log in `~/.litectx/`, opens the browser), `litectx stop` (signals only a live `litectx ui` process), `litectx setup [--remove]` (MCP server user-scope through the `claude` CLI plus the SessionStart and PreToolUse hooks merged into `~/.claude/settings.json`; idempotent, backs the file up first, aborts on malformed JSON) and `litectx status [path]` (read-only). `litectx index` with no path on a terminal asks for one and prints the generic MCP registration snippet afterwards. `litectx ui` keeps its behaviour, except that with no `--port` (and for `start`) a taken 4747 now falls back to the next free port (up to 20 tries); an explicit `--port` that is taken is still an error.
 - **`index({ onProgress })`**: `onProgress({ done, total })` is called once with `done: 0` and after each file is chunked. `litectx ui` shows it in the busy label ("building index: 2,100 of 7,244 files").
 
 ### Changed
