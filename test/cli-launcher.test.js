@@ -676,6 +676,74 @@ test("start lock: a lock held by a dead pid (or an expired one) is stale and cle
   }
 });
 
+/** run `fn` with HOME pointed at a fresh temp dir (the lock functions resolve ~/.litectx at call time) */
+async function withHome(fn) {
+  const sb = sandbox();
+  const old = process.env.HOME;
+  process.env.HOME = sb.home;
+  try {
+    return await fn(join(sb.home, ".litectx", "start.lock"));
+  } finally {
+    process.env.HOME = old;
+  }
+}
+
+test("start lock: a waiter's stale snapshot never removes a lock another waiter took over in between (interleaving, deterministic)", async () => {
+  const { tryCreateLock, removeStaleLock, readLockRaw } = await import("../src/cli/launcher.js");
+  await withHome(async (lock) => {
+    mkdirSync(join(lock, ".."), { recursive: true });
+    const gone = spawn(process.execPath, ["-e", "0"]);
+    await new Promise((ok) => gone.on("close", ok));
+    const staleRaw = JSON.stringify({ pid: gone.pid, at: Date.now(), nonce: "dead" });
+    writeFileSync(lock, staleRaw);
+    // A and B both read the dead holder; A removes it and takes the lock ...
+    removeStaleLock(staleRaw);
+    assert.equal(existsSync(lock), false, "A removed the stale lock");
+    assert.equal(tryCreateLock("nonce-A"), true);
+    // ... then B, still holding its stale snapshot, runs its removal: A's fresh lock must survive intact
+    removeStaleLock(staleRaw);
+    assert.equal(readLockRaw()?.rec?.nonce, "nonce-A", "A's lock was not removed");
+    assert.deepEqual(readdirSync(join(lock, "..")), ["start.lock"], "no tombstone or temp file left behind");
+    // and B cannot take it either
+    assert.equal(tryCreateLock("nonce-B"), false);
+    // a second removal of the very same stale snapshot when nothing is there is a no-op
+    rmSync(lock);
+    removeStaleLock(staleRaw);
+    assert.equal(existsSync(lock), false);
+  });
+});
+
+test("start lock: a holder whose lock was replaced is told so (owned() false) and its release leaves the new lock alone", async () => {
+  const { acquireStartLock } = await import("../src/cli/launcher.js");
+  await withHome(async (lock) => {
+    const release = await acquireStartLock();
+    assert.equal(release.owned(), true);
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now(), nonce: "someone-else" }));
+    assert.equal(release.owned(), false);
+    release();
+    assert.equal(existsSync(lock), true, "release did not delete a lock it no longer owns");
+  });
+});
+
+test("start lock: an empty (corrupt) lock is not removed at first sight — only after the same content has stood for a second; the lock is never created empty", async () => {
+  const { acquireStartLock, tryCreateLock } = await import("../src/cli/launcher.js");
+  await withHome(async (lock) => {
+    mkdirSync(join(lock, ".."), { recursive: true });
+    writeFileSync(lock, "");
+    let got = null;
+    const p = acquireStartLock().then((r) => (got = r));
+    await new Promise((ok) => setTimeout(ok, 400));
+    assert.equal(got, null, "still waiting");
+    assert.equal(existsSync(lock), true, "not removed within the grace period");
+    const r = await p; // corrupt for >1 s: now stale and taken over
+    assert.equal(r.owned(), true);
+    r();
+    // creation goes through a temp file + link, so the lock name never exists without its content
+    assert.equal(tryCreateLock("n1"), true);
+    assert.equal(JSON.parse(readFileSync(lock, "utf8")).nonce, "n1");
+  });
+});
+
 test("one page: a foreground ui is live → start reports it and spawns nothing; a second foreground ui exits 1", async () => {
   const sb = sandbox();
   const repo = join(sb.dir, "repo");

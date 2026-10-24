@@ -14,7 +14,7 @@ All notable changes to this project are documented here, following
 ### Fixed
 
 - **`litectx ui`**: switching the active source while a search was waiting on its query embed closed the database under it (a 500, "The database connection is not open"). The old source's handles now close once its in-flight searches (and any index pass) end.
-- **`litectx start` / `litectx ui`**: two started at the same moment could both pass the "is a page live?" check and both launch. The check-and-start now runs under an exclusive lock (`~/.litectx/start.lock`, stale after a dead pid or the start timeout); the loser reports `already live`.
+- **`litectx start` / `litectx ui`**: two started at the same moment could both pass the "is a page live?" check and both launch. The check-and-start now runs under an exclusive lock (`~/.litectx/start.lock`, created atomically with its content, stale after a dead pid or the start timeout; a stale lock is taken over atomically, so two waiters cannot delete each other's fresh lock, and the holder re-checks it still owns the lock just before spawning); the loser reports `already live`.
 - **`litectx ui`**: a POST body over the 64 KiB cap now gets a real `413 body too large` (the connection was reset, so the page showed "Failed to fetch").
 - **`litectx ui`**: `/view?p=<file>` without `s`/`e` no longer highlights line 1 and prints `lines 1–1`; with no range it shows the plain file.
 - **`litectx ui`**: the CSP adds `frame-ancestors 'none'`, so another site can no longer frame the page (clickjacking "remove"/"cancel"/"open in PyCharm").

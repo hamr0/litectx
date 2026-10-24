@@ -118,6 +118,8 @@ async function main() {
         release();
         process.exit(1);
       }
+      // belt and braces: if the lock was taken from us (a stale-takeover race), do not start a second page
+      if (!release.owned()) die("another litectx start is in progress; try again");
       const { createUi } = await import("../src/ui/server.js");
       // no --port: prefer 4747, move to the next free port if it is taken; an explicit --port is never changed
       const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort()).port;

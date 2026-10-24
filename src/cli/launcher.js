@@ -2,8 +2,9 @@
 // pid file (~/.litectx/ui.pid). Every function throws a plain Error on failure; the caller prints it.
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import net from "node:net";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cyan } from "./style.js";
 import { lockFile, logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
@@ -205,45 +206,117 @@ export function openBrowser(url) {
 /** A lock older than this is stale even if its pid is alive (start gives up at START_TIMEOUT_MS). */
 const LOCK_STALE_MS = START_TIMEOUT_MS + 5000;
 
-/** @returns {{ pid: number, at: number } | null} the start lock's holder, or null if absent/unreadable */
-function readLock() {
+/** @typedef {{ pid: number, at: number, nonce?: string }} LockRec */
+
+/** @returns {{ raw: string, rec: LockRec | null } | null} the start lock's raw text and its parsed holder (null when unparseable), or null if there is no lock */
+export function readLockRaw() {
+  let raw;
   try {
-    const j = JSON.parse(readFileSync(lockFile(), "utf8"));
-    if (Number.isInteger(j?.pid) && Number.isFinite(j?.at)) return { pid: j.pid, at: j.at };
+    raw = readFileSync(lockFile(), "utf8");
   } catch {
-    // absent or half-written
+    return null;
   }
-  return null;
+  try {
+    const j = JSON.parse(raw);
+    if (Number.isInteger(j?.pid) && Number.isFinite(j?.at)) return { raw, rec: { pid: j.pid, at: j.at, nonce: typeof j.nonce === "string" ? j.nonce : undefined } };
+  } catch {
+    // corrupt
+  }
+  return { raw, rec: null };
 }
 
 /**
- * Take the start lock (`~/.litectx/start.lock`, created exclusively) so only one process at a time runs the
- * "is a page live? → start one" sequence. Waits (bounded) for a live holder; a lock whose pid is dead or that is
- * older than the start timeout plus a margin is stale and is removed. A lock held by this process's parent is
- * the parent's `start` waiting for us (the spawned `litectx ui`): proceed without owning it.
- * @returns {Promise<() => void>} release (idempotent)
+ * Create the lock with its content already in place: write a private temp file, then hard-link it to the lock
+ * name (fails with EEXIST if anyone holds it). The lock is never visible empty or half-written.
+ * @param {string} nonce
+ * @returns {boolean} whether this process now holds the lock
+ */
+export function tryCreateLock(nonce) {
+  const tmp = `${lockFile()}.${process.pid}.${nonce}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), nonce }));
+  try {
+    linkSync(tmp, lockFile());
+    return true;
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EEXIST") throw e;
+    return false;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Remove the lock only if it still holds the content `staleRaw` that the caller judged stale. The lock is
+ * first renamed to a private tombstone (of several waiters renaming one file, exactly one succeeds), then its
+ * content is checked: if it is not what was judged stale (a fresh lock was taken in between), it is linked back.
+ * @param {string} staleRaw
+ */
+export function removeStaleLock(staleRaw) {
+  const tomb = `${lockFile()}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
+  try {
+    renameSync(lockFile(), tomb);
+  } catch {
+    return; // already gone: someone else removed it
+  }
+  try {
+    let got = null;
+    try {
+      got = readFileSync(tomb, "utf8");
+    } catch {
+      // unreadable tombstone: treat as not matching
+    }
+    if (got === staleRaw) return;
+    try {
+      linkSync(tomb, lockFile()); // not what we judged stale: put it back
+    } catch {
+      // someone created a newer lock meanwhile; its holder's pre-spawn check sorts out who owns what
+    }
+  } finally {
+    rmSync(tomb, { force: true });
+  }
+}
+
+/**
+ * Take the start lock (`~/.litectx/start.lock`, created atomically with its content) so only one process at a
+ * time runs the "is a page live? → start one" sequence. Waits (bounded) for a live holder; a lock whose pid is
+ * dead or that is older than the start timeout plus a margin is stale and is taken over atomically (see
+ * removeStaleLock); a corrupt lock is stale once the same content has been seen for a second. A lock held by
+ * this process's parent is the parent's `start` waiting for us (the spawned `litectx ui`): proceed without
+ * owning it.
+ * @returns {Promise<(() => void) & { owned: () => boolean }>} release (idempotent); `.owned()` re-reads the lock and says whether it is still this process's
  */
 export async function acquireStartLock() {
   mkdirSync(stateDir(), { recursive: true });
   const t0 = Date.now();
+  const nonce = randomBytes(8).toString("hex");
+  let corruptRaw = ""; // the corrupt content last seen, and when it was first seen
+  let corruptSince = 0;
   for (;;) {
-    try {
-      const fd = openSync(lockFile(), "wx");
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      return () => {
-        if (readLock()?.pid === process.pid) rmSync(lockFile(), { force: true });
-      };
-    } catch (e) {
-      if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EEXIST") throw e;
+    if (tryCreateLock(nonce)) {
+      const owned = () => readLockRaw()?.rec?.nonce === nonce;
+      return Object.assign(
+        () => {
+          if (owned()) rmSync(lockFile(), { force: true });
+        },
+        { owned },
+      );
     }
-    const held = readLock();
-    if (held?.pid === process.ppid) return () => {};
-    // an unreadable lock is a holder mid-write; give it a moment, then treat it as stale
-    const stale = held ? !alive(held.pid) || Date.now() - held.at > LOCK_STALE_MS : Date.now() - t0 > 1000;
+    const cur = readLockRaw();
+    if (!cur) continue; // released between our attempt and the read
+    const held = cur.rec;
+    if (held?.pid === process.ppid) return Object.assign(() => {}, { owned: () => true });
+    let stale;
+    if (held) {
+      stale = !alive(held.pid) || Date.now() - held.at > LOCK_STALE_MS;
+    } else {
+      if (!corruptSince || corruptRaw !== cur.raw) {
+        corruptRaw = cur.raw;
+        corruptSince = Date.now();
+      }
+      stale = Date.now() - corruptSince > 1000;
+    }
     if (stale) {
-      const again = readLock();
-      if (again?.pid === held?.pid && again?.at === held?.at) rmSync(lockFile(), { force: true });
+      removeStaleLock(cur.raw);
       continue;
     }
     if (Date.now() - t0 > LOCK_STALE_MS) throw new Error(`another litectx start is in progress (${lockFile()}); try again`);
@@ -260,14 +333,14 @@ export async function acquireStartLock() {
 export async function startUi(o) {
   const release = await acquireStartLock();
   try {
-    return await startUiLocked(o);
+    return await startUiLocked(o, release);
   } finally {
     release();
   }
 }
 
-/** @param {{ path?: string, port?: number, embeddings?: boolean, open?: boolean }} o @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>} */
-async function startUiLocked(o) {
+/** @param {{ path?: string, port?: number, embeddings?: boolean, open?: boolean }} o @param {{ owned: () => boolean }} release @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>} */
+async function startUiLocked(o, release) {
   const open = o.open !== false;
   const live = await liveUis();
   if (live.length) {
@@ -281,6 +354,8 @@ async function startUiLocked(o) {
   if (port === undefined) port = (await pickPort()).port;
   else if (port !== 0 && !(await isFree(port))) throw new Error(`port ${port} is in use by another program; pick another with --port`);
 
+  // belt and braces: if the lock was taken from us (a stale-takeover race), do not start a second page
+  if (!release.owned()) throw new Error(`another litectx start is in progress (${lockFile()}); try again`);
   mkdirSync(stateDir(), { recursive: true });
   const log = logFile();
   const out = openSync(log, "w");
