@@ -174,6 +174,22 @@ test("setup: malformed settings.json aborts, leaves the file alone and does not 
   assert.deepEqual(readdirSync(join(sb.home, ".claude")), ["settings.json"], "no backup, no stray files");
 });
 
+test("setup: a wrong-typed `hooks` (or event) in settings.json gives the clean 'nothing was changed' error, no TypeError", () => {
+  for (const bad of ['{ "hooks": "x" }', '{ "hooks": { "SessionStart": {} } }', '{ "hooks": [] }']) {
+    const sb = sandbox();
+    fakeClaude(sb);
+    mkdirSync(join(sb.home, ".claude"));
+    writeFileSync(settingsFile(sb), bad);
+    const r = cli(sb, ["setup", "--dev"]);
+    assert.equal(r.code, 1, bad);
+    assert.match(r.err, /nothing was changed/, bad);
+    assert.doesNotMatch(r.err, /TypeError|Cannot create property|is not a function/, bad);
+    assert.equal(readFileSync(settingsFile(sb), "utf8"), bad, "file untouched");
+    assert.equal(calls(sb.claudeLog).length, 0, "claude not called");
+    assert.deepEqual(readdirSync(join(sb.home, ".claude")), ["settings.json"]);
+  }
+});
+
 test("setup: MCP registered at a different path is removed and re-added; claude missing → prints the command", () => {
   const sb = sandbox();
   fakeClaude(sb);

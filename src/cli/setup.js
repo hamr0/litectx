@@ -95,7 +95,10 @@ export function claudeState() {
 function addHooks(s, pkg) {
   let changed = false;
   s.hooks ??= {};
+  const bad = (/** @type {string} */ what) => new Error(`${claudeSettings()} has ${what} that is not the shape Claude Code expects — fix it first; nothing was changed`);
+  if (typeof s.hooks !== "object" || Array.isArray(s.hooks)) throw bad('a "hooks" entry');
   for (const sp of hookSpecs(pkg)) {
+    if (s.hooks[sp.event] !== undefined && s.hooks[sp.event] !== null && !Array.isArray(s.hooks[sp.event])) throw bad(`a "hooks.${sp.event}" entry`);
     const groups = (s.hooks[sp.event] ??= []);
     let seen = false;
     for (let gi = 0; gi < groups.length; gi++) {
