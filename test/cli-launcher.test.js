@@ -730,6 +730,28 @@ test("stop: a page that ignores SIGTERM is reported with `kill -9 <pid>` (no esc
   }
 });
 
+test("one page: start with several pages live ends with the (+N more — run litectx stop) hint; with one page it does not", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  let fg = null;
+  try {
+    assert.equal(cli(sb, ["start", repo, "--no-open"]).code, 0);
+    const one = cli(sb, ["start", repo, "--no-open"]);
+    assert.doesNotMatch(one.out, /more — run litectx stop/);
+    fg = await racedUi(sb, repo, base + 1);
+    const two = cli(sb, ["start", repo, "--no-open"]);
+    assert.equal(two.code, 0, two.err);
+    assert.equal(two.out.match(/already live: /g)?.length, 2);
+    assert.match(two.out, /\(\+1 more — run litectx stop\)\n$/);
+  } finally {
+    cli(sb, ["stop"]);
+    fg?.kill("SIGKILL");
+  }
+});
+
 test("one page: the stop guard refuses a page whose pid is not a litectx ui process", async () => {
   // a fake "litectx ui" API that reports the pid of a plain `sleep` — the guard must not signal it
   const sb = sandbox();

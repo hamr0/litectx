@@ -66,12 +66,14 @@ async function main() {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
     const { startUi, liveMessage } = await import("../src/cli/launcher.js");
     const { cyan, yellow } = await import("../src/cli/style.js");
+    const { moreNote } = await import("../src/cli/status.js");
     const path = opts.words[0] ? resolve(opts.words[0]) : undefined;
     const r = await startUi({ path, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
     if (r.started) console.log(`litectx ui started: ${cyan(r.url)}  (log: ${r.log}; stop with \`litectx stop\`)`);
     else {
       for (const p of r.live) console.log(liveMessage(p));
       if (path && r.live[0].source?.path !== path) console.log(yellow(`to search ${path}, run litectx stop first`));
+      if (r.live.length > 1) console.log(moreNote(r.live.length - 1).trim());
     }
     return;
   }
