@@ -724,6 +724,27 @@ test("start lock: a waiter's stale snapshot never removes a lock another waiter 
   });
 });
 
+test("start lock: on a filesystem without hard links (link throws EPERM/ENOTSUP) the lock is still created with its content, and a stale-removal restore is not lost", async () => {
+  const { tryCreateLock, removeStaleLock, readLockRaw } = await import("../src/cli/launcher.js");
+  for (const code of ["EPERM", "ENOTSUP"]) {
+    const noLink = () => {
+      throw Object.assign(new Error("no hard links"), { code });
+    };
+    await withHome(async (lock) => {
+      mkdirSync(join(lock, ".."), { recursive: true });
+      assert.equal(tryCreateLock("nonce-X", noLink), true, code);
+      const held = readLockRaw();
+      assert.equal(held?.rec?.nonce, "nonce-X");
+      assert.equal(held?.rec?.pid, process.pid);
+      assert.equal(tryCreateLock("nonce-Y", noLink), false, "held lock is still reported held");
+      // a waiter's stale snapshot must not remove X's fresh lock, even when it can only be restored by exclusive create
+      removeStaleLock(JSON.stringify({ pid: 1, at: 1, nonce: "old" }), noLink);
+      assert.equal(readFileSync(lock, "utf8"), held?.raw, "restored byte-identical");
+      assert.deepEqual(readdirSync(join(lock, "..")), ["start.lock"], "no tombstone or temp file left behind");
+    });
+  }
+});
+
 test("start lock: a holder whose lock was replaced is told so (owned() false) and its release leaves the new lock alone", async () => {
   const { acquireStartLock } = await import("../src/cli/launcher.js");
   await withHome(async (lock) => {

@@ -207,6 +207,7 @@ export function openBrowser(url) {
 const LOCK_STALE_MS = START_TIMEOUT_MS + 5000;
 
 /** @typedef {{ pid: number, at: number, nonce?: string }} LockRec */
+/** @typedef {(existing: string, created: string) => void} LinkFn */
 
 /** @returns {{ raw: string, rec: LockRec | null } | null} the start lock's raw text and its parsed holder (null when unparseable), or null if there is no lock */
 export function readLockRaw() {
@@ -226,20 +227,47 @@ export function readLockRaw() {
 }
 
 /**
- * Create the lock with its content already in place: write a private temp file, then hard-link it to the lock
- * name (fails with EEXIST if anyone holds it). The lock is never visible empty or half-written.
- * @param {string} nonce
- * @returns {boolean} whether this process now holds the lock
+ * Put `content` at the lock name by hard-linking `src` to it (fails with EEXIST if anyone holds it). On a
+ * filesystem without hard links (FAT, some SMB, WSL drvfs) any other link error falls back to an exclusive
+ * create (`wx`), which still fails with EEXIST when the lock is held.
+ * @param {string} src @param {string} content @param {LinkFn} link
+ * @returns {boolean} whether the lock name was created
  */
-export function tryCreateLock(nonce) {
-  const tmp = `${lockFile()}.${process.pid}.${nonce}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), nonce }));
+function linkOrCreate(src, content, link) {
   try {
-    linkSync(tmp, lockFile());
+    link(src, lockFile());
+    return true;
+  } catch (e) {
+    if (/** @type {NodeJS.ErrnoException} */ (e).code === "EEXIST") return false;
+  }
+  try {
+    const fd = openSync(lockFile(), "wx");
+    try {
+      writeFileSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
     return true;
   } catch (e) {
     if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EEXIST") throw e;
     return false;
+  }
+}
+
+/**
+ * Create the lock with its content already in place: write a private temp file, then hard-link it to the lock
+ * name (fails with EEXIST if anyone holds it). The lock is never visible empty or half-written.
+ * Exported (with readLockRaw and removeStaleLock) for the interleaving test; `link` is its injection point.
+ * @param {string} nonce
+ * @param {LinkFn} [link]
+ * @returns {boolean} whether this process now holds the lock
+ */
+export function tryCreateLock(nonce, link = linkSync) {
+  const tmp = `${lockFile()}.${process.pid}.${nonce}.tmp`;
+  const content = JSON.stringify({ pid: process.pid, at: Date.now(), nonce });
+  writeFileSync(tmp, content);
+  try {
+    return linkOrCreate(tmp, content, link);
   } finally {
     rmSync(tmp, { force: true });
   }
@@ -250,8 +278,9 @@ export function tryCreateLock(nonce) {
  * first renamed to a private tombstone (of several waiters renaming one file, exactly one succeeds), then its
  * content is checked: if it is not what was judged stale (a fresh lock was taken in between), it is linked back.
  * @param {string} staleRaw
+ * @param {LinkFn} [link]
  */
-export function removeStaleLock(staleRaw) {
+export function removeStaleLock(staleRaw, link = linkSync) {
   const tomb = `${lockFile()}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {
     renameSync(lockFile(), tomb);
@@ -267,7 +296,8 @@ export function removeStaleLock(staleRaw) {
     }
     if (got === staleRaw) return;
     try {
-      linkSync(tomb, lockFile()); // not what we judged stale: put it back
+      if (got === null) link(tomb, lockFile());
+      else linkOrCreate(tomb, got, link); // not what we judged stale: put it back
     } catch {
       // someone created a newer lock meanwhile; its holder's pre-spawn check sorts out who owns what
     }
