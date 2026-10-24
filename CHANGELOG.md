@@ -13,6 +13,7 @@ All notable changes to this project are documented here, following
 
 ### Fixed
 
+- **`litectx ui`**: switching the active source while a search was waiting on its query embed closed the database under it (a 500, "The database connection is not open"). The old source's handles now close once its in-flight searches (and any index pass) end.
 - **`litectx start` / `litectx ui`**: two started at the same moment could both pass the "is a page live?" check and both launch. The check-and-start now runs under an exclusive lock (`~/.litectx/start.lock`, stale after a dead pid or the start timeout); the loser reports `already live`.
 - **`litectx ui`**: a POST body over the 64 KiB cap now gets a real `413 body too large` (the connection was reset, so the page showed "Failed to fetch").
 - **`litectx ui`**: `/view?p=<file>` without `s`/`e` no longer highlights line 1 and prints `lines 1–1`; with no range it shows the plain file.

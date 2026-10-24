@@ -33,6 +33,9 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {LiteCtx} ctx
  * @property {LiteCtx | null} kwCtx   embeddings-off handle on the same db, opened on the first search during a meaning pass
  * @property {string[]} repoNames
+ * @property {number} inflight                searches currently using ctx/kwCtx (a switch defers closing them until these end)
+ * @property {boolean} retired                no longer the active source: close once idle
+ * @property {boolean} closed
  * @property {Promise<void> | null} running   the in-flight index pass, if any
  * @property {AbortController | null} abort   stops the in-flight pass (Cancel, Ctrl+C, switching away)
  * @property {string | null} error            last index error
@@ -71,6 +74,9 @@ export async function createUi(opts = {}) {
       embeddings: s.embeddings === true,
       ctx,
       kwCtx: null,
+      inflight: 0,
+      retired: false,
+      closed: false,
       repoNames: m.mode.mode === "repos" ? childRepos(s.path) : [s.name],
       running: null,
       abort: null,
@@ -84,13 +90,25 @@ export async function createUi(opts = {}) {
     const old = cur;
     cur = null;
     if (!old) return;
-    old.kwCtx?.close();
+    old.retired = true;
     old.abort?.abort(); // a pass for a source nobody is looking at stops at its next file/embed; its vectors so far are kept
-    // never close a store under a running index pass
     if (old.running) {
-      void old.running.finally(() => old.ctx.close());
+      void old.running.finally(() => closeIfIdle(old));
       settling = Promise.all([settling, old.running]); // a new pass waits for this one (never two passes on one db)
-    } else old.ctx.close();
+    }
+    closeIfIdle(old);
+  }
+
+  /** Close a retired source's handles once nothing uses them: no index pass and no search in flight. @param {Open} o */
+  function closeIfIdle(o) {
+    if (!o.retired || o.inflight > 0) return;
+    if (o.kwCtx) {
+      o.kwCtx.close();
+      o.kwCtx = null;
+    }
+    if (o.running || o.closed) return; // never close a store under a running index pass
+    o.closed = true;
+    o.ctx.close();
   }
 
   /** One incremental index pass of the active source; concurrent callers share it. @returns {Promise<void>} */
@@ -379,15 +397,22 @@ export async function createUi(opts = {}) {
     // While a pass runs with meaning on, the in-flight file embed blocks the event loop and a query embed
     // would wait behind it (~2 s): search by keywords on a second, embeddings-off handle on the same db.
     const kwOnly = o.embeddings && o.running !== null;
-    if (kwOnly && !o.kwCtx) o.kwCtx = new LiteCtx({ root: o.path, childRepos: o.mode.mode === "repos", embeddings: false });
-    const r = await search(kwOnly && o.kwCtx ? o.kwCtx : o.ctx, o.path, o.mode.mode, o.name, sp.get("q") ?? "", {
-      repos: list("repos"),
-      kinds: list("kinds"),
-      ext: sp.get("ext") || undefined,
-      folder: sp.get("folder") || undefined,
-      demote: sp.get("demote") !== "0",
-      group: sp.get("group") !== "0",
-    });
+    o.inflight++; // a source switch must not close this handle under the search
+    let r;
+    try {
+      if (kwOnly && !o.kwCtx) o.kwCtx = new LiteCtx({ root: o.path, childRepos: o.mode.mode === "repos", embeddings: false });
+      r = await search(kwOnly && o.kwCtx ? o.kwCtx : o.ctx, o.path, o.mode.mode, o.name, sp.get("q") ?? "", {
+        repos: list("repos"),
+        kinds: list("kinds"),
+        ext: sp.get("ext") || undefined,
+        folder: sp.get("folder") || undefined,
+        demote: sp.get("demote") !== "0",
+        group: sp.get("group") !== "0",
+      });
+    } finally {
+      o.inflight--;
+      closeIfIdle(o);
+    }
     return json(res, 200, { hits: r.rows, facets: r.facets, ms: Date.now() - t, indexing: o.running !== null, keywordsOnly: kwOnly, source: o.name });
   }
 

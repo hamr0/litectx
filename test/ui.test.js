@@ -1089,3 +1089,35 @@ test("regression: toggling meaning while a pass is mid-embed does not start a se
     await ui.close();
   }
 });
+
+test("regression: switching sources while a search is parked in its query embed does not close the database under it", async () => {
+  const root = manyRepos();
+  const real = Embedder.prototype.embed;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  let parked = false;
+  Embedder.prototype.embed = async function (text) {
+    if (text === "quokka") {
+      parked = true;
+      await gate; // the query embed (the model load / a busy event loop in real life)
+    }
+    return new Float32Array(384).fill(0.05);
+  };
+  const ui = await createUi({ port: 0, path: root, embeddings: true });
+  try {
+    await ui.idle(); // the meaning pass is finished: the search below uses the embeddings-on handle
+    const inflight = get(ui, "/api/search?q=quokka");
+    for (let i = 0; i < 200 && !parked; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(parked, "precondition: the search is parked inside its query embed");
+    const sw = await post(ui, "/api/sources", { path: join(root, "alpha") }); // switch the active source under it
+    assert.equal(sw.status, 200, sw.text);
+    release();
+    const res = await inflight;
+    assert.equal(res.status, 200, res.text);
+    assert.ok(res.json().hits.length > 0, "the in-flight search still answers from its own source");
+  } finally {
+    release();
+    Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});
