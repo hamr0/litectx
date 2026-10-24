@@ -10,6 +10,8 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
+import { indexStamp } from "../src/indexer.js";
 
 const PKG = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const BIN = join(PKG, "bin", "litectx.js");
@@ -624,4 +626,23 @@ test("index: a leading ~ expands to HOME; a nonexistent folder exits 1 and creat
   assert.ok(!existsSync(join(sb.home, "nope")));
   const file = cli(sb, ["index", join(sb.home, "proj", "a.js"), "--no-embeddings"], { cwd: sb.dir });
   assert.equal(file.code, 1, "a file is not a folder");
+});
+
+test("status: a cold build that was cut short is reported as incomplete; a complete index is not", () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  assert.equal(cli(sb, ["index", repo, "--no-embeddings"]).code, 0);
+  assert.doesNotMatch(cli(sb, ["status", repo]).out, /incomplete/);
+  const stamp = (/** @type {number} */ v) => {
+    const db = new Database(join(repo, ".litectx", "index.db"));
+    db.pragma("wal_checkpoint(TRUNCATE)");
+    db.pragma("journal_mode = DELETE");
+    db.pragma(`user_version = ${v}`);
+    db.close();
+  };
+  stamp(-indexStamp()); // exactly what LiteCtx.index leaves after Ctrl+C mid cold build
+  assert.match(cli(sb, ["status", repo]).out, /index: incomplete — last build was stopped; run litectx index/);
+  stamp(indexStamp());
+  assert.doesNotMatch(cli(sb, ["status", repo]).out, /incomplete/);
 });

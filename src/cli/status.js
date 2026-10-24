@@ -5,11 +5,12 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
+import { indexStamp } from "../indexer.js";
 import { detectMode } from "../ui/config.js";
 import { answers, basePort, peekRunningUi } from "./launcher.js";
 import { claudeState } from "./setup.js";
 import { pkgDir, version } from "./paths.js";
-import { bold, cyan, dim, green, yn } from "./style.js";
+import { bold, cyan, dim, green, yellow, yn } from "./style.js";
 
 /** @returns {Promise<{ running: boolean, url: string, note: string }>} the search page, whoever started it */
 export async function uiInfo() {
@@ -37,12 +38,12 @@ export function claudeSummary() {
  * and status must leave no trace: read in place only while a writer already holds those files (live
  * process); otherwise read a throwaway copy.
  * @param {string} path
- * @returns {{ db: string, files?: number, repos?: number, meaning?: boolean, error?: string, mtime: Date } | null} null when no index
+ * @returns {{ db: string, files?: number, repos?: number, meaning?: boolean, incomplete?: boolean, error?: string, mtime: Date } | null} null when no index
  */
 export function indexInfo(path) {
   const db = join(path, ".litectx", "index.db");
   if (!existsSync(db)) return null;
-  /** @type {{ db: string, files?: number, repos?: number, meaning?: boolean, error?: string, mtime: Date }} */
+  /** @type {{ db: string, files?: number, repos?: number, meaning?: boolean, incomplete?: boolean, error?: string, mtime: Date }} */
   const info = { db, mtime: statSync(db).mtime };
   const live = existsSync(`${db}-wal`) && existsSync(`${db}-shm`);
   const scratch = live ? null : mkdtempSync(join(tmpdir(), "litectx-status-"));
@@ -58,6 +59,8 @@ export function indexInfo(path) {
     const m = detectMode(path);
     if (m.ok && m.mode.mode === "repos") info.repos = m.mode.repos;
     info.meaning = one("SELECT count(*) AS n FROM file_embeddings") > 0;
+    // a cold build that was cut short stores -stamp (see LiteCtx.index): its files are only partly there
+    info.incomplete = Number(handle.pragma("user_version", { simple: true })) === -indexStamp();
   } catch (e) {
     info.error = e instanceof Error ? e.message : String(e);
   } finally {
@@ -74,6 +77,7 @@ function indexLines(path) {
   const lines = [`${bold("index:")} ${i.db}`];
   if (i.error) lines.push(`  could not read the index: ${i.error}`);
   else {
+    if (i.incomplete) lines.push(`  ${yellow("index: incomplete — last build was stopped; run litectx index")}`);
     lines.push(`  files indexed: ${i.files}`);
     if (i.repos !== undefined) lines.push(`  repos: ${i.repos} (folder of repos)`);
     lines.push(`  meaning (embeddings): ${i.meaning ? "on" : dim("off")}`);
