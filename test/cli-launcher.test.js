@@ -671,6 +671,40 @@ test("one page: stop stops every live page (start's and a foreground one), clear
   }
 });
 
+test("one page: a foreground ui on a port outside the fallback range is found by start (no second page) and stopped by stop; the registry is cleaned", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  let far;
+  do far = await freePort();
+  while (far >= base - 1 && far <= base + 25);
+  const pages = join(sb.home, ".litectx", "pages");
+  // a stale entry left by a killed page: dead pid, nothing listening
+  mkdirSync(pages, { recursive: true });
+  writeFileSync(join(pages, "4194999.json"), JSON.stringify({ pid: 4194999, url: "http://127.0.0.1:1", port: 1, path: null, startedAt: "x" }));
+  let ui = null;
+  try {
+    ui = await fgUi(sb, repo, far);
+    assert.ok(await until(() => existsSync(join(pages, `${ui?.pid}.json`))), "registered once listening");
+    const r = cli(sb, ["start", repo, "--no-open"]);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, new RegExp(`already live: http://127\\.0\\.0\\.1:${far} — source \\S+ \\(${repo}\\), pid ${ui.pid}`));
+    assert.equal(existsSync(join(sb.home, ".litectx", "ui.pid")), false, "nothing spawned");
+    assert.equal(await portFree(base), true, "no second page");
+    assert.equal(existsSync(join(pages, "4194999.json")), false, "stale entry deleted");
+    const s = await cliAsync(sb, ["stop"]);
+    assert.equal(s.code, 0, s.err + s.out);
+    assert.match(s.out, new RegExp(`stopped http://127\\.0\\.0\\.1:${far} \\(pid ${ui.pid}\\)`));
+    assert.ok(await until(() => !alive(/** @type {number} */ (ui?.pid))));
+    assert.equal(await portFree(far), true);
+    assert.equal(existsSync(join(pages, `${ui.pid}.json`)), false, "entry removed on clean exit");
+  } finally {
+    ui?.kill("SIGKILL");
+  }
+});
+
 test("one page: the stop guard refuses a page whose pid is not a litectx ui process", async () => {
   // a fake "litectx ui" API that reports the pid of a plain `sleep` — the guard must not signal it
   const sb = sandbox();

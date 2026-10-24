@@ -3,10 +3,10 @@
 
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cyan } from "./style.js";
-import { logFile, pidFile, pkgDir, stateDir } from "./paths.js";
+import { logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
 
 const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
@@ -79,21 +79,70 @@ export async function answers(url) {
 
 /** @typedef {{ url: string, port: number, pid: number | null, source: { name: string, path: string } | null, origin: "start" | "foreground" }} LivePage */
 
+/** @typedef {{ pid: number, url: string, port: number, path: string | null, startedAt: string }} PageEntry */
+
 /**
- * Every litectx search page that is live right now: the pid file's URL plus every port in the fallback range.
- * Read-only (never removes the pid file). `origin` is "start" when the page is the pid file's process.
+ * Record this process in the page registry (`~/.litectx/pages/<pid>.json`) so `start`/`stop`/`status` find it on
+ * any port. Called by `litectx ui` once it is listening; the entry is removed on exit. Best effort: a registry
+ * that cannot be written only means the page is found through the pid file / port range instead.
+ * @param {{ url: string, path?: string | null }} o
+ */
+export function registerPage(o) {
+  try {
+    mkdirSync(pagesDir(), { recursive: true });
+    const file = join(pagesDir(), `${process.pid}.json`);
+    /** @type {PageEntry} */
+    const entry = { pid: process.pid, url: o.url, port: Number(new URL(o.url).port), path: o.path ?? null, startedAt: new Date().toISOString() };
+    writeFileSync(file, JSON.stringify(entry, null, 2) + "\n");
+    process.on("exit", () => rmSync(file, { force: true }));
+  } catch {
+    // registry unavailable
+  }
+}
+
+/** @returns {PageEntry[]} the registry's well-formed entries (unverified: a killed page leaves its file behind) */
+function readRegistry() {
+  /** @type {PageEntry[]} */
+  const out = [];
+  let names = [];
+  try {
+    names = readdirSync(pagesDir());
+  } catch {
+    return out;
+  }
+  for (const n of names) {
+    try {
+      const j = JSON.parse(readFileSync(join(pagesDir(), n), "utf8"));
+      if (Number.isInteger(j?.pid) && typeof j?.url === "string") out.push({ pid: j.pid, url: j.url, port: Number(j.port), path: j.path ?? null, startedAt: String(j.startedAt ?? "") });
+    } catch {
+      // malformed entry: ignored
+    }
+  }
+  return out;
+}
+
+/**
+ * Every litectx search page that is live right now: the registry's pages, the pid file's URL (older versions)
+ * and every port in the fallback range (older versions). A registry entry whose pid is dead, or whose URL
+ * answers as a different pid, is stale and its file is deleted; one that merely does not answer right now (a
+ * busy page) is left in place but not reported.
  * @returns {Promise<LivePage[]>}
  */
 export async function liveUis() {
   const rec = readRecord();
+  const reg = readRegistry();
   const base = basePort();
-  const urls = new Set([...(rec ? [rec.url] : []), ...Array.from({ length: PORT_TRIES }, (_, i) => `http://127.0.0.1:${base + i}`)]);
+  const urls = new Set([...reg.map((e) => e.url), ...(rec ? [rec.url] : []), ...Array.from({ length: PORT_TRIES }, (_, i) => `http://127.0.0.1:${base + i}`)]);
   const found = await Promise.all([...urls].map(async (url) => ({ url, info: await probe(url) })));
+  for (const e of reg) {
+    const info = found.find((f) => f.url === e.url)?.info;
+    if (!alive(e.pid) || (info && info.pid !== null && info.pid !== e.pid)) rmSync(join(pagesDir(), `${e.pid}.json`), { force: true });
+  }
   /** @type {LivePage[]} */
   const pages = [];
   for (const { url, info } of found) {
     if (!info) continue;
-    const pid = info.pid ?? (rec && rec.url === url ? rec.pid : null);
+    const pid = info.pid ?? reg.find((e) => e.url === url)?.pid ?? (rec && rec.url === url ? rec.pid : null);
     pages.push({ url, port: Number(new URL(url).port), pid, source: info.source, origin: rec && pid === rec.pid ? "start" : "foreground" });
   }
   return pages;

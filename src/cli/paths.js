@@ -16,6 +16,8 @@ export const version = () => /** @type {{ version: string }} */ (JSON.parse(read
 export const stateDir = () => join(homedir(), ".litectx");
 /** @returns {string} */
 export const pidFile = () => join(stateDir(), "ui.pid");
+/** @returns {string} ~/.litectx/pages — one `<pid>.json` per live `litectx ui` process */
+export const pagesDir = () => join(stateDir(), "pages");
 /** @returns {string} */
 export const logFile = () => join(stateDir(), "ui.out");
 
