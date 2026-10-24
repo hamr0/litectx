@@ -14,6 +14,7 @@ All notable changes to this project are documented here, following
 ### Fixed
 
 - **`litectx ui`**: a POST body over the 64 KiB cap now gets a real `413 body too large` (the connection was reset, so the page showed "Failed to fetch").
+- **`litectx ui`**: `/view?p=<file>` without `s`/`e` no longer highlights line 1 and prints `lines 1–1`; with no range it shows the plain file.
 
 ## [0.38.0] — 2026-10-24
 

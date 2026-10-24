@@ -398,7 +398,7 @@ export async function createUi(opts = {}) {
     const st = statSync(target);
     if (!st.isFile()) throw new HttpError(404, "not a file");
     if (st.size > MAX_VIEW_BYTES) throw new HttpError(413, "file too large to view");
-    const s = Math.max(1, Number.parseInt(sp.get("s") ?? "", 10) || 0);
+    const s = Math.max(0, Number.parseInt(sp.get("s") ?? "", 10) || 0); // 0 = no range
     const e = Math.max(s, Number.parseInt(sp.get("e") ?? "", 10) || s);
     const lines = readFileSync(target, "utf8").split("\n");
     const body = lines

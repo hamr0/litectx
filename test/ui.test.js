@@ -357,6 +357,10 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
     assert.match(ok.text, /<div id="L2" class="ln">/);
     assert.ok(!ok.text.includes("<script>alert(1)"), "file text is HTML-escaped");
     assert.ok(ok.text.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    const bare = await get(ui, "/view?p=a.md");
+    assert.equal(bare.status, 200);
+    assert.doesNotMatch(bare.text, /class="ln on"/, "no range → nothing highlighted");
+    assert.doesNotMatch(bare.text, /lines \d/, "no range → no 'lines N–M' label");
 
     for (const bad of ["../secret.txt", "../../etc/passwd", "a.md/../../secret.txt", "..%2Fsecret.txt"]) {
       const r = await get(ui, `/view?p=${bad.startsWith("..%") ? bad : encodeURIComponent(bad)}`);
