@@ -415,7 +415,7 @@ async function startUiLocked(o, release) {
     } catch {
       // already gone
     }
-    throw new Error(`the search page did not answer within ${START_TIMEOUT_MS / 1000}s — see ${log}`);
+    throw new Error(`the search page is still starting (a big folder or a busy computer can take longer than ${START_TIMEOUT_MS / 1000}s) — run litectx start again; details in ${log}`);
   }
   writeFileSync(pidFile(), JSON.stringify({ pid, port: Number(new URL(url).port), url, startedAt: new Date().toISOString() }, null, 2) + "\n");
   if (open) openBrowser(url);
