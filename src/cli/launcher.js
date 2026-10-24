@@ -38,6 +38,12 @@ export async function pickPort() {
 const START_TIMEOUT_MS = 15000;
 const STOP_TIMEOUT_MS = 5000;
 
+/** How long `stop` waits for a page to exit. `LITECTX_STOP_TIMEOUT_MS` is an internal override (tests); not documented config. @returns {number} */
+function stopTimeoutMs() {
+  const n = Number(process.env.LITECTX_STOP_TIMEOUT_MS);
+  return Number.isInteger(n) && n > 0 ? n : STOP_TIMEOUT_MS;
+}
+
 /** @typedef {{ pid: number, port: number, url: string, startedAt: string }} UiRecord */
 
 /** @param {number} ms */
@@ -276,10 +282,11 @@ export async function stopUi() {
       continue;
     }
     const t0 = Date.now();
-    while (alive(p.pid) && Date.now() - t0 < STOP_TIMEOUT_MS) await sleep(50);
+    const limit = stopTimeoutMs();
+    while (alive(p.pid) && Date.now() - t0 < limit) await sleep(50);
     if (alive(p.pid)) {
       ok = false;
-      lines.push(`${p.url} (pid ${p.pid}) did not exit within ${STOP_TIMEOUT_MS / 1000}s after SIGTERM — run: kill ${p.pid}`);
+      lines.push(`${p.url} (pid ${p.pid}) did not exit within ${limit / 1000}s after SIGTERM — run: kill -9 ${p.pid}`);
     } else lines.push(`stopped ${p.url} (pid ${p.pid})`);
   }
   if (!pages.length) lines.push("no search page running");

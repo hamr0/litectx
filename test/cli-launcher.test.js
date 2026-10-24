@@ -705,6 +705,31 @@ test("one page: a foreground ui on a port outside the fallback range is found by
   }
 });
 
+test("stop: a page that ignores SIGTERM is reported with `kill -9 <pid>` (no escalation), exit 1", async () => {
+  const sb = sandbox();
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  sb.env.LITECTX_STOP_TIMEOUT_MS = "400";
+  // a stand-in named litectx.js (argv `litectx.js ui`, so the Linux cmdline guard accepts it) that serves the
+  // state endpoint with its own pid and ignores SIGTERM
+  const dir = join(sb.dir, "stubborn");
+  mkdirSync(dir, { recursive: true });
+  const script = join(dir, "litectx.js");
+  writeFileSync(script, `process.on("SIGTERM", () => {});\nimport("node:http").then(({ default: http }) => http.createServer((q, r) => r.end(JSON.stringify({ version: "x", pid: process.pid, active: null, sources: [] }))).listen(${base}, "127.0.0.1", () => console.error("up")));\n`);
+  const stub = spawn(process.execPath, [script, "ui"], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  stub.stderr?.on("data", (c) => (err += c));
+  try {
+    assert.ok(await until(() => /up/.test(err), 10000), err);
+    const s = await cliAsync(sb, ["stop"]);
+    assert.equal(s.code, 1, s.err + s.out);
+    assert.match(s.out, new RegExp(`pid ${stub.pid}\\) did not exit within 0\\.4s after SIGTERM — run: kill -9 ${stub.pid}\\n`));
+    assert.equal(alive(/** @type {number} */ (stub.pid)), true, "stop does not escalate to SIGKILL");
+  } finally {
+    stub.kill("SIGKILL");
+  }
+});
+
 test("one page: the stop guard refuses a page whose pid is not a litectx ui process", async () => {
   // a fake "litectx ui" API that reports the pid of a plain `sleep` — the guard must not signal it
   const sb = sandbox();
