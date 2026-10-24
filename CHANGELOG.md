@@ -5,6 +5,12 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Changed
+
+- **`litectx start`**: when the page outlasts the 15s wait, the error now says it is still starting (a big folder or a busy computer can take longer) and to run `litectx start` again, instead of only "did not answer".
+
 ## [0.39.0] - 2026-10-24
 
 ### Added
