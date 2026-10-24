@@ -11,6 +11,10 @@ All notable changes to this project are documented here, following
 
 - **One search page at a time.** `litectx start` (and menu option 1) with any litectx page already live — its own or a foreground `litectx ui`, found through the pages registry `~/.litectx/pages/<pid>.json` (every `litectx ui` process writes it once listening and removes it on exit, so a foreground `litectx ui --port <any>` is seen on any port; the pid file and the 20-port fallback range still find pages from an older litectx) — starts nothing: it prints `already live: <url> — source <name> (<path>), pid <pid>`, opens the browser on it, and adds `to search <path>, run litectx stop first` when you passed a different path. A foreground `litectx ui` with a page live prints the same line and exits 1. `litectx stop` (and menu option 2) now stops every live page, one `stopped <url> (pid N)` line each (`no search page running` when none; exit 1 plus `kill -9 <pid>` if one will not exit). The status line shows `(+N more — run litectx stop)` if several are live, and so does the end of `litectx start`'s output. `/api/sources` gains `pid` (additive).
 
+### Fixed
+
+- **`litectx ui`**: a POST body over the 64 KiB cap now gets a real `413 body too large` (the connection was reset, so the page showed "Failed to fetch").
+
 ## [0.38.0] — 2026-10-24
 
 ### Added

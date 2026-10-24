@@ -479,14 +479,14 @@ function readJson(req) {
     let size = 0;
     /** @type {Buffer[]} */
     const chunks = [];
+    // over the cap: reject at once, but keep draining (not destroying) so the 413 reaches the client
     req.on("data", (c) => {
       size += c.length;
-      if (size > MAX_BODY) {
-        fail(new HttpError(413, "body too large"));
-        req.destroy();
-      } else chunks.push(c);
+      if (size <= MAX_BODY) chunks.push(c);
+      else if (size - c.length <= MAX_BODY) fail(new HttpError(413, "body too large"));
     });
     req.on("end", () => {
+      if (size > MAX_BODY) return;
       if (!chunks.length) return ok({});
       try {
         ok(JSON.parse(Buffer.concat(chunks).toString("utf8")));

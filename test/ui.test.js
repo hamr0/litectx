@@ -485,6 +485,19 @@ test("static assets are served with a locked-down CSP", async () => {
   }
 });
 
+test("an over-cap POST body gets a real 413, and the server keeps serving", async () => {
+  scratch();
+  const ui = await createUi({ port: 0 });
+  try {
+    const big = await post(ui, "/api/log", { x: "a".repeat(200000) });
+    assert.equal(big.status, 413);
+    assert.match(big.text, /body too large/);
+    assert.equal((await get(ui, "/api/sources")).status, 200);
+  } finally {
+    await ui.close();
+  }
+});
+
 // ---- embeddings -------------------------------------------------------------------------------------
 
 test("an embeddings-OFF index pass (the UI default) keeps the vectors an embeddings-ON writer built", async () => {
