@@ -481,6 +481,7 @@ test("static assets are served with a locked-down CSP", async () => {
     }
     const res = await new Promise((ok) => http.get({ host: "127.0.0.1", port: ui.port, path: "/" }, ok));
     assert.match(res.headers["content-security-policy"], /default-src 'none'/);
+    assert.match(res.headers["content-security-policy"], /frame-ancestors 'none'/, "no other site can frame the page");
     assert.equal(res.headers["x-content-type-options"], "nosniff");
     res.resume();
     assert.equal((await get(ui, "/nope")).status, 404);
