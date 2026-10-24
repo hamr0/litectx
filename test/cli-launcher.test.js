@@ -625,6 +625,57 @@ test("one page: start twice → second reports url/source/pid, no second server;
   }
 });
 
+test("start lock: two concurrent `litectx start` → exactly one page; the other reports already live; the lock is released", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  try {
+    const rs = await Promise.all([cliAsync(sb, ["start", repo, "--no-open"]), cliAsync(sb, ["start", repo, "--no-open"])]);
+    assert.deepEqual(rs.map((r) => r.code), [0, 0], rs.map((r) => r.err).join("|"));
+    const started = rs.filter((r) => /started|litectx ui: |http:\/\/127/.test(r.out) && !/already live/.test(r.out));
+    const already = rs.filter((r) => /^already live: /.test(r.out));
+    assert.equal(started.length, 1, rs.map((r) => r.out).join("|"));
+    assert.equal(already.length, 1, rs.map((r) => r.out).join("|"));
+    const rec = JSON.parse(readFileSync(join(sb.home, ".litectx", "ui.pid"), "utf8"));
+    assert.match(already[0].out, new RegExp(`pid ${rec.pid}`));
+    const regs = readdirSync(join(sb.home, ".litectx", "pages"));
+    assert.deepEqual(regs, [`${rec.pid}.json`], "one registry entry, the pid file's page");
+    for (let i = 1; i < 4; i++) assert.equal(await portFree(base + i), true, `no server on base+${i}`);
+    assert.equal(existsSync(join(sb.home, ".litectx", "start.lock")), false, "lock released");
+  } finally {
+    cli(sb, ["stop"]);
+  }
+});
+
+test("start lock: a lock held by a dead pid (or an expired one) is stale and cleared; start proceeds", async () => {
+  const sb = sandbox();
+  const repo = join(sb.dir, "repo");
+  tinyRepo(repo);
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  mkdirSync(join(sb.home, ".litectx"), { recursive: true });
+  const lock = join(sb.home, ".litectx", "start.lock");
+  try {
+    // a dead pid: a just-exited child's pid is not reused within the test
+    const gone = spawn(process.execPath, ["-e", "0"]);
+    await new Promise((ok) => gone.on("close", ok));
+    writeFileSync(lock, JSON.stringify({ pid: gone.pid, at: Date.now() }));
+    const r = await cliAsync(sb, ["start", repo, "--no-open"]);
+    assert.equal(r.code, 0, r.err);
+    assert.equal(existsSync(lock), false);
+    cli(sb, ["stop"]);
+    // alive pid but ancient timestamp: stale
+    writeFileSync(lock, JSON.stringify({ pid: process.pid, at: Date.now() - 10 * 60 * 1000 }));
+    const r2 = await cliAsync(sb, ["start", repo, "--no-open"]);
+    assert.equal(r2.code, 0, r2.err);
+    assert.equal(existsSync(lock), false);
+  } finally {
+    cli(sb, ["stop"]);
+  }
+});
+
 test("one page: a foreground ui is live → start reports it and spawns nothing; a second foreground ui exits 1", async () => {
   const sb = sandbox();
   const repo = join(sb.dir, "repo");

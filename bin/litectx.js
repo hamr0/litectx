@@ -107,17 +107,25 @@ async function main() {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
     // Loaded here so the other commands never pay for the server. Embeddings are OFF for the UI unless
     // --embeddings is passed (the CLI's "default on" does not apply: first build is slow).
-    const { liveUis, liveMessage, registerPage } = await import("../src/cli/launcher.js");
-    const live = await liveUis();
-    if (live.length) {
-      for (const p of live) console.error(liveMessage(p));
-      process.exit(1);
+    const { liveUis, liveMessage, registerPage, acquireStartLock } = await import("../src/cli/launcher.js");
+    // the live-check → listen → register sequence runs under the start lock, so two starters cannot both pass the check
+    const release = await acquireStartLock();
+    let ui;
+    try {
+      const live = await liveUis();
+      if (live.length) {
+        for (const p of live) console.error(liveMessage(p));
+        release();
+        process.exit(1);
+      }
+      const { createUi } = await import("../src/ui/server.js");
+      // no --port: prefer 4747, move to the next free port if it is taken; an explicit --port is never changed
+      const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort()).port;
+      ui = await createUi({ port, path: opts.words[0], embeddings: opts.embeddingsFlag });
+      registerPage({ url: ui.url, path: opts.words[0] ? resolve(opts.words[0]) : null });
+    } finally {
+      release();
     }
-    const { createUi } = await import("../src/ui/server.js");
-    // no --port: prefer 4747, move to the next free port if it is taken; an explicit --port is never changed
-    const port = opts.port ?? (await (await import("../src/cli/launcher.js")).pickPort()).port;
-    const ui = await createUi({ port, path: opts.words[0], embeddings: opts.embeddingsFlag });
-    registerPage({ url: ui.url, path: opts.words[0] ? resolve(opts.words[0]) : null });
     console.error(`litectx ui: ${ui.url}\n  ${ui.describe()}\n  Ctrl+C to stop`);
     // keep serving; the open server handle holds the process alive
     process.on("SIGINT", () => void ui.close().then(() => process.exit(0)));

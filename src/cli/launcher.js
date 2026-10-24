@@ -3,10 +3,10 @@
 
 import { spawn } from "node:child_process";
 import net from "node:net";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { cyan } from "./style.js";
-import { logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
+import { lockFile, logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
 
 const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
@@ -202,6 +202,55 @@ export function openBrowser(url) {
   }
 }
 
+/** A lock older than this is stale even if its pid is alive (start gives up at START_TIMEOUT_MS). */
+const LOCK_STALE_MS = START_TIMEOUT_MS + 5000;
+
+/** @returns {{ pid: number, at: number } | null} the start lock's holder, or null if absent/unreadable */
+function readLock() {
+  try {
+    const j = JSON.parse(readFileSync(lockFile(), "utf8"));
+    if (Number.isInteger(j?.pid) && Number.isFinite(j?.at)) return { pid: j.pid, at: j.at };
+  } catch {
+    // absent or half-written
+  }
+  return null;
+}
+
+/**
+ * Take the start lock (`~/.litectx/start.lock`, created exclusively) so only one process at a time runs the
+ * "is a page live? → start one" sequence. Waits (bounded) for a live holder; a lock whose pid is dead or that is
+ * older than the start timeout plus a margin is stale and is removed. A lock held by this process's parent is
+ * the parent's `start` waiting for us (the spawned `litectx ui`): proceed without owning it.
+ * @returns {Promise<() => void>} release (idempotent)
+ */
+export async function acquireStartLock() {
+  mkdirSync(stateDir(), { recursive: true });
+  const t0 = Date.now();
+  for (;;) {
+    try {
+      const fd = openSync(lockFile(), "wx");
+      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+      closeSync(fd);
+      return () => {
+        if (readLock()?.pid === process.pid) rmSync(lockFile(), { force: true });
+      };
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code !== "EEXIST") throw e;
+    }
+    const held = readLock();
+    if (held?.pid === process.ppid) return () => {};
+    // an unreadable lock is a holder mid-write; give it a moment, then treat it as stale
+    const stale = held ? !alive(held.pid) || Date.now() - held.at > LOCK_STALE_MS : Date.now() - t0 > 1000;
+    if (stale) {
+      const again = readLock();
+      if (again?.pid === held?.pid && again?.at === held?.at) rmSync(lockFile(), { force: true });
+      continue;
+    }
+    if (Date.now() - t0 > LOCK_STALE_MS) throw new Error(`another litectx start is in progress (${lockFile()}); try again`);
+    await sleep(50);
+  }
+}
+
 /**
  * Start the background search page, unless one is already live (only one at a time): then start nothing and
  * return the live pages (opening the browser on the first one).
@@ -209,6 +258,16 @@ export function openBrowser(url) {
  * @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>}
  */
 export async function startUi(o) {
+  const release = await acquireStartLock();
+  try {
+    return await startUiLocked(o);
+  } finally {
+    release();
+  }
+}
+
+/** @param {{ path?: string, port?: number, embeddings?: boolean, open?: boolean }} o @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>} */
+async function startUiLocked(o) {
   const open = o.open !== false;
   const live = await liveUis();
   if (live.length) {
