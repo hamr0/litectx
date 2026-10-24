@@ -122,7 +122,7 @@
     }
     var info = el("span", "dim");
     if (s.busy) {
-      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : progressLabel(c, s.busy.label)));
+      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : progressLabel(c, s.busy.label))));
       var ev = el("span", "", " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"); ev.id = "elapsed"; info.appendChild(ev);
     }
     else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText + (s.result ? " · " + s.result : "");
