@@ -35,6 +35,12 @@ litectx setup      # one step to connect litectx to Claude Code
 
 `litectx stop` shuts the search page down; `litectx status` shows what is set up, running and indexed.
 
+## Lightning-fast local search
+
+`litectx start` opens a local search page over your repos: type a word or a question, get ranked docs and code in milliseconds, filter by docs, code, file type or folder, and read a hit in a side view. It shows results, not answers, and runs on 127.0.0.1 only.
+
+<p align="center"><img src="https://raw.githubusercontent.com/hamr0/litectx/main/docs/assets/ui-demo.gif" alt="The litectx search page: a query returns ranked docs and code in tens of milliseconds, then docs/code and folder filters, a side view, and the roomy layout" width="800"></p>
+
 ## Start here
 
 - **MCP client** (Claude Code, Cursor…) → run `litectx-mcp --root /path/to/repo`. Tools: index · recall · impact · get · recent · promotions · remember · forget.
