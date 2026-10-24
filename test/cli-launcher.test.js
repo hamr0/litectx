@@ -5,7 +5,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, symlinkSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +30,7 @@ function sandbox() {
   mkdirSync(join(dir, "cfg"));
   writeFileSync(join(dir, "cfg", "ui.json"), JSON.stringify({ active: null, sources: [], editor }));
   // the preferred port is moved off 4747 so a UI the owner has running there can never be seen or touched
-  const env = { ...process.env, LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)), HOME: home, PATH: `${bin}:${process.env.PATH}`, LITECTX_UI_CONFIG: join(dir, "cfg", "ui.json") };
+  const env = { ...process.env, LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)), HOME: home, PATH: `${bin}:${(process.env.PATH ?? "").split(":").filter((d) => d && !existsSync(join(d, "litectx"))).join(":")}`, LITECTX_UI_CONFIG: join(dir, "cfg", "ui.json") };
   return { dir, home, bin, env, claudeLog: join(dir, "claude.log"), openLog: join(dir, "open.log") };
 }
 /** @param {ReturnType<typeof sandbox>} sb fake `claude`: logs its args; `mcp add/remove` edit $HOME/.claude.json like the real one */
@@ -85,7 +85,7 @@ const UNRELATED = {
 test("setup: fresh HOME gets both hooks and the exact `claude mcp add`; a second run changes nothing", () => {
   const sb = sandbox();
   fakeClaude(sb);
-  const r = cli(sb, ["setup"]);
+  const r = cli(sb, ["setup", "--dev"]);
   assert.equal(r.code, 0, r.err);
   const s = readSettings(sb);
   assert.deepEqual(s.hooks.SessionStart, [{ matcher: "", hooks: [{ type: "command", command: join(PKG, "integrations/claude", WARM) }] }]);
@@ -94,7 +94,7 @@ test("setup: fresh HOME gets both hooks and the exact `claude mcp add`; a second
   assert.equal(readdirSync(join(sb.home, ".claude")).filter((f) => f.includes(".bak-")).length, 0, "no settings file existed → nothing to back up");
 
   const before = readFileSync(settingsFile(sb), "utf8");
-  const r2 = cli(sb, ["setup"]);
+  const r2 = cli(sb, ["setup", "--dev"]);
   assert.equal(r2.code, 0, r2.err);
   assert.equal(readFileSync(settingsFile(sb), "utf8"), before, "second run: settings byte-identical");
   assert.equal(calls(sb.claudeLog).length, 1, "second run: no second `mcp add`");
@@ -109,7 +109,7 @@ test("setup: unrelated keys/hooks survive; a litectx hook with an OLD path is up
   old.hooks.PreToolUse.push({ matcher: "Edit", hooks: [{ type: "command", command: "node /old/place/integrations/claude/pre-edit-impact.mjs" }, { type: "command", command: "/usr/bin/second-edit-hook" }] });
   old.hooks.SessionStart = [{ matcher: "", hooks: [{ type: "command", command: "/old/place/integrations/claude/warm-index.sh" }] }];
   writeFileSync(settingsFile(sb), JSON.stringify(old, null, 2));
-  const r = cli(sb, ["setup"]);
+  const r = cli(sb, ["setup", "--dev"]);
   assert.equal(r.code, 0, r.err);
   const s = readSettings(sb);
   assert.equal(s.model, "opus");
@@ -128,7 +128,7 @@ test("setup: malformed settings.json aborts, leaves the file alone and does not 
   fakeClaude(sb);
   mkdirSync(join(sb.home, ".claude"));
   writeFileSync(settingsFile(sb), '{ "hooks": { oops');
-  const r = cli(sb, ["setup"]);
+  const r = cli(sb, ["setup", "--dev"]);
   assert.equal(r.code, 1);
   assert.match(r.err, /not valid JSON/);
   assert.equal(readFileSync(settingsFile(sb), "utf8"), '{ "hooks": { oops');
@@ -140,7 +140,7 @@ test("setup: MCP registered at a different path is removed and re-added; claude 
   const sb = sandbox();
   fakeClaude(sb);
   writeFileSync(join(sb.home, ".claude.json"), JSON.stringify({ mcpServers: { litectx: { command: "node", args: ["/old/bin/litectx-mcp.js"] }, other: { command: "x" } } }));
-  const r = cli(sb, ["setup"]);
+  const r = cli(sb, ["setup", "--dev"]);
   assert.equal(r.code, 0, r.err);
   assert.deepEqual(calls(sb.claudeLog).map((c) => c.slice(0, 2).join(" ")), ["mcp remove", "mcp add"]);
   const j = JSON.parse(readFileSync(join(sb.home, ".claude.json"), "utf8"));
@@ -148,11 +148,115 @@ test("setup: MCP registered at a different path is removed and re-added; claude 
 
   // no claude on PATH at all: hooks are still written, the command is printed, exit 0
   const sb2 = sandbox();
-  const r2 = cli(sb2, ["setup"], { env: { ...sb2.env, PATH: dirOf(process.execPath) } });
+  const r2 = cli(sb2, ["setup", "--dev"], { env: { ...sb2.env, PATH: dirOf(process.execPath) } });
   assert.equal(r2.code, 0, r2.err);
   assert.match(r2.out, /`claude` is not on PATH — run this yourself:\s+claude mcp add --scope user litectx -- node \S+litectx-mcp\.js --embeddings/);
   assert.equal(ours(readSettings(sb2)).length, 2);
 });
+/** an "installed" litectx (no .git) under sb.dir, linked from a PATH dir; returns its package dir and the env */
+function installed(/** @type {ReturnType<typeof sandbox>} */ sb, git = false) {
+  const copy = join(sb.dir, "installed");
+  mkdirSync(copy);
+  for (const d of ["bin", "src", "integrations"]) cpSync(join(PKG, d), join(copy, d), { recursive: true });
+  cpSync(join(PKG, "package.json"), join(copy, "package.json"));
+  symlinkSync(join(PKG, "node_modules"), join(copy, "node_modules"));
+  if (git) mkdirSync(join(copy, ".git"));
+  const pathBin = join(sb.dir, "pathbin");
+  mkdirSync(pathBin);
+  symlinkSync(join(copy, "bin", "litectx.js"), join(pathBin, "litectx"));
+  return { copy, env: { ...sb.env, PATH: `${pathBin}:${sb.env.PATH}` } };
+}
+const hasPython = spawnSync("python3", ["-c", "1"]).status === 0;
+/** run `litectx setup` from the checkout on a pty, typing `answer` at the first prompt */
+function setupOnPty(/** @type {ReturnType<typeof sandbox>} */ sb, /** @type {NodeJS.ProcessEnv} */ env, /** @type {string} */ answer) {
+  const py = `import pty,os,sys,select
+pid,fd=pty.fork()
+if pid==0:
+    os.execve(sys.executable if False else ${JSON.stringify(process.execPath)},[${JSON.stringify(process.execPath)},${JSON.stringify(BIN)},"setup"],os.environ)
+out=b""
+sent=False
+while True:
+    r,_,_=select.select([fd],[],[],20)
+    if not r: break
+    try: d=os.read(fd,4096)
+    except OSError: break
+    if not d: break
+    out+=d
+    if not sent and b"[Y/n]" in out:
+        os.write(fd,${JSON.stringify(answer)}.encode()+b"\\r"); sent=True
+os.waitpid(pid,0)
+sys.stdout.write(out.decode("utf8","replace"))
+`;
+  const r = spawnSync("python3", ["-I", "-c", py], { env, encoding: "utf8" });
+  return r.stdout + r.stderr;
+}
+
+test("setup from a checkout without an installed litectx refuses and writes nothing; --dev wires it; --remove is allowed", () => {
+  const sb = sandbox();
+  fakeClaude(sb);
+  assert.ok(existsSync(join(PKG, ".git")), "the suite runs from a checkout");
+  const r = cli(sb, ["setup"]);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /source checkout/);
+  assert.match(r.out, /npm i -g litectx/);
+  assert.match(r.out, /--dev/);
+  assert.equal(existsSync(join(sb.home, ".claude")), false, "no settings written");
+  assert.equal(calls(sb.claudeLog).length, 0, "claude never called");
+  assert.equal(cli(sb, ["setup", "--remove"]).code, 0, "--remove works from anywhere");
+  assert.equal(cli(sb, ["setup", "--dev"]).code, 0);
+  assert.ok(readFileSync(settingsFile(sb), "utf8").includes(join(PKG, "integrations")), "--dev wires the checkout");
+});
+
+test("setup from a checkout, non-TTY, with an installed litectx on PATH: refuses (no prompt), names the install", () => {
+  const sb = sandbox();
+  fakeClaude(sb);
+  const inst = installed(sb);
+  const r = cli(sb, ["setup"], { env: inst.env });
+  assert.equal(r.code, 1);
+  assert.ok(r.out.includes(inst.copy), r.out);
+  assert.equal(existsSync(join(sb.home, ".claude")), false);
+  assert.equal(calls(sb.claudeLog).length, 0);
+});
+
+test("setup from a checkout: an installed litectx that is itself a checkout (npm link) is refused", () => {
+  const sb = sandbox();
+  fakeClaude(sb);
+  const inst = installed(sb, true);
+  const r = cli(sb, ["setup"], { env: inst.env });
+  assert.equal(r.code, 1);
+  assert.match(r.out, /no installed litectx found/);
+  assert.equal(existsSync(join(sb.home, ".claude")), false);
+});
+
+test("setup on a terminal: y (and Enter) wire the INSTALLED paths, n writes nothing", { skip: !hasPython }, () => {
+  for (const answer of ["y", ""]) {
+    const sb = sandbox();
+    fakeClaude(sb);
+    const inst = installed(sb);
+    const out = setupOnPty(sb, inst.env, answer);
+    assert.match(out, /Set up Claude with the installed litectx at /);
+    const settings = readFileSync(settingsFile(sb), "utf8");
+    assert.ok(settings.includes(join(inst.copy, "integrations")), "hooks point at the installed copy");
+    assert.ok(!settings.includes(join(PKG, "integrations")), "never the checkout");
+    const add = calls(sb.claudeLog).find((c) => c[1] === "add");
+    assert.ok(add?.includes(join(inst.copy, "bin", "litectx-mcp.js")), "MCP points at the installed copy");
+  }
+  const sb = sandbox();
+  fakeClaude(sb);
+  setupOnPty(sb, installed(sb).env, "n");
+  assert.equal(existsSync(join(sb.home, ".claude")), false);
+  assert.equal(calls(sb.claudeLog).length, 0);
+});
+
+test("setup run from an installed package (no .git) needs no flag", () => {
+  const sb = sandbox();
+  fakeClaude(sb);
+  const inst = installed(sb);
+  const r = spawnSync(process.execPath, [join(inst.copy, "bin", "litectx.js"), "setup"], { env: sb.env, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.ok(readFileSync(settingsFile(sb), "utf8").includes(join(inst.copy, "integrations")));
+});
+
 const dirOf = (/** @type {string} */ p) => p.slice(0, p.lastIndexOf("/"));
 
 test("setup --remove: only litectx's entries go, and only the containers that leaves empty", () => {
@@ -160,7 +264,7 @@ test("setup --remove: only litectx's entries go, and only the containers that le
   fakeClaude(sb);
   mkdirSync(join(sb.home, ".claude"));
   writeFileSync(settingsFile(sb), JSON.stringify(UNRELATED));
-  assert.equal(cli(sb, ["setup"]).code, 0);
+  assert.equal(cli(sb, ["setup", "--dev"]).code, 0);
   assert.equal(ours(readSettings(sb)).length, 2);
   const r = cli(sb, ["setup", "--remove"]);
   assert.equal(r.code, 0, r.err);
@@ -169,7 +273,7 @@ test("setup --remove: only litectx's entries go, and only the containers that le
   // from a settings file that held ONLY litectx: no empty `hooks` husk is left behind
   const sb2 = sandbox();
   fakeClaude(sb2);
-  assert.equal(cli(sb2, ["setup"]).code, 0);
+  assert.equal(cli(sb2, ["setup", "--dev"]).code, 0);
   assert.equal(cli(sb2, ["setup", "--remove"]).code, 0);
   assert.deepEqual(readSettings(sb2), {});
 });
@@ -434,7 +538,7 @@ test("status: with and without an index, and it writes nothing", () => {
 
   // Claude section reflects reality
   fakeClaude(sb);
-  assert.equal(cli(sb, ["setup"]).code, 0);
+  assert.equal(cli(sb, ["setup", "--dev"]).code, 0);
   const wired = cli(sb, ["status", repo]).out;
   assert.match(wired, /MCP registered: yes/);
   assert.match(wired, /warm-index hook \(SessionStart\): yes/);
@@ -461,5 +565,5 @@ test("bare `litectx` without a terminal still prints usage and exits 0 (scripts 
   assert.equal(r.code, 0);
   assert.match(r.out, /^usage: litectx index/);
   assert.match(r.out, /litectx start \[path\]/);
-  assert.match(r.out, /litectx setup \[--remove\]/);
+  assert.match(r.out, /litectx setup \[--remove\] \[--dev\]/);
 });

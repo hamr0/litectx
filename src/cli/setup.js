@@ -1,10 +1,11 @@
-// `litectx setup [--remove]`: wire litectx into Claude Code — the MCP server (user scope, via the `claude`
+// `litectx setup [--remove] [--dev]`: wire litectx into Claude Code — the MCP server (user scope, via the `claude`
 // CLI) and two hooks merged into ~/.claude/settings.json. Idempotent; entries are recognised by their script
 // filename so a different install path is updated in place, never duplicated.
 
 import { execFileSync } from "node:child_process";
-import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
+import { red } from "./style.js";
 import { claudeJson, claudeSettings, pkgDir } from "./paths.js";
 
 /** @typedef {{ type?: string, command?: string }} Hook */
@@ -13,8 +14,8 @@ import { claudeJson, claudeSettings, pkgDir } from "./paths.js";
 const q = (/** @type {string} */ p) => (/\s/.test(p) ? `"${p}"` : p);
 
 /** The two hooks this package ships. `file` is how an existing entry is recognised. */
-function hookSpecs() {
-  const dir = join(pkgDir(), "integrations", "claude");
+function hookSpecs(pkg = pkgDir()) {
+  const dir = join(pkg, "integrations", "claude");
   return [
     { event: "SessionStart", matcher: "", file: "warm-index.sh", script: join(dir, "warm-index.sh"), command: q(join(dir, "warm-index.sh")) },
     { event: "PreToolUse", matcher: "Edit", file: "pre-edit-impact.mjs", script: join(dir, "pre-edit-impact.mjs"), command: `node ${q(join(dir, "pre-edit-impact.mjs"))}` },
@@ -73,11 +74,11 @@ export function claudeState() {
   return { mcp: mcpEntry() !== null, warm: has("SessionStart", "warm-index.sh"), preEdit: has("PreToolUse", "pre-edit-impact.mjs") };
 }
 
-/** @param {any} s @returns {boolean} true if it changed anything */
-function addHooks(s) {
+/** @param {any} s @param {string} pkg @returns {boolean} true if it changed anything */
+function addHooks(s, pkg) {
   let changed = false;
   s.hooks ??= {};
-  for (const sp of hookSpecs()) {
+  for (const sp of hookSpecs(pkg)) {
     const groups = (s.hooks[sp.event] ??= []);
     let seen = false;
     for (let gi = 0; gi < groups.length; gi++) {
@@ -163,8 +164,57 @@ function runClaude(args, claude, out) {
   }
 }
 
+/** @param {string} dir @returns {boolean} true when `dir` is a git checkout (hooks/MCP would follow its working tree) */
+const isCheckout = (dir) => existsSync(join(dir, ".git"));
+
 /**
- * @param {{ remove?: boolean }} [o]
+ * The installed litectx: `litectx` on PATH (entries inside this checkout skipped), realpath'd to its package dir.
+ * @returns {string | null} null when none, or when the one found is itself a checkout (e.g. an `npm link`)
+ */
+export function findInstalled() {
+  const here = pkgDir();
+  for (const d of (process.env.PATH ?? "").split(":").filter(Boolean)) {
+    try {
+      const real = realpathSync(join(d, "litectx"));
+      if (real === here || real.startsWith(here + sep)) continue;
+      const dir = dirname(dirname(real));
+      if (!existsSync(join(dir, "package.json")) || !existsSync(join(dir, "bin", "litectx-mcp.js"))) continue;
+      return isCheckout(dir) ? null : dir;
+    } catch {
+      // not here
+    }
+  }
+  return null;
+}
+
+const refusal = (/** @type {string} */ why) => ({
+  lines: [
+    red(`refusing: litectx is running from a source checkout (${pkgDir()}); Claude's hooks and MCP server would follow your working tree.`),
+    why,
+    "Nothing was changed.",
+  ],
+  ok: false,
+});
+
+/**
+ * `setup` with the checkout guard: from a git checkout it redirects to the installed litectx (after `ask`
+ * confirms, when given) or refuses. `--dev` wires the checkout itself; `--remove` works from anywhere.
+ * @param {{ remove?: boolean, dev?: boolean }} o
+ * @param {((question: string) => Promise<string>) | null} [ask]  terminal prompt; null → never prompt
+ * @returns {Promise<{ lines: string[], ok: boolean }>}
+ */
+export async function runSetup(o, ask = null) {
+  if (o.remove || o.dev || !isCheckout(pkgDir())) return setup(o);
+  const inst = findInstalled();
+  if (!inst) return refusal("no installed litectx found — run `npm i -g litectx` (or pass --dev to wire this checkout)");
+  if (!ask) return refusal(`run the installed \`litectx setup\` (${inst}) instead, or pass --dev to wire this checkout on purpose`);
+  const a = (await ask(`  Set up Claude with the installed litectx at ${inst}? [Y/n] `)).trim().toLowerCase();
+  if (a !== "" && a !== "y" && a !== "yes") return { lines: ["nothing was changed"], ok: true };
+  return setup({ ...o, dir: inst });
+}
+
+/**
+ * @param {{ remove?: boolean, dev?: boolean, dir?: string }} [o]  `dir`: package dir to wire (default: this one)
  * @returns {{ lines: string[], ok: boolean }}  human-readable report; ok=false if the `claude` CLI call failed
  */
 export function setup(o = {}) {
@@ -172,15 +222,16 @@ export function setup(o = {}) {
   const out = [];
   let ok = true;
   const claude = findClaude();
-  const bin = join(pkgDir(), "bin", "litectx-mcp.js");
+  const pkg = o.dir ?? pkgDir();
+  const bin = join(pkg, "bin", "litectx-mcp.js");
   const mcpArgs = ["mcp", "add", "--scope", "user", "litectx", "--", "node", bin, "--embeddings"];
 
   // settings first: a malformed file aborts before anything (the claude CLI included) is touched
   const settings = readJson(claudeSettings()) ?? {};
   if (typeof settings !== "object" || Array.isArray(settings)) throw new Error(`${claudeSettings()} is not a JSON object — nothing was changed`);
-  const changed = o.remove ? removeHooks(settings) : addHooks(settings);
+  const changed = o.remove ? removeHooks(settings) : addHooks(settings, pkg);
   if (!o.remove) {
-    for (const sp of hookSpecs()) {
+    for (const sp of hookSpecs(pkg)) {
       try {
         accessSync(sp.script, constants.X_OK);
       } catch {

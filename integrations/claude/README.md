@@ -20,7 +20,7 @@ because registering it is how you'd use litectx tools from Claude Code.
 the `claude` CLI), and adds the `SessionStart` and `PreToolUse:Edit` hooks to `~/.claude/settings.json`
 (a `.bak-<timestamp>` copy is written first; other settings are untouched; running it again changes
 nothing, and a moved install is updated in place). `litectx setup --remove` takes litectx's entries out
-again; `litectx status` shows what is wired. The manual steps below are the alternative.
+again; `litectx status` shows what is wired. Run from a git checkout, `setup` will not point Claude at your working tree: it offers to use the installed `litectx` found on PATH (or refuses and says to `npm i -g litectx`); pass `--dev` to wire the checkout on purpose. `--remove` works from anywhere. The manual steps below are the alternative.
 
 ## MCP server (any MCP client)
 

@@ -16,7 +16,7 @@
 //   litectx                                  # on a terminal: a menu over everything below
 //   litectx start [path] [--port <n>] [--embeddings] [--no-open]   # search page in the background (+ opens the browser)
 //   litectx stop
-//   litectx setup [--remove]                 # wire litectx into Claude Code (MCP server + two hooks)
+//   litectx setup [--remove] [--dev]               # wire litectx into Claude Code (MCP server + two hooks); a git checkout needs --dev
 //   litectx status [path]
 //   litectx ui [path] [--port <n>] [--embeddings]   # localhost search page (127.0.0.1:4747); embeddings OFF unless --embeddings
 
@@ -28,8 +28,8 @@ import { pkgDir } from "../src/cli/paths.js";
 /** @param {string[]} argv */
 function parse(argv) {
   const [cmd, ...rest] = argv;
-  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, remove: boolean, noOpen: boolean, embeddings: boolean, embeddingsFlag: boolean, port: number|undefined, log: boolean, words: string[]}} */
-  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, remove: false, noOpen: false, embeddings: true, embeddingsFlag: false, port: undefined, log: true, words: [] };
+  /** @type {{root: string, n: number|undefined, since: number|undefined, threshold: number|undefined, kind: string|undefined, by: string|undefined, lines: string|undefined, force: boolean, remove: boolean, dev: boolean, noOpen: boolean, embeddings: boolean, embeddingsFlag: boolean, port: number|undefined, log: boolean, words: string[]}} */
+  const opts = { root: process.cwd(), n: undefined, since: undefined, threshold: undefined, kind: undefined, by: undefined, lines: undefined, force: false, remove: false, dev: false, noOpen: false, embeddings: true, embeddingsFlag: false, port: undefined, log: true, words: [] };
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--root") opts.root = rest[++i];
     else if (rest[i] === "--lines") opts.lines = rest[++i];
@@ -40,6 +40,7 @@ function parse(argv) {
     else if (rest[i] === "--by") opts.by = rest[++i];
     else if (rest[i] === "--force") opts.force = true;
     else if (rest[i] === "--remove") opts.remove = true;
+    else if (rest[i] === "--dev") opts.dev = true;
     else if (rest[i] === "--no-open") opts.noOpen = true;
     else if (rest[i] === "--embeddings") opts.embeddings = opts.embeddingsFlag = true; // default; kept for back-compat (`ui` is the exception: off unless this flag)
     else if (rest[i] === "--port") opts.port = Number(rest[++i]);
@@ -55,7 +56,8 @@ async function main() {
 
   if (!cmd && process.stdin.isTTY && process.stdout.isTTY) {
     const { menu } = await import("../src/cli/menu.js");
-    await menu({ index: (p) => runIndex(p, opts.embeddings, false) });
+    const code = await menu({ index: (p) => runIndex(p, opts.embeddings, false) });
+    if (code) process.exit(code);
     return;
   }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") help();
@@ -64,7 +66,10 @@ async function main() {
     if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
     const { startUi } = await import("../src/cli/launcher.js");
     const r = await startUi({ path: opts.words[0] ? resolve(opts.words[0]) : undefined, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
-    console.log(r.started ? `litectx ui started: ${r.url}  (log: ${r.log}; stop with \`litectx stop\`)` : `litectx ui already running: ${r.url}`);
+    {
+      const { cyan } = await import("../src/cli/style.js");
+      console.log(r.started ? `litectx ui started: ${cyan(r.url)}  (log: ${r.log}; stop with \`litectx stop\`)` : `litectx ui already running: ${cyan(r.url)}`);
+    }
     return;
   }
 
@@ -75,8 +80,11 @@ async function main() {
   }
 
   if (cmd === "setup") {
-    const { setup } = await import("../src/cli/setup.js");
-    const r = setup({ remove: opts.remove });
+    const { runSetup } = await import("../src/cli/setup.js");
+    const tty = !!(process.stdin.isTTY && process.stdout.isTTY);
+    const rl = tty ? (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout }) : null;
+    const r = await runSetup({ remove: opts.remove, dev: opts.dev }, rl ? (q) => rl.question(q) : null);
+    rl?.close();
     for (const l of r.lines) console.log(l);
     if (!r.ok) process.exit(1);
     return;
@@ -109,9 +117,11 @@ async function main() {
     if (interactive && opts.words[0] === undefined && !process.argv.includes("--root")) {
       const { createInterface } = await import("node:readline/promises");
       const rl = createInterface({ input: process.stdin, output: process.stdout });
-      const a = (await rl.question(`folder to index [${process.cwd()}]: `)).trim();
+      const { askFolder } = await import("../src/cli/menu.js");
+      const a = await askFolder(rl);
       rl.close();
-      root = a || process.cwd();
+      if (a === null) process.exit(1);
+      root = a;
     }
     await runIndex(root, opts.embeddings, opts.force, interactive);
     return;
@@ -327,7 +337,7 @@ function usage() {
     "       litectx            (on a terminal) a menu over the commands below\n" +
     "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser\n" +
     "       litectx stop                                                    stop the background search page\n" +
-    "       litectx setup [--remove]                                        wire litectx into Claude Code (MCP server + hooks)\n" +
+    "       litectx setup [--remove] [--dev]                                wire litectx into Claude Code (MCP server + hooks); from a git checkout needs --dev\n" +
     "       litectx status [path]                                           what is set up, running and indexed (read-only)\n" +
     "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +
     "\noutput columns (tab-separated):\n" +
