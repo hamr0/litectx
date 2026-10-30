@@ -16,13 +16,29 @@
   var s = {
     q: "", sub: "", kinds: { doc: false, code: false }, ext: null, repos: [], folder: null, demote: true,
     view: "table", open: null, openOthers: false, hits: [], facets: { exts: [], folders: [] }, ms: 0,
-    st: null, settings: false, msg: "", searched: false, busy: null, result: ""
+    st: null, settings: false, msg: "", searched: false, busy: null, result: "", unreachable: false
   };
 
+  // the top-bar label: ONE painter, written only on a change (role=status is a live region, a rewrite is re-announced).
+  // online = the server answered at all (any HTTP reply); offline = the fetch itself was rejected. it lives on the title line, far right.
+  var dot = document.createElement("span");
+  dot.id = "onlineDot"; dot.className = "on"; dot.setAttribute("role", "status"); dot.textContent = "\u25cf online";
+  var lastOnline = true;
+  var titleText = document.createElement("span"); titleText.id = "titleText"; // the title text and the label are siblings on #title: a title rewrite touches only the text
+  document.getElementById("title").appendChild(titleText); document.getElementById("title").appendChild(dot);
+  function paintOnline(isOnline) {
+    if (lastOnline === isOnline) return;
+    lastOnline = isOnline;
+    dot.className = isOnline ? "on" : "off";
+    dot.textContent = isOnline ? "\u25cf online" : "\u25cf offline";
+  }
+  // paints inside the helper, on the fetch's own outcome, so a render error later can never paint offline
   function api(method, url, body) {
     var o = { method: method, headers: {} };
     if (body !== undefined) { o.body = JSON.stringify(body); o.headers["content-type"] = "application/json"; }
-    return fetch(url, o).then(function (r) {
+    return fetch(url, o).then(function (r) { s.unreachable = false; paintOnline(true); return r; }, function (e) {
+      s.unreachable = true; paintOnline(false); e.unreachable = true; throw e;
+    }).then(function (r) {
       return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || r.status); return j; });
     });
   }
@@ -33,14 +49,17 @@
   }
 
   // ---- data ---------------------------------------------------------------------------------------
+  var panelSig = null;
   function loadState() {
     return api("GET", "/api/sources").then(function (st) {
-      s.st = st; $("title").innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
-      if (!st.sources.length) s.settings = true;
+      s.st = st; titleText.innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
+      if (!st.sources.length && !s.settings) { s.settings = true; panelSig = null; } // forced open: the panel must repaint even if its data did not change
       var ix = !!(st.current && st.current.indexing);
       if (ix && !s.busy) { s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; clearInterval(tickTimer); tickTimer = setInterval(tick, 1000); } // a pass the server started itself
       if (!ix && s.busy && !s.busy.pending) endBusy(st);
-      renderTop(); renderPanel(); renderFilters();
+      renderTop(); renderFilters();
+      // the 10 s idle tick must not rebuild the sources form under a half-typed path: repaint the panel only when its data changed
+      var psig = JSON.stringify([st.sources, st.active]); if (psig !== panelSig) { panelSig = psig; renderPanel(); }
       return st;
     });
   }
@@ -57,7 +76,7 @@
       s.hits = r.hits; s.facets = r.facets; s.ms = r.ms; s.kwOnly = !!r.keywordsOnly; s.msg = "";
       if (s.open && !s.hits.some(function (h) { return h.path === s.open; })) s.open = null;
       renderTop(); renderFilters(); renderResults();
-    }).catch(function (e) { s.msg = e.message; renderResults(); });
+    }).catch(function (e) { if (!e.unreachable) s.msg = e.message; renderResults(); }); // unreachable: the top-bar label is the only signal
   }
   // ---- busy state: set by the page at click time, cleared when the server reports the pass finished -----
   var tickTimer = null;
@@ -96,15 +115,24 @@
     s.busy.cancelling = true; renderTop();
     api("POST", "/api/cancel", {}).then(function () { return refresh(); }).catch(function (e) { fail(e); });
   }
-  var pollTimer = null;
-  function poll() {
-    clearTimeout(pollTimer);
-    if (!s.st || !s.st.current || !s.st.current.indexing) return;
-    pollTimer = setTimeout(function () {
-      loadState().then(function (st) { if (st.current && !st.current.indexing) runSearch(); else poll(); });
-    }, 1500);
+  // The heartbeat: one chain that never stops. 1.5 s while a pass runs, 3 s while the server is unreachable, else 10 s
+  // (the idle tick only reloads /api/sources). A tick that fails or throws still schedules the next one.
+  var pollTimer = null, polling = false;
+  function indexing() { return !!(s.st && s.st.current && s.st.current.indexing); }
+  function nextDelay() { return s.unreachable ? 3000 : indexing() ? 1500 : 10000; }
+  function later() { pollTimer = setTimeout(pulse, nextDelay()); }
+  function pulse() {
+    pollTimer = null;
+    var was = indexing();
+    loadState().then(function () { if (was && !indexing()) return runSearch(); }) // a pass just finished: show its results
+      .then(later, function (e) { if (!e || !e.unreachable) console.error(e); later(); });
   }
-  function refresh() { return loadState().then(function () { poll(); return runSearch(); }); }
+  // start the chain, or (a pass just began) pull a waiting tick forward; a tick in flight reschedules itself, never a second chain
+  function startPolling() {
+    if (!polling) { polling = true; later(); }
+    else if (pollTimer) { clearTimeout(pollTimer); pulse(); }
+  }
+  function refresh() { return loadState().then(function () { if (indexing()) startPolling(); return runSearch(); }); }
 
   // ---- top bar + settings -------------------------------------------------------------------------
   var topSig = null;
@@ -159,9 +187,9 @@
     // current), keep the live DOM so a focused chip stays focused and a click never lands on a replaced element
     var sig = bar.outerHTML.replace(/<span id="elapsed">[^<]*<\/span>/, "") + "|" + (st && st.active);
     if (sig === topSig && t.firstChild) return;
-    topSig = sig; t.innerHTML = ""; t.appendChild(bar);
+    topSig = sig; t.innerHTML = ""; t.appendChild(bar); // the label is not part of the signature: it repaints itself
   }
-  function fail(e) { s.msg = e.message; renderPanel(); renderResults(); }
+  function fail(e) { if (e.unreachable) return; s.msg = e.message; renderPanel(); renderResults(); }
 
   function renderPanel() {
     var p = $("panel"); p.innerHTML = "";
@@ -384,5 +412,5 @@
   applyHash();
   syncQx();
   renderResults();
-  refresh().then(restoreScroll);
+  refresh().then(restoreScroll, renderTop).then(function () { if (!polling) { polling = true; later(); } }); // unreachable at load: still draw the bar, and keep the heartbeat going
 })();

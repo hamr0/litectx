@@ -493,20 +493,21 @@ test("start: port held by a non-litectx program → next free port; pid file, st
   sb.env.LITECTX_DEFAULT_PORT = String(p);
   const pidFile = join(sb.home, ".litectx", "ui.pid");
   try {
-    const r = cli(sb, ["start", repo, "--no-open"]);
+    // async calls: the non-litectx server lives in this process and cannot answer a probe while a sync spawn blocks it
+    const r = await cliAsync(sb, ["start", repo, "--no-open"]);
     assert.equal(r.code, 0, r.err + r.out);
     assert.match(r.out, new RegExp(`started: http://127\\.0\\.0\\.1:${p + 1}\\b`));
     const rec = JSON.parse(readFileSync(pidFile, "utf8"));
     assert.equal(rec.port, p + 1, "the pid file records the port actually used");
-    assert.match(cli(sb, ["status", repo]).out, new RegExp(`UI: running \\(http://127\\.0\\.0\\.1:${p + 1}\\)`));
-    const again = cli(sb, ["start", repo, "--no-open"]);
+    assert.match((await cliAsync(sb, ["status", repo])).out, new RegExp(`UI: running \\(http://127\\.0\\.0\\.1:${p + 1}\\)`));
+    const again = await cliAsync(sb, ["start", repo, "--no-open"]);
     assert.match(again.out, /already live/, "a second start reports it, not P+2");
     assert.equal(JSON.parse(readFileSync(pidFile, "utf8")).pid, rec.pid);
-    assert.match(cli(sb, ["stop"]).out, /stopped/);
+    assert.match((await cliAsync(sb, ["stop"])).out, /stopped/);
     assert.ok(await until(() => !alive(rec.pid)));
   } finally {
     srv.close();
-    cli(sb, ["stop"]);
+    await cliAsync(sb, ["stop"]);
   }
 });
 
@@ -812,10 +813,10 @@ test("one page: stop stops every live page (start's and a foreground one), clear
   const mcp = spawn(process.execPath, [join(PKG, "bin", "litectx-mcp.js")], { env: sb.env, stdio: ["pipe", "ignore", "ignore"] });
   let fg = null;
   try {
-    assert.equal(cli(sb, ["start", repo, "--no-open"]).code, 0);
+    assert.equal((await cliAsync(sb, ["start", repo, "--no-open"])).code, 0); // async: `plain` lives in this process and cannot answer a probe while a sync spawn blocks it
     const rec = JSON.parse(readFileSync(pidFile, "utf8"));
     fg = await racedUi(sb, repo, base + 1);
-    const banner = cli(sb, ["status", repo]).out;
+    const banner = (await cliAsync(sb, ["status", repo])).out;
     assert.match(banner, /\(\+1 more — run litectx stop\)/);
     const s = await cliAsync(sb, ["stop"]);
     assert.equal(s.code, 0, s.err + s.out);
@@ -828,9 +829,9 @@ test("one page: stop stops every live page (start's and a foreground one), clear
     assert.equal(alive(/** @type {number} */ (victim.pid)), true, "bystander untouched");
     assert.equal(alive(/** @type {number} */ (mcp.pid)), true, "litectx-mcp untouched");
     assert.equal(plain.listening, true, "non-litectx server untouched");
-    assert.equal(cli(sb, ["stop"]).out.trim(), "no search page running");
+    assert.equal((await cliAsync(sb, ["stop"])).out.trim(), "no search page running");
   } finally {
-    cli(sb, ["stop"]);
+    await cliAsync(sb, ["stop"]);
     fg?.kill("SIGKILL");
     victim.kill("SIGKILL");
     mcp.kill("SIGKILL");
@@ -892,6 +893,32 @@ test("stop: a page that ignores SIGTERM is reported with `kill -9 <pid>` (no esc
     assert.equal(s.code, 1, s.err + s.out);
     assert.match(s.out, new RegExp(`pid ${stub.pid}\\) did not exit within 0\\.4s after SIGTERM — run: kill -9 ${stub.pid}\\n`));
     assert.equal(alive(/** @type {number} */ (stub.pid)), true, "stop does not escalate to SIGKILL");
+  } finally {
+    stub.kill("SIGKILL");
+  }
+});
+
+test("a live page that answers slower than 1.5s still counts as live: status reports it, stop stops it (not 'no search page running')", async () => {
+  const sb = sandbox();
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  // a stand-in named litectx.js (argv `litectx.js ui`) whose state endpoint answers only after 2s (a busy page)
+  const dir = join(sb.dir, "slow");
+  mkdirSync(dir, { recursive: true });
+  const script = join(dir, "litectx.js");
+  writeFileSync(script, `process.on("SIGTERM", () => process.exit(0));\nimport("node:http").then(({ default: http }) => http.createServer((q, r) => setTimeout(() => r.end(JSON.stringify({ version: "x", pid: process.pid, active: null, sources: [] })), 2000)).listen(${base}, "127.0.0.1", () => console.error("up")));\n`);
+  const stub = spawn(process.execPath, [script, "ui"], { env: sb.env, stdio: ["ignore", "ignore", "pipe"] });
+  let err = "";
+  stub.stderr?.on("data", (c) => (err += c));
+  try {
+    assert.ok(await until(() => /up/.test(err), 10000), err);
+    const st = await cliAsync(sb, ["status"]);
+    assert.match(st.out, /UI: .*running.*\(.*http:\/\/127\.0\.0\.1:\d+/, st.out);
+    assert.doesNotMatch(st.out, /not running/);
+    const s = await cliAsync(sb, ["stop"]);
+    assert.equal(s.code, 0, s.err + s.out);
+    assert.match(s.out, new RegExp(`stopped http://127\\.0\\.0\\.1:\\d+ \\(pid ${stub.pid}\\)`));
+    assert.equal(alive(/** @type {number} */ (stub.pid)), false);
   } finally {
     stub.kill("SIGKILL");
   }
