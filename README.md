@@ -37,7 +37,7 @@ litectx
 litectx · Claude ✓ · page running at http://127.0.0.1:4747
 index: 7,246 files · 44 repos · meaning off
 ────────────────────────────────────────────────────────
-  1 start   2 stop   3 index   4 setup   5 status   q quit
+  1 start   2 stop   3 restart   4 index   5 setup   6 status   7 update   q quit
 >
 ```
 
@@ -45,9 +45,11 @@ Pick a number, it runs, it exits. The same things as commands:
 
 - `litectx start` — the search page in the background; opens your browser, and takes the next free port if 4747 is taken. Only one page runs at a time: if one is already live, `start` tells you its address and source and opens it instead of starting another.
 - `litectx stop` — shuts down every running search page.
+- `litectx restart` — stops every running search page, then starts one. A running page keeps its old code until it is restarted.
 - `litectx index [path]` — index a folder.
 - `litectx setup` — connects Claude Code once, for every repo: the MCP server, the indexing hook and the pre-edit impact hook. `litectx setup --remove` undoes it.
 - `litectx status` — what is set up, running and indexed.
+- `litectx update` — asks npm whether a newer litectx is out and offers to install it into the same global prefix the running one lives in. It is the only command that goes online, and only when you run it. A running page or MCP server keeps the old code until it is restarted (`litectx restart`; restart the MCP server from your client).
 
 ## Start here
 

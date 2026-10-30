@@ -5,6 +5,14 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **`litectx restart`** (menu 3): stops every running search page, then starts one; same output and failures as `stop` and `start`, and nothing is started if a page could not be stopped.
+- **`litectx update`** (menu 7): the only command that goes online, and only when pressed. Asks the npm registry for the newest version (5 s deadline); on a newer one and a `y` it runs `npm install -g --prefix <prefix> litectx@latest`, with the prefix taken from where the running litectx lives. Not a global install, or no terminal: it prints the command / advice and installs nothing. A running page or MCP server keeps the old code until restarted.
+- The menu is now `1 start 2 stop 3 restart 4 index 5 setup 6 status 7 update q quit`, with `q` in green.
+
 ## [0.39.1] - 2026-10-24
 
 ### Changed
