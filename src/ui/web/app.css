@@ -60,3 +60,4 @@ aside pre.code{color:var(--text);background:var(--panel);padding:8px;margin:8px 
 /* file viewer */
 body.viewer pre.file{color:var(--text);font-size:13px;margin:8px 0}
 .ln{white-space:pre-wrap}.ln.on{background:var(--sel)}.ln .no{display:inline-block;width:5em;color:var(--mute);user-select:none}
+#onlineDot{font-size:12px;white-space:nowrap;flex:none}#onlineDot.on{color:var(--green)}#onlineDot.off{color:var(--red)}
