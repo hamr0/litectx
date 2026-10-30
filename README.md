@@ -49,7 +49,7 @@ Pick a number, it runs, it exits. The same things as commands:
 - `litectx index [path]` — index a folder.
 - `litectx setup` — connects Claude Code once, for every repo: the MCP server, the indexing hook and the pre-edit impact hook. `litectx setup --remove` undoes it.
 - `litectx status` — what is set up, running and indexed.
-- `litectx update` — asks npm whether a newer litectx is out and offers to install it into the same global prefix the running one lives in. It is the only command that goes online, and only when you run it. A running page or MCP server keeps the old code until it is restarted (`litectx restart`; restart the MCP server from your client).
+- `litectx update` — asks npm whether a newer litectx is out and offers to install it into the same global prefix the running one lives in. It is the only command that checks npm, and only when you run it; the one other network use is the optional embeddings tier fetching its model once on first use. A running page or MCP server keeps the old code until it is restarted (`litectx restart`; restart the MCP server from your client).
 
 ## Start here
 

@@ -17,7 +17,7 @@
 //   litectx start [path] [--port <n>] [--embeddings] [--no-open]   # search page in the background (+ opens the browser)
 //   litectx stop
 //   litectx restart [same flags as start]          # stop every page, then start one
-//   litectx update                                 # the only command that goes online: asks npm for the newest version
+//   litectx update                                 # the only command that checks npm, and only when you run it: asks npm for the newest version
 //   litectx setup [--remove] [--dev]               # wire litectx into Claude Code (MCP server + two hooks); a git checkout needs --dev
 //   litectx status [path]
 //   litectx ui [path] [--port <n>] [--embeddings]   # localhost search page (127.0.0.1:4747); embeddings OFF unless --embeddings
@@ -380,7 +380,7 @@ function usage() {
     "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser (one page at a time)\n" +
     "       litectx stop                                                    stop every running search page\n" +
     "       litectx restart [path] [--port <n>] [--embeddings] [--no-open]  stop every running search page, then start one\n" +
-    "       litectx update                                                  check npm for a newer litectx and offer to install it (the only command that goes online)\n" +
+    "       litectx update                                                  check npm for a newer litectx and offer to install it (the only command that checks npm)\n" +
     "       litectx setup [--remove] [--dev]                                wire litectx into Claude Code (MCP server + hooks); from a git checkout needs --dev\n" +
     "       litectx status [path]                                           what is set up, running and indexed (read-only)\n" +
     "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +

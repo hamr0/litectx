@@ -1,4 +1,4 @@
-// `litectx update` (menu 7): the one command that goes online, and only when pressed. Asks the npm registry
+// `litectx update` (menu 7): the only command that checks npm, and only when you run it. Asks the npm registry
 // for the newest version and, on a y, installs it into the global prefix the RUNNING litectx lives in.
 
 import { spawn } from "node:child_process";
