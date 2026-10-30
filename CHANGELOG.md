@@ -13,6 +13,10 @@ All notable changes to this project are documented here, following
 - **`litectx update`** (menu 7): the only command that checks npm, and only when you run it; the one other network use is the optional embeddings tier fetching its model once on first use. Asks the npm registry for the newest version (5 s deadline); on a newer one and a `y` it runs `npm install -g --prefix <prefix> litectx@latest`, with the prefix taken from where the running litectx lives. Not a global install, or no terminal: it prints the command / advice and installs nothing. A running page or MCP server keeps the old code until restarted.
 - The menu is now `1 start 2 stop 3 restart 4 index 5 setup 6 status 7 update q quit`, with `q` in green.
 
+### Fixed
+
+- `status`, `stop`, `restart` and `start` now wait up to 10s for a page to answer (was 1.5s), so a busy page (a loaded machine, a long first index) is no longer reported as not running, skipped by `stop`, or joined by a second page; `start`'s readiness check keeps its 1.5s attempts.
+
 ## [0.39.1] - 2026-10-24
 
 ### Changed

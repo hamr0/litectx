@@ -38,6 +38,10 @@ export async function pickPort() {
 }
 const START_TIMEOUT_MS = 15000;
 const STOP_TIMEOUT_MS = 5000;
+/** How long a live-check waits for a page to answer: a busy page (loaded machine, a long synchronous index prelude) is slow, not dead. */
+const PROBE_TIMEOUT_MS = 10000;
+/** Per-attempt wait inside `start`'s readiness loop (which retries until START_TIMEOUT_MS). */
+const READY_PROBE_MS = 1500;
 
 /** How long `stop` waits for a page to exit. `LITECTX_STOP_TIMEOUT_MS` is an internal override (tests); not documented config. @returns {number} */
 function stopTimeoutMs() {
@@ -64,11 +68,12 @@ function alive(pid) {
  * What `url` says about itself if it answers as a litectx ui (its state endpoint has a version and a sources
  * list), else null. `pid` is absent from an older litectx ui.
  * @param {string} url
+ * @param {number} [timeoutMs]
  * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null } | null>}
  */
-async function probe(url) {
+async function probe(url, timeoutMs = PROBE_TIMEOUT_MS) {
   try {
-    const r = await fetch(`${url}/api/sources`, { signal: AbortSignal.timeout(1500) });
+    const r = await fetch(`${url}/api/sources`, { signal: AbortSignal.timeout(timeoutMs) });
     if (!r.ok) return null;
     const j = /** @type {any} */ (await r.json());
     if (typeof j?.version !== "string" || !Array.isArray(j?.sources)) return null;
@@ -81,7 +86,7 @@ async function probe(url) {
 
 /** Does `url` answer as a litectx ui? @param {string} url @returns {Promise<boolean>} */
 async function answers(url) {
-  return (await probe(url)) !== null;
+  return (await probe(url, READY_PROBE_MS)) !== null;
 }
 
 /** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null }} LivePage */
