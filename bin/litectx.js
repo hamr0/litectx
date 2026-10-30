@@ -16,6 +16,8 @@
 //   litectx                                  # on a terminal: a menu over everything below
 //   litectx start [path] [--port <n>] [--embeddings] [--no-open]   # search page in the background (+ opens the browser)
 //   litectx stop
+//   litectx restart [same flags as start]          # stop every page, then start one
+//   litectx update                                 # the only command that goes online: asks npm for the newest version
 //   litectx setup [--remove] [--dev]               # wire litectx into Claude Code (MCP server + two hooks); a git checkout needs --dev
 //   litectx status [path]
 //   litectx ui [path] [--port <n>] [--embeddings]   # localhost search page (127.0.0.1:4747); embeddings OFF unless --embeddings
@@ -62,8 +64,15 @@ async function main() {
   }
   if (!cmd || cmd === "help" || cmd === "--help" || cmd === "-h") help();
 
-  if (cmd === "start") {
-    if (opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
+  if (cmd === "start" || cmd === "stop" || cmd === "restart") {
+    if (cmd !== "stop" && opts.port !== undefined && !(Number.isInteger(opts.port) && opts.port >= 0 && opts.port <= 65535)) fail("--port takes a port number (0-65535)");
+    if (cmd !== "start") {
+      const { stopUi } = await import("../src/cli/launcher.js");
+      const r = await stopUi();
+      for (const l of r.lines) console.log(l);
+      if (!r.ok) process.exit(1); // a page that would not stop is not started over
+    }
+    if (cmd === "stop") return;
     const { startUi, liveMessage } = await import("../src/cli/launcher.js");
     const { cyan, yellow } = await import("../src/cli/style.js");
     const { moreNote } = await import("../src/cli/status.js");
@@ -78,11 +87,13 @@ async function main() {
     return;
   }
 
-  if (cmd === "stop") {
-    const { stopUi } = await import("../src/cli/launcher.js");
-    const r = await stopUi();
-    for (const l of r.lines) console.log(l);
-    if (!r.ok) process.exit(1);
+  if (cmd === "update") {
+    const { updateCmd } = await import("../src/cli/update.js");
+    const tty = !!(process.stdin.isTTY && process.stdout.isTTY);
+    const rl = tty ? (await import("node:readline/promises")).createInterface({ input: process.stdin, output: process.stdout }) : null;
+    const code = await updateCmd({ ask: rl ? (q) => rl.question(q) : null });
+    rl?.close();
+    if (code) process.exit(code);
     return;
   }
 
@@ -368,6 +379,8 @@ function usage() {
     "       litectx            (on a terminal) a menu over the commands below\n" +
     "       litectx start [path] [--port <n>] [--embeddings] [--no-open]   search page in the background; opens the browser (one page at a time)\n" +
     "       litectx stop                                                    stop every running search page\n" +
+    "       litectx restart [path] [--port <n>] [--embeddings] [--no-open]  stop every running search page, then start one\n" +
+    "       litectx update                                                  check npm for a newer litectx and offer to install it (the only command that goes online)\n" +
     "       litectx setup [--remove] [--dev]                                wire litectx into Claude Code (MCP server + hooks); from a git checkout needs --dev\n" +
     "       litectx status [path]                                           what is set up, running and indexed (read-only)\n" +
     "       litectx ui [path] [--port <n>] [--embeddings]   localhost search page on 127.0.0.1 (default port 4747); embeddings OFF unless --embeddings\n" +

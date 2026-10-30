@@ -6,6 +6,7 @@ import { claudeSummary, indexInfo, moreNote, statusLines, uiInfo } from "./statu
 import { runSetup } from "./setup.js";
 import { liveMessage, startUi, stopUi } from "./launcher.js";
 import { version } from "./paths.js";
+import { updateCmd } from "./update.js";
 import { bcyan, cyan, dim, green, red, rule, sep, yellow } from "./style.js";
 
 /**
@@ -39,34 +40,44 @@ export async function menu(actions) {
     console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}${sep()}${page}`);
     console.log(`${dim("index:")} ${ixLine}`);
     console.log(rule());
-    console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} index   ${bcyan("4")} setup   ${bcyan("5")} status   ${dim("q quit")}`);
+    console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} restart   ${bcyan("4")} index   ${bcyan("5")} setup   ${bcyan("6")} status   ${bcyan("7")} update   ${green("q")} quit`);
     let a = "";
     for (let i = 0; i < 2; i++) {
       a = (await rl.question(`${cyan(">")} `)).trim().toLowerCase();
       if (a === "q" || a === "quit") return 0;
-      if (["1", "2", "3", "4", "5"].includes(a)) break;
+      if (["1", "2", "3", "4", "5", "6", "7"].includes(a)) break;
       if (a !== "") console.log(red(`  unknown choice '${a}'`));
       a = "";
     }
     if (!a) return 0;
     try {
-      if (a === "1") {
+      /** @returns {Promise<boolean>} false when a page could not be stopped */
+      const stop = async () => {
+        const r = await stopUi();
+        for (const l of r.lines) console.log(`  ${l}`);
+        return r.ok;
+      };
+      const start = async () => {
         const r = await startUi({});
         if (r.started) console.log(`  started: ${cyan(r.url)}`);
         else for (const p of r.live) console.log(`  ${liveMessage(p)}`);
-      } else if (a === "2") {
-        const r = await stopUi();
-        for (const l of r.lines) console.log(`  ${l}`);
-        if (!r.ok) return 1;
+      };
+      if (a === "1") await start();
+      else if (a === "2") {
+        if (!(await stop())) return 1;
       } else if (a === "3") {
+        if (!(await stop())) return 1; // a page that would not stop is not started over
+        await start();
+      } else if (a === "4") {
         const p = await askFolder(rl);
         if (p === null) return 1;
         await actions.index(p);
-      } else if (a === "4") {
+      } else if (a === "5") {
         const r = await runSetup({}, (q) => rl.question(q));
         for (const l of r.lines) console.log(l.startsWith("  ") ? l : `  ${l}`);
         if (!r.ok) return 1;
-      } else for (const l of await statusLines()) console.log(`  ${l}`);
+      } else if (a === "6") for (const l of await statusLines()) console.log(`  ${l}`);
+      else return await updateCmd({ ask: (q) => rl.question(q), fromMenu: true });
     } catch (e) {
       console.log(red(`  litectx: ${e instanceof Error ? e.message : String(e)}`));
       return 1;
