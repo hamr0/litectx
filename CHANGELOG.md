@@ -5,7 +5,7 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.40.0] - 2026-10-30
 
 ### Added
 
