@@ -31,7 +31,7 @@ export async function menu(actions) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     const c = claudeSummary();
-    const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("4")}`;
+    const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("5")}`;
     const u = await uiInfo();
     const page = u.running ? `page ${green("running")} at ${cyan(u.url)}${moreNote(u.extra)}` : `page ${dim("not running")}`;
     const ix = indexInfo(process.cwd());
@@ -40,7 +40,7 @@ export async function menu(actions) {
     console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}${sep()}${page}`);
     console.log(`${dim("index:")} ${ixLine}`);
     console.log(rule());
-    console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} restart   ${bcyan("4")} index   ${bcyan("5")} setup   ${bcyan("6")} status   ${bcyan("7")} update   ${green("q")} quit`);
+    console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} restart   ${bcyan("4")} index   ${bcyan("5")} setup   ${bcyan("6")} status   ${bcyan("7")} update   ${bcyan("q")} quit`);
     let a = "";
     for (let i = 0; i < 2; i++) {
       a = (await rl.question(`${cyan(">")} `)).trim().toLowerCase();

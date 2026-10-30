@@ -276,7 +276,7 @@ sys.stdout.write(out.decode("utf8","replace"))
   );
 }
 
-test("menu on a terminal: the new line with a green q; 7 update runs update with the menu wording and the global prefix", { skip: !hasPython }, async () => {
+test("menu on a terminal: the new line with q coloured like the other keys; 7 update runs update with the menu wording and the global prefix", { skip: !hasPython }, async () => {
   const g = globalInstall();
   const f = fakeNpm();
   const sb = sandbox();
@@ -285,7 +285,8 @@ test("menu on a terminal: the new line with a green q; 7 update runs update with
   // eslint-disable-next-line no-control-regex
   const plain = shown.replace(/\x1b\[[0-9;]*m/g, "");
   assert.match(plain, /1 start {3}2 stop {3}3 restart {3}4 index {3}5 setup {3}6 status {3}7 update {3}q quit/);
-  assert.ok(shown.includes("\x1b[32mq\x1b[0m quit"), "q is green");
+  assert.ok(shown.includes("\x1b[1;36mq\x1b[0m quit"), "q is the same colour as the other keys");
+  assert.match(plain, /Claude not set up — pick 5/, "the hint names the setup key");
   assert.match(plain, /Updated to 999\.0\.0\. Then pick 3 restart\./);
   assert.deepEqual(ran(f.log), [["install", "-g", "--prefix", g.prefix, "litectx@latest"]]);
   const mono = await menuOnPty({ ...env, FORCE_COLOR: "", NO_COLOR: "1" }, ["q"]);
