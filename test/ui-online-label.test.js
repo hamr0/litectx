@@ -57,6 +57,7 @@ async function boot(mode = "ok", src = web("app.js")) {
     if (m.mode === "500") return reply(500, { error: "boom" });
     if (m.mode === "badbody") return reply(200, undefined);
     if (url.startsWith("/api/search")) return reply(200, SEARCH);
+    if (m.mode === "zero") return reply(200, { ...STATE(), sources: [], active: null });
     if (m.mode === "nullsources") return reply(200, { ...STATE(), sources: null });
     return reply(200, STATE({ indexing: m.mode === "busy" }));
   };
@@ -181,4 +182,27 @@ test("starting a pass (re-index click) pulls the waiting idle tick forward; neve
   assert.equal(idle.live, false, "the waiting 10 s tick was cleared");
   assert.equal(p.pending().length, 1, "one chain");
   assert.equal(p.pending()[0].ms, 1500);
+});
+
+const sourcesChip = (p) => p.top.children[0].children[1].children.find((c) => c.textContent === "sources");
+
+test("zero sources: the panel opens itself, a chip click closes it, and the next tick reopens it with the chip pressed", async () => {
+  const p = await boot("zero");
+  const panel = p.byId.get("panel");
+  assert.equal(panel.children.length, 1, "opened itself (no sources yet)");
+  sourcesChip(p).onclick();                                   // user closes it
+  assert.equal(panel.children.length, 0);
+  await p.fire();                                             // the tick forces settings back on (no sources)
+  assert.equal(sourcesChip(p).getAttribute("aria-pressed"), "true");
+  assert.equal(panel.children.length, 1, "the panel matches the pressed chip");
+});
+
+test("the idle tick does not rebuild the open panel (a half-typed path in the Add form survives)", async () => {
+  const p = await boot("ok");
+  sourcesChip(p).onclick();
+  const panel = p.byId.get("panel");
+  assert.equal(panel.children.length, 1);
+  const box = panel.children[0];
+  await p.fire(); await p.fire();
+  assert.equal(panel.children[0], box, "same element: not re-rendered");
 });

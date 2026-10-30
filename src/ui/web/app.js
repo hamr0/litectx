@@ -53,7 +53,7 @@
   function loadState() {
     return api("GET", "/api/sources").then(function (st) {
       s.st = st; titleText.innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
-      if (!st.sources.length) s.settings = true;
+      if (!st.sources.length && !s.settings) { s.settings = true; panelSig = null; } // forced open: the panel must repaint even if its data did not change
       var ix = !!(st.current && st.current.indexing);
       if (ix && !s.busy) { s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; clearInterval(tickTimer); tickTimer = setInterval(tick, 1000); } // a pass the server started itself
       if (!ix && s.busy && !s.busy.pending) endBusy(st);
