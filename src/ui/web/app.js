@@ -20,10 +20,12 @@
   };
 
   // the top-bar label: ONE painter, written only on a change (role=status is a live region, a rewrite is re-announced).
-  // online = the server answered at all (any HTTP reply); offline = the fetch itself was rejected. renderTop keeps this node.
+  // online = the server answered at all (any HTTP reply); offline = the fetch itself was rejected. it lives on the title line, far right.
   var dot = document.createElement("span");
   dot.id = "onlineDot"; dot.className = "on"; dot.setAttribute("role", "status"); dot.textContent = "\u25cf online";
   var lastOnline = true;
+  var titleText = document.createElement("span"); titleText.id = "titleText"; // the title text and the label are siblings on #title: a title rewrite touches only the text
+  document.getElementById("title").appendChild(titleText); document.getElementById("title").appendChild(dot);
   function paintOnline(isOnline) {
     if (lastOnline === isOnline) return;
     lastOnline = isOnline;
@@ -50,7 +52,7 @@
   var panelSig = null;
   function loadState() {
     return api("GET", "/api/sources").then(function (st) {
-      s.st = st; $("title").innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
+      s.st = st; titleText.innerHTML = '<span class="fgc">litectx tinymem</span> · v' + esc(st.version) + " · lightning local retrieval"; document.title = "litectx tinymem v" + st.version;
       if (!st.sources.length) s.settings = true;
       var ix = !!(st.current && st.current.indexing);
       if (ix && !s.busy) { s.busy = { what: "reindex", label: "re-indexing…", t0: Date.now() }; clearInterval(tickTimer); tickTimer = setInterval(tick, 1000); } // a pass the server started itself
@@ -185,7 +187,7 @@
     // current), keep the live DOM so a focused chip stays focused and a click never lands on a replaced element
     var sig = bar.outerHTML.replace(/<span id="elapsed">[^<]*<\/span>/, "") + "|" + (st && st.active);
     if (sig === topSig && t.firstChild) return;
-    topSig = sig; t.innerHTML = ""; right.insertBefore(dot, right.firstChild); t.appendChild(bar); // the label is not part of the signature: it repaints itself
+    topSig = sig; t.innerHTML = ""; t.appendChild(bar); // the label is not part of the signature: it repaints itself
   }
   function fail(e) { if (e.unreachable) return; s.msg = e.message; renderPanel(); renderResults(); }
 

@@ -78,13 +78,25 @@ async function boot(mode = "ok", src = web("app.js")) {
   return { m, writes, timers, calls, byId, pending, fire, flush, dot: byId.get("onlineDot"), top: byId.get("top") };
 }
 
-test("the label starts online and sits first in the top bar's right-hand controls", async () => {
+test("the label starts online and sits on the title line, at the end", async () => {
   const p = await boot("ok");
   assert.equal(p.dot.className, "on");
   assert.equal(p.dot.textContent, "● online");
   assert.equal(p.dot.getAttribute("role"), "status");
+  const title = p.byId.get("title");
+  assert.equal(title.children[title.children.length - 1], p.dot, "last child of the title line, after the text");
+  assert.equal(title.children[0].id, "titleText");
   const right = p.top.children[0].children[1];
-  assert.equal(right.children[0], p.dot, "left of re-index / sources / theme");
+  assert.ok(!right.children.includes(p.dot), "no longer in the controls row");
+});
+
+test("a second state load leaves exactly one label and rewrites the title text only", async () => {
+  const p = await boot("ok");
+  p.m.mode = "ok"; await p.fire(); await p.fire();
+  const title = p.byId.get("title");
+  assert.equal(title.children.filter((c) => c.id === "onlineDot").length, 1);
+  assert.equal(title.children.length, 2, "text + label");
+  assert.ok(title.children[0].innerHTML.includes("v9.9.9"));
 });
 
 test("a 200, a 500 and a 200 with an unparseable body all paint online (the server answered)", async () => {
