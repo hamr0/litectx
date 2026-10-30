@@ -89,7 +89,7 @@ environment variable). These are the UI's own settings, separate from
 
 ## Page (variant F)
 
-- **Top bar**: source dropdown, file count and timing; re-index and meaning controls on the right.
+- **Top bar**: source dropdown, file count and timing; re-index and meaning controls on the right, led by a `● online` / `● offline` label. Online = the server answered at all (any HTTP reply); offline = the fetch was rejected. The page's status poll never stops and is the heartbeat: 1.5 s during a pass, 3 s while unreachable, 10 s idle (idle ticks only reload `/api/sources`).
 - **Search line**: a `×` at the end of the box clears the query text only (filters stay; the
   per-search type/folder chips go with the old results), focuses the box and adds a history entry.
   Hidden while the box is empty.
