@@ -441,12 +441,23 @@ export class Store {
   /** Create the real file (and its folder) now and move onto it. Called by the first write; the stand-in holds nothing. */
   _materialize() {
     const path = /** @type {string} */ (this._lazyPath);
-    this._lazyPath = null;
-    mkdirSync(dirname(path), { recursive: true });
-    const real = new Database(path);
-    this._cur.close();
-    this._cur = real;
-    this._init();
+    const standIn = this._cur;
+    // Lazy mode ends only once the real file is open AND initialised: if mkdirSync/open/init throws (read-only
+    // folder), the stand-in stays and every later write retries and throws again, never "succeeds" into memory.
+    let real;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      real = new Database(path);
+      this._cur = real;
+      this._lazyPath = null; // _init (reset, pending) must see the real file
+      this._init();
+    } catch (e) {
+      this._cur = standIn;
+      this._lazyPath = path;
+      if (real) real.close();
+      throw e;
+    }
+    standIn.close();
   }
 
   /** Pragmas, schema and self-heal on the current connection. */

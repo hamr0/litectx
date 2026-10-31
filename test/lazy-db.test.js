@@ -3,7 +3,7 @@
 
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LiteCtx } from "../src/index.js";
@@ -122,4 +122,19 @@ test("a connection opened before the file exists sees the writer's data once it 
   assert.equal(reader.size(), 1);
   reader.close();
   writer.close();
+});
+
+test("a failed file creation (read-only folder) keeps the store lazy: every write throws, nothing reports stored", { skip: process.getuid?.() === 0 }, async () => {
+  const r = root();
+  chmodSync(r, 0o555);
+  try {
+    const ctx = new LiteCtx({ root: r });
+    await assert.rejects(() => ctx.remember("a0", "alpha fact", { kind: "fact" }), { code: "EACCES" });
+    await assert.rejects(() => ctx.remember("a1", "beta fact", { kind: "fact" }), { code: "EACCES" }, "the retry throws again, not a silent in-memory success");
+    assert.equal(ctx.size(), 0, "nothing was stored");
+    assert.equal(existsSync(folder(r)), false);
+    ctx.close();
+  } finally {
+    chmodSync(r, 0o755);
+  }
 });
