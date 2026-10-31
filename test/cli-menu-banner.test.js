@@ -5,7 +5,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,9 +80,15 @@ test("menu banner (page running): `page:` shows the URL and the folder, mode and
   execFileSync("git", ["-C", repo, "add", "-A"]); // the indexer reads git's file list
   const ui = join(home, "ui.json");
   writeFileSync(ui, JSON.stringify({ active: "proj", sources: [{ name: "proj", path: repo }] }));
-  const env = { ...process.env, HOME: home, LITECTX_UI_CONFIG: ui, LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)) };
+  // a recording xdg-open first on PATH: `start` must never reach the owner's real browser
+  const bin = join(home, "bin");
+  const openLog = join(home, "open.log");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "xdg-open"), `#!/bin/sh\necho "$@" >> ${openLog}\n`);
+  chmodSync(join(bin, "xdg-open"), 0o755);
+  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, LITECTX_UI_CONFIG: ui, LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)) };
   execFileSync(process.execPath, [BIN, "index", repo, "--no-embeddings"], { env, stdio: "ignore" });
-  execFileSync(process.execPath, [BIN, "start"], { env, stdio: "ignore" });
+  execFileSync(process.execPath, [BIN, "start", "--no-open"], { env, stdio: "ignore" });
   try {
     // the page indexes its folder after it starts and reports 0 files until that pass ends: wait for it
     const url = readdirSync(join(home, ".litectx", "pages")).map((f) => JSON.parse(readFileSync(join(home, ".litectx", "pages", f), "utf8")).url)[0];
@@ -97,6 +103,7 @@ test("menu banner (page running): `page:` shows the URL and the folder, mode and
   } finally {
     execFileSync(process.execPath, [BIN, "stop"], { env, stdio: "ignore" });
   }
+  assert.equal(existsSync(openLog), false, "no browser was opened");
 });
 
 test("menu banner: no saved folder and no index here say so plainly", { skip: !hasPython }, async () => {
