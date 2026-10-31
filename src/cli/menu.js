@@ -2,10 +2,11 @@
 // runs the same code as its subcommand and exits.
 
 import { createInterface } from "node:readline/promises";
-import { claudeSummary, indexInfo, moreNote, statusLines, uiInfo } from "./status.js";
+import { claudeSummary, indexInfo, moreNote, openingLine, statusLines, uiInfo } from "./status.js";
 import { runSetup } from "./setup.js";
 import { liveMessage, startUi, stopUi } from "./launcher.js";
 import { version } from "./paths.js";
+import { confirmFolder } from "./indexcheck.js";
 import { updateCmd } from "./update.js";
 import { bcyan, cyan, dim, green, red, rule, sep, yellow } from "./style.js";
 
@@ -58,6 +59,7 @@ export async function menu(actions) {
         return r.ok;
       };
       const start = async () => {
+        console.log(`  ${dim(openingLine())}`); // before the wait: a big folder makes start slow, and this says which one
         const r = await startUi({});
         if (r.started) console.log(`  started: ${cyan(r.url)}`);
         else for (const p of r.live) console.log(`  ${liveMessage(p)}`);
@@ -69,8 +71,16 @@ export async function menu(actions) {
         if (!(await stop())) return 1; // a page that would not stop is not started over
         await start();
       } else if (a === "4") {
-        const p = await askFolder(rl);
-        if (p === null) return 1;
+        const asked = await askFolder(rl);
+        if (asked === null) return 1;
+        const p = await confirmFolder(asked, (q) => rl.question(q));
+        if (p === null) {
+          console.log(dim("  cancelled"));
+          return 1;
+        }
+        // An open readline holds the terminal in raw mode, where Ctrl+C is a keypress for it, not a SIGINT for
+        // the process: a long pass could not be stopped. Close it first; nothing else is asked after this.
+        rl.close();
         await actions.index(p);
       } else if (a === "5") {
         const r = await runSetup({}, (q) => rl.question(q));

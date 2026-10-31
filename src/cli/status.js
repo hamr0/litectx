@@ -2,11 +2,11 @@
 // directory or a file, and opens an existing index readonly.
 
 import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { indexStamp } from "../indexer.js";
-import { detectMode } from "../ui/config.js";
+import { describeMode, detectMode, loadConfig } from "../ui/config.js";
 import { basePort, liveUis } from "./launcher.js";
 import { claudeState } from "./setup.js";
 import { pkgDir, version } from "./paths.js";
@@ -69,6 +69,22 @@ export function indexInfo(path) {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   }
   return info;
+}
+
+/**
+ * What `start` is about to open, before it waits: the folder given, else the saved active source in ui.json
+ * (the current directory is never used). Reads ui.json and lists one directory level; touches nothing else.
+ * @param {string} [path] the folder named on the command line, if any
+ * @returns {string} e.g. "opening ~/PycharmProjects · all repos (46 found)"
+ */
+export function openingLine(path) {
+  const home = homedir();
+  const short = (/** @type {string} */ p) => (p === home ? "~" : p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
+  const c = loadConfig();
+  const target = path ? resolve(path) : c.sources.find((s) => s.name === c.active)?.path;
+  if (!target) return "no folder saved yet — the page opens its add-folder form";
+  const m = detectMode(target);
+  return `opening ${short(target)} · ${m.ok ? describeMode(m.mode) : m.error}`;
 }
 
 /** @param {string} path @returns {string[]} lines about the index at `path` */

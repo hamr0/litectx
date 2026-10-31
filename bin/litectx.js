@@ -75,8 +75,10 @@ async function main() {
     if (cmd === "stop") return;
     const { startUi, liveMessage } = await import("../src/cli/launcher.js");
     const { cyan, yellow } = await import("../src/cli/style.js");
-    const { moreNote } = await import("../src/cli/status.js");
+    const { moreNote, openingLine } = await import("../src/cli/status.js");
     const path = opts.words[0] ? resolve(opts.words[0]) : undefined;
+    // on a terminal, name the folder before the wait; on stderr so stdout stays exactly as scripts parse it today
+    if (process.stderr.isTTY) console.error((await import("../src/cli/style.js")).dim(openingLine(path)));
     const r = await startUi({ path, port: opts.port, embeddings: opts.embeddingsFlag, open: !opts.noOpen });
     if (r.started) console.log(`litectx ui started: ${cyan(r.url)}  (log: ${r.log}; stop with \`litectx stop\`)`);
     else {
