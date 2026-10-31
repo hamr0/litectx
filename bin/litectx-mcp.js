@@ -41,6 +41,7 @@ const rootIsHome = () => {
     return false;
   }
 };
+const NOT_INDEXED = "note: this folder is not indexed yet; run the index tool, then ask again.";
 let warmed = false; // one-shot guard for the background warm-index kicked on `initialize`
 let warmFails = 0; // consecutive warm-index failures — bounds retry so a persistent failure can't thrash
 const WARM_MAX_ATTEMPTS = 3; // total warm-index tries before giving up until the process restarts
@@ -230,12 +231,15 @@ async function handle(req) {
   if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });
   if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
   if (method === "tools/call") {
+    // recall/get/impact answer "nothing" the same way for an empty folder and an unindexed one; a second text block
+    // (the first stays exactly what it was, so a client parsing it as JSON is unaffected) says which it is
+    const note = () => (["recall", "get", "impact"].includes(params.name) && !ctx.indexed ? [{ type: "text", text: NOT_INDEXED }] : []);
     try {
       const text = await callTool(params.name, params.arguments ?? {});
-      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], isError: false } });
+      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }, ...note()], isError: false } });
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
-      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], isError: true } });
+      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }, ...note()], isError: true } });
     }
   }
   if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });

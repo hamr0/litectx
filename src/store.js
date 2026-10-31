@@ -1927,6 +1927,16 @@ export class Store {
   }
 
   /**
+   * Has an `index()` pass ever landed here? True when the db carries a stored stamp (a whole-index pass, finished
+   * or cut short) OR any file_index row (a `paths`-scoped pass never stamps). Written memory alone is not an index.
+   * Reads only: on a store whose file does not exist yet this is false and creates nothing.
+   * @returns {boolean}
+   */
+  isIndexed() {
+    return this.storedStamp() !== 0 || this.db.prepare("SELECT 1 FROM file_index LIMIT 1").get() !== undefined;
+  }
+
+  /**
    * Record the index-format stamp. Called only after a pass that covered the WHOLE index — a scoped
    * pass cannot vouch for the files it never looked at.
    * @param {number} stamp

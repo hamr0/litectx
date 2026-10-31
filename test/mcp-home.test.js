@@ -28,11 +28,11 @@ const until = async (/** @type {() => boolean} */ f, ms = 8000) => {
 
 /**
  * Start the server with `home` as HOME and `root` as its folder (cwd, or --root when `flag`).
- * @param {{ home: string, root: string, flag?: boolean }} o @param {import("node:test").TestContext} t
+ * @param {{ home: string, root: string, flag?: boolean, env?: Record<string, string> }} o @param {import("node:test").TestContext} t
  */
 function server(o, t) {
   const args = [SERVER, "--no-embeddings", ...(o.flag ? ["--root", o.root] : [])];
-  const proc = spawn(process.execPath, args, { cwd: o.root, env: { ...process.env, HOME: o.home }, stdio: ["pipe", "pipe", "pipe"] });
+  const proc = spawn(process.execPath, args, { cwd: o.root, env: { ...process.env, HOME: o.home, ...o.env }, stdio: ["pipe", "pipe", "pipe"] });
   t.after(() => proc.kill());
   let err = "";
   proc.stderr.on("data", (d) => (err += d));
@@ -89,4 +89,24 @@ test("any other root warms exactly as before (the index file appears) and prints
   await s.init();
   assert.ok(await until(() => existsSync(join(root, ".litectx", "index.db"))), "the warm pass ran");
   assert.doesNotMatch(s.stderr(), /not indexing/);
+});
+
+test("recall/get/impact on an unindexed folder add one note block; the first block is unchanged; it goes once indexed", async (t) => {
+  const home = dir();
+  const root = dir();
+  const s = server({ home, root, env: { LITECTX_NO_WARM_INDEX: "1" } }, t);
+  await s.init();
+  for (const [name, args] of /** @type {[string, any][]} */ ([["recall", { query: "alpha" }], ["get", { id: "a.js" }], ["impact", { symbol: "alpha" }]])) {
+    const r = (await s.call(name, args)).result;
+    assert.equal(r.content.length, 2, `${name}: a note is added`);
+    assert.match(r.content[1].text, /not indexed yet; run the index tool/);
+    assert.doesNotMatch(r.content[0].text, /not indexed yet/, `${name}: the first block is the plain answer`);
+  }
+  const remember = (await s.call("remember", { id: "k", text: "x" })).result;
+  assert.equal(remember.content.length, 1, "other tools get no note");
+  await s.call("index", {});
+  for (const [name, args] of /** @type {[string, any][]} */ ([["recall", { query: "alpha" }], ["get", { id: "a.js" }], ["impact", { symbol: "alpha" }]])) {
+    const r = (await s.call(name, args)).result;
+    assert.equal(r.content.length, 1, `${name}: no note once indexed`);
+  }
 });

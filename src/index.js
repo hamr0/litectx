@@ -1790,6 +1790,24 @@ export class LiteCtx {
     return { items, total, offset, nextOffset };
   }
 
+  /**
+   * Has this store had at least one `index()` pass? A cheap read that creates nothing: `false` for a folder
+   * nobody has indexed (a fresh root, or one holding only `remember()`ed memory), `true` once a whole-index pass
+   * has run (even one cut short) or a `paths`-scoped pass has indexed any file. `recall`'s return is unchanged —
+   * an empty result does not say whether the folder is empty or just unindexed; this does.
+   * @returns {boolean}
+   * @category index
+   * @when Tell "nothing matched" from "this folder was never indexed" before trusting an empty recall — the MCP server adds a note when it is false.
+   * @signature liteCtx.indexed: boolean
+   * @fails Never throws.
+   * @example
+   * const ctx = new LiteCtx({ root })
+   * if (!ctx.indexed) await ctx.index()
+   */
+  get indexed() {
+    return this.store.isIndexed();
+  }
+
   /** @returns {number} total stored items — indexed documents + written memory */
   size() {
     return this.store.count();

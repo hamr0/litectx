@@ -1109,6 +1109,9 @@ the row counts targeted — a `rowid`-cursor is the deferred large-store path.)
 ### `ctx.size()` → `number`
 Stored item count: one per indexed file (code or md — an md file counts once however many heading sections it has), plus one per written memory row (docs, blobs, facts, episodes).
 
+### `ctx.indexed` → `boolean`
+Has this store had at least one `index()` pass? `false` for a folder nobody indexed (a fresh root, or one holding only `remember()`ed memory), `true` once a whole-index pass has run (even one cut short) or a `paths`-scoped pass has indexed any file; it survives a reopen. The rule: a stored index stamp that is not 0, or any indexed-file row. A cheap read that creates nothing. `recall`'s return is unchanged, so an empty result alone cannot tell "nothing matched" from "never indexed"; this can.
+
 ### `ctx.close()` → `void`
 Closes the SQLite connection. Call it when done (especially for file-backed DBs).
 
@@ -1419,7 +1422,7 @@ lists hot episodes to distil, same contract as the lib. Tool failures come back
 in-band (`isError` results an agent can read and self-correct); protocol errors are reserved
 for malformed JSON-RPC. **No `log: false` is exposed over MCP** — an MCP client is a live
 agent, which is precisely the demand the audit log exists to capture; non-demand consumers
-belong on the lib or the CLI's `--no-log`.
+belong on the lib or the CLI's `--no-log`. When the folder is not indexed yet (`ctx.indexed` is false), `recall`, `get` and `impact` replies carry a second text block, `note: this folder is not indexed yet; run the index tool, then ask again.`; the first block is the unchanged answer.
 
 **Warm-on-boot.** An MCP-only host has no SessionStart hook to build the index, so right after
 answering the `initialize` handshake the server kicks a **background** `ctx.index()` — fire-and-forget,
