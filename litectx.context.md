@@ -149,7 +149,7 @@ Passed to `new LiteCtx(config)`. Only `root` is required.
 | `include` | `string[]` | `[".ts", ".js", ".mjs", ".cjs", ".py", ".md"]` | File extensions to index. Routing is by **extension only** — content is never sniffed. |
 | `pathspecs` | `string[]` | unset | Optional git pathspecs to scope the index, e.g. `["app/**/*.js"]`. Applied via `git ls-files`. |
 | `childRepos` | `boolean` | `false` | `root` is a **folder of git repos**, not a repo itself: `index()` reads the tracked files (`git ls-files`) of every repo **one level down**, paths prefixed `<repo>/` (e.g. `rwxmap/README.md`). Untracked files, loose files at `root`, non-repo directories and repos nested deeper are never read. A pathspec whose first segment is a repo name scopes to that repo (`rwxmap/src`); any other pathspec applies to every repo. Git grounding follows the prefix. A leading `./` on a pathspec is ignored; routing looks only at the first `/` segment, so `:`-magic pathspecs (`:(glob)…`, `:!x`) are not parsed and go to every repo verbatim, and a spec whose first segment equals a repo name is routed to that repo only. **Not treated as repos:** hidden-named folders (`.dotfiles`), folders named like a noise dir (`node_modules`, `dist`, `build`, `coverage`, `.venv`, `__pycache__`, `.litectx`) and symlinked directories (a symlink to a repo would index it twice) — rename the folder to index it. A repo whose `git ls-files` fails (corrupt index, broken `.git`) is listed in `IndexResult.skipped` (`{repo, error}`), its previously indexed files are **kept** (never reported `removed`), and that pass does not stamp the index. In this mode `impact()` runs ripgrep over the whole `root`, so it also sweeps untracked data (over-count — the safe direction), and tsconfig path aliases are read only from `<root>/tsconfig.json`, so per-repo aliases are not seen. The default `dbPath` is still `<root>/.litectx/index.db`. Git is run with `-c core.fsmonitor=false`, so a repo's own `.git/config` cannot make indexing execute a program. |
-| `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index (the parent dir is created for file paths). |
+| `dbPath` | `string` | `<root>/.litectx/index.db` | SQLite file path. Use `":memory:"` for an ephemeral in-process index. The file and its parent dir are created on the **first write** (`index()`, `remember()`, `ingest()`, `stash()`), not by `new LiteCtx`: until then every read answers as an empty store (`recall` → `[]`, `get` → `null`, `count` → `0`) and creates nothing, and a connection opened earlier picks the file up once someone else creates it. |
 | `embeddings` | `boolean` | `false` | Enable the opt-in **semantic tier**: `index()` embeds each file, `remember()` embeds the text, `recall()` fuses cosine into the ranking — and for `fact`/`episode` also *nominates* the nearest stored vectors into the pool (KNN union: paraphrase recall). Requires the optional peer dep `@huggingface/transformers` (`npm i @huggingface/transformers`). Off → the deterministic BM25 + spreading core, no model loaded. |
 | `embedWeight` | `number` | `1.0` | Semantic fusion weight (higher = more semantic). POC-tuned default; held-out-validated, no overfitting cliff. |
 | `embedModel` | `string` | `Xenova/all-MiniLM-L6-v2` | transformers.js model id for the tier. |
@@ -190,8 +190,8 @@ config files — the adopter passes everything in.
 ## Public API
 
 ### `new LiteCtx(config)` → `LiteCtx`
-Constructs an instance and opens (or creates) the SQLite store. Creates the
-`dbPath` parent directory unless `dbPath === ":memory:"`.
+Constructs an instance. An existing SQLite store is opened; a missing one is
+created (file and `dbPath` parent directory) on the first write, not here.
 
 ### `await ctx.index(opts?)` → `Promise<IndexResult>`
 Builds or **incrementally refreshes** the index over `root`.

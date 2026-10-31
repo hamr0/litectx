@@ -7,8 +7,8 @@
 // Slice 1: `index()` is incremental and git-aware — it re-reads only files whose content
 // changed and drops files that disappeared (§6).
 
-import { join, dirname } from "node:path";
-import { mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { Store, MEM_KINDS, memId } from "./store.js";
@@ -287,7 +287,6 @@ export class LiteCtx {
     /** Files per commit on a COLD build (internal constant; a test hook, not config). @type {number} */
     this._batchFiles = COLD_BATCH_FILES;
     this.dbPath = config.dbPath ?? join(this.root, ".litectx", "index.db");
-    if (this.dbPath !== ":memory:") mkdirSync(dirname(this.dbPath), { recursive: true });
     // scope keys (§4.4 Isolate): the actor + run this instance acts as. Default null = unscoped
     // (global / durable) → recall sees everything and writes are unscoped, byte-identical to the
     // pre-scope behavior. A host threads identity in to isolate (owner = actor; session = run).
