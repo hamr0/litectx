@@ -99,7 +99,7 @@ test("confirmFolder: y confirms, q and empty cancel, another folder re-runs the 
 
 const hasPython = spawnSync("python3", ["-c", "1"]).status === 0;
 /** run the CLI on a pty, answering each prompt in order; returns the terminal text and exit code */
-function onPty(/** @type {string[]} */ args, /** @type {string[]} */ typed, /** @type {NodeJS.ProcessEnv} */ env) {
+function onPty(/** @type {string[]} */ args, /** @type {string[]} */ typed, /** @type {NodeJS.ProcessEnv} */ env, /** @type {string} */ cwd = process.cwd()) {
   const py = `import pty,os,sys,select,re,time,json
 node=${JSON.stringify(process.execPath)}
 pid,fd=pty.fork()
@@ -131,7 +131,7 @@ print(json.dumps({"code":code,"out":out.decode("utf8","replace")}))
 `;
   return /** @type {Promise<{ code: number | null, out: string }>} */ (
     new Promise((ok) => {
-      const c = spawn("python3", ["-I", "-c", py], { env, stdio: ["ignore", "pipe", "ignore"] });
+      const c = spawn("python3", ["-I", "-c", py], { env, cwd, stdio: ["ignore", "pipe", "ignore"] });
       let o = "";
       c.stdout.on("data", (d) => (o += d));
       c.on("close", () => {
@@ -148,18 +148,43 @@ const sandboxEnv = () => {
   return { ...process.env, HOME: home, LITECTX_UI_CONFIG: join(home, "ui.json"), LITECTX_DEFAULT_PORT: String(20000 + Math.floor(Math.random() * 30000)) };
 };
 
-test("menu pick 4 on a terminal: a folder with no index shows the question; another folder re-checks; q cancels with exit 1 and writes nothing", { skip: !hasPython }, async () => {
+test("menu pick 4 on a terminal: starts from the current folder with no folder prompt; another folder re-checks; q cancels with exit 1 and writes nothing", { skip: !hasPython }, async () => {
   const a = folder(3);
   const b = folder(7);
-  const r = await onPty([], ["4", a, b, "q"], sandboxEnv());
+  const r = await onPty([], ["4", b, "q"], sandboxEnv(), a);
+  assert.doesNotMatch(r.out, /folder to index:/);
+  assert.match(r.out, /none here/);
   assert.match(r.out, new RegExp(`${a} has no index yet\\. 3 files\\.`));
   assert.match(r.out, new RegExp(`${b} has no index yet\\. 7 files\\.`));
   assert.match(r.out, /Rough time: .* without meaning search, .* with it\./);
-  assert.match(r.out, /y {2}index this folder\s+or type another folder\s+q {2}cancel/);
+  assert.match(r.out, /\n {2}y {2}index this folder\r?\n {2}or type another folder\r?\n {2}q {2}cancel/);
   assert.match(r.out, /cancelled/);
   assert.equal(r.code, 1);
   assert.equal(existsSync(join(a, ".litectx")), false);
   assert.equal(existsSync(join(b, ".litectx")), false);
+});
+
+test("menu pick 4 from a folder that has an index: asks to update it; q cancels; a 0-file index counts as none (banner and question)", { skip: !hasPython }, async () => {
+  const { LiteCtx } = await import("../src/index.js");
+  const a = folder(2);
+  const lc = new LiteCtx({ root: a });
+  await lc.index();
+  lc.close?.();
+  const r = await onPty([], ["4", "q"], sandboxEnv(), a);
+  assert.match(r.out, new RegExp(`${a} is indexed · 2 files\\.`));
+  assert.match(r.out, /\n {2}y {2}update the index\r?\n {2}or type another folder\r?\n {2}q {2}cancel/);
+  assert.doesNotMatch(r.out, /none here|has no index yet/);
+  assert.equal(r.code, 1);
+  const z = folder(0);
+  const lz = new LiteCtx({ root: z });
+  await lz.index();
+  lz.close?.();
+  assert.ok(existsSync(join(z, ".litectx", "index.db")), "setup: a 0-file db exists");
+  const r0 = await onPty([], ["4", "q"], sandboxEnv(), z);
+  assert.match(r0.out, /none here/);
+  assert.doesNotMatch(r0.out, /· 0 files/);
+  assert.match(r0.out, new RegExp(`${z} has no index yet\\. 0 files\\.`));
+  assert.doesNotMatch(r0.out, /is indexed/);
 });
 
 test("`litectx index` with no folder argument is unchanged: it asks for the folder and never the question", { skip: !hasPython }, async () => {

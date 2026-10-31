@@ -53,6 +53,17 @@ export function claudeSummary() {
 }
 
 /**
+ * The index at `path` when it is a real one: none if there is no db or it holds 0 files (a pass that found nothing
+ * is not an index worth updating). An unreadable db still counts, so it is reported, not hidden.
+ * @param {string} path
+ * @returns {ReturnType<typeof indexInfo>}
+ */
+export function realIndex(path) {
+  const i = indexInfo(path);
+  return i && !i.error && !i.files ? null : i;
+}
+
+/**
  * Read-only facts about the index at `path`. Opening a WAL database creates -wal/-shm files even readonly,
  * and status must leave no trace: read in place only while a writer already holds those files (live
  * process); otherwise read a throwaway copy.

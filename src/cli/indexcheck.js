@@ -8,6 +8,7 @@ import { extname, join } from "node:path";
 import { childRepos } from "../indexer.js";
 import { bcyan, cyan, dim, red, yellow } from "./style.js";
 import { resolveFolder } from "./paths.js";
+import { realIndex, shortPath } from "./status.js";
 
 /** Counting stops here, so a huge folder cannot make the count itself slow. */
 export const COUNT_CAP = 5000;
@@ -106,26 +107,31 @@ function range(r, n, floor) {
  * @returns {null | { count: number, capped: boolean, lines: string[] }} null: it already has an index
  */
 export function indexQuestion(root) {
-  if (existsSync(join(root, ".litectx", "index.db"))) return null;
+  if (realIndex(root)) return null;
   const { count, capped } = countFiles(root);
   const home = root === homedir();
   const size = capped ? "Over 5,000 files." : `${count.toLocaleString("en-US")} files.`;
   const lines = [
-    `${home ? yellow(`${root} is your home directory, not a project.`) + " " : ""}${root} has no index yet. ${size}`,
+    ...(home ? [yellow(`${shortPath(root)} is your home directory, not a project.`)] : []),
+    `${shortPath(root)} has no index yet. ${size}`,
     `Rough time: ${range(KW_SEC, count, capped)} without meaning search, ${range(EMB_SEC, count, capped)} with it.`,
   ];
   return { count, capped, lines };
 }
 
 /**
- * Confirm a chosen folder that has no index. Typing another folder re-runs the check. A path that is not a
- * folder is returned as is, so the index step reports it exactly as before.
- * @param {string} first  the folder as typed
+ * Confirm a folder before it is indexed. One with no index gets the size question; with `askIfIndexed`, the first
+ * folder that already has an index gets an update question. Typing another folder re-runs the check (an indexed
+ * one typed that way goes straight to indexing). A path that is not a folder is returned as is, so the index
+ * step reports it exactly as before.
+ * @param {string} first  the folder to start from
  * @param {(q: string) => Promise<string>} ask  one prompt
+ * @param {{ askIfIndexed?: boolean }} [opts]
  * @returns {Promise<string | null>} the folder to index, null = cancelled
  */
-export async function confirmFolder(first, ask) {
+export async function confirmFolder(first, ask, opts = {}) {
   let raw = first;
+  let firstPass = true;
   for (;;) {
     let root;
     try {
@@ -134,9 +140,17 @@ export async function confirmFolder(first, ask) {
       return raw;
     }
     const q = indexQuestion(root);
-    if (!q) return raw;
-    for (const l of q.lines) console.log(`  ${l}`);
-    console.log(`    ${bcyan("y")}  index this folder\n    ${dim("or type another folder")}\n    ${bcyan("q")}  cancel`);
+    const info = !q && firstPass && opts.askIfIndexed ? realIndex(root) : null;
+    firstPass = false;
+    if (!q && !info) return raw;
+    if (q) {
+      for (const l of q.lines) console.log(`  ${l}`);
+      console.log(`  ${bcyan("y")}  index this folder`);
+    } else if (info) {
+      console.log(`  ${shortPath(root)} is indexed${info.files === undefined ? "" : ` · ${info.files.toLocaleString("en-US")} files`}.`);
+      console.log(`  ${bcyan("y")}  update the index`);
+    }
+    console.log(`  ${dim("or type another folder")}\n  ${bcyan("q")}  cancel`);
     const a = (await ask(`${cyan(">")} `)).trim();
     if (a.toLowerCase() === "y") return raw;
     if (a === "" || a.toLowerCase() === "q") return null;

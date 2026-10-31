@@ -2,7 +2,7 @@
 // runs the same code as its subcommand and exits.
 
 import { createInterface } from "node:readline/promises";
-import { claudeSummary, indexInfo, modeText, moreNote, openingLine, savedSource, shortPath, statusLines, uiInfo } from "./status.js";
+import { claudeSummary, modeText, moreNote, openingLine, realIndex, savedSource, shortPath, statusLines, uiInfo } from "./status.js";
 import { detectMode } from "../ui/config.js";
 import { runSetup } from "./setup.js";
 import { liveMessage, startUi, stopUi } from "./launcher.js";
@@ -59,7 +59,7 @@ export async function menu(actions) {
     const c = claudeSummary();
     const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("5")}`;
     const u = await uiInfo();
-    const ix = indexInfo(process.cwd());
+    const ix = realIndex(process.cwd());
     const ixLine = !ix ? dim("none here") : ix.error ? red("unreadable") : [`${(ix.files ?? 0).toLocaleString("en-US")} files`, ...(ix.repos !== undefined ? [`${ix.repos} repos`] : []), `meaning ${ix.meaning ? "on" : dim("off")}`].join(sep());
     console.log(`\n${rule()}`);
     console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}`);
@@ -96,9 +96,7 @@ export async function menu(actions) {
         if (!(await stop())) return 1; // a page that would not stop is not started over
         await start();
       } else if (a === "4") {
-        const asked = await askFolder(rl);
-        if (asked === null) return 1;
-        const p = await confirmFolder(asked, (q) => rl.question(q));
+        const p = await confirmFolder(process.cwd(), (q) => rl.question(q), { askIfIndexed: true });
         if (p === null) {
           console.log(dim("  cancelled"));
           return 1;
