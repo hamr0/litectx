@@ -45,8 +45,7 @@ function pageLine(u) {
   const m = detectMode(path);
   if (!m.ok) return parts.join(sep()) + sep() + m.error;
   parts.push(modeText(m.mode));
-  const i = indexInfo(path); // one db read (~10-25 ms for a 46-repo, 15k-file index)
-  if (i && !i.error) parts.push(`${(i.files ?? 0).toLocaleString("en-US")} files`);
+  // no file count: reading it means copying the whole index (629 MB, ~856 ms on a real 46-repo folder)
   return parts.join(sep());
 }
 

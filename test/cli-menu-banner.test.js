@@ -47,7 +47,7 @@ print(json.dumps({"out":out.decode("utf8","replace")}))
   });
 }
 
-test("menu banner (page off): `here:` is the current folder + its index, `page:` is the saved folder the page will open, with its own mode and count", { skip: !hasPython }, async () => {
+test("menu banner (page off): `here:` is the current folder + its index, `page:` is the saved folder the page will open, with its own mode (no count: that would read the whole index)", { skip: !hasPython }, async () => {
   const home = join(tmp, "home");
   const here = join(home, "work", "here");
   const repos = join(home, "repos");
@@ -65,7 +65,7 @@ test("menu banner (page off): `here:` is the current folder + its index, `page:`
 
   const out = await banner(here, env);
   assert.match(out, /here: {2}~\/work\/here · 1 files · meaning off/);
-  assert.match(out, /page: {2}not running · will open ~\/repos · 2 repos · 6 files/);
+  assert.match(out, /page: {2}not running · will open ~\/repos · 2 repos\r?$/m, "no file count: reading it would copy the whole index");
   assert.doesNotMatch(out, /^index:/m, "the old single index: line is gone");
 });
 
