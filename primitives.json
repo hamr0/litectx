@@ -83,6 +83,15 @@
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst { added, updated, unchanged } = await ctx.index()\n// incremental: only re-chunk two files\nawait ctx.index({ paths: ['src/a.js', 'src/b.js'] })"
     },
     {
+      "name": "indexed",
+      "category": "index",
+      "when": "Tell \"nothing matched\" from \"this folder was never indexed\" before trusting an empty recall — the MCP server adds a note when it is false.",
+      "import": "import { LiteCtx } from 'litectx'",
+      "signature": "liteCtx.indexed: boolean",
+      "fails": "Never throws.",
+      "example": "const ctx = new LiteCtx({ root })\nif (!ctx.indexed) await ctx.index()"
+    },
+    {
       "name": "ingest",
       "category": "ingest",
       "when": "Store an uploaded document (pdf/docx/md/txt/csv/eml → chunked + searchable; anything else → byte-exact blob) with an optional per-upload scope.",

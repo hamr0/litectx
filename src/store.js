@@ -4,6 +4,8 @@
 // nodes/edges/signals tables around this; recall keeps reading FTS.
 
 import Database from "better-sqlite3";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { indexBody, splitIdent, hasToken } from "./tokenize.js";
 import { cosine } from "./embedder.js"; // pure math — the ML dep stays lazy inside Embedder
 
@@ -357,6 +359,20 @@ function blobToVec(buf) {
   return new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4);
 }
 
+/**
+ * Would this call put data in the file? Decides when a lazy store must create it. Reads keep serving the empty
+ * stand-in, and so do UPDATE/DELETE (nothing to change in an empty store).
+ * `transaction` counts as a write (it exists to group them).
+ * @param {string | symbol} method @param {unknown} arg
+ * @returns {boolean}
+ */
+function isWrite(method, arg) {
+  if (method === "transaction") return true;
+  const sql = String(arg ?? "").trimStart();
+  if (method === "pragma") return /^user_version\s*=/i.test(sql);
+  return /^(INSERT|REPLACE|CREATE|DROP|ALTER|VACUUM|REINDEX)\b/i.test(sql);
+}
+
 export class Store {
   /**
    * @param {string} dbPath path to the SQLite file, or ":memory:"
@@ -369,8 +385,83 @@ export class Store {
     this.owner = scope.owner ?? null;
     /** @type {string|null} */
     this.session = scope.session ?? null;
+    // Lazy file: a file-backed store whose file does not exist yet is served by an empty in-memory stand-in (reads
+    // behave as an empty store) and the real file + folder are created on the FIRST WRITE (see `_materialize`).
+    // `:memory:` and an existing file open exactly as before.
+    /** @type {string | null} */
+    /** @type {boolean} */
+    this._initing = false;
+    this._lazyPath = dbPath !== ":memory:" && !existsSync(dbPath) ? dbPath : null;
     /** @type {any} */
-    this.db = new Database(dbPath);
+    this._cur = new Database(this._lazyPath ? ":memory:" : dbPath);
+    /** @type {any} */
+    /** @type {Record<string | symbol, unknown>} */
+    const overrides = {}; // a caller replacing a method (a test spying on prepare) wraps ours, never ours itself
+    this.db = new Proxy(this._cur, {
+      set: (_t, prop, v) => ((overrides[prop] = v), true),
+      get: (_t, prop) => {
+        if (prop in overrides) return overrides[prop];
+        if (prop === "prepare") {
+          // A statement prepared on the stand-in is re-prepared on the real file when it is used after the move,
+          // so a method that prepares a DELETE, then writes, then runs the DELETE still hits the real db.
+          return (/** @type {string} */ sql) => {
+            if (!this._lazyPath) return this._cur.prepare(sql);
+            if (!this._initing && (isWrite("prepare", sql) || existsSync(this._lazyPath))) this._materialize();
+            let db = this._cur;
+            let st = db.prepare(sql);
+            const cur = () => (db === this._cur ? st : ((db = this._cur), (st = db.prepare(sql))));
+            return {
+              run: (/** @type {any[]} */ ...a) => cur().run(...a),
+              get: (/** @type {any[]} */ ...a) => cur().get(...a),
+              all: (/** @type {any[]} */ ...a) => cur().all(...a),
+            };
+          };
+        }
+        if (prop === "exec" || prop === "transaction" || prop === "pragma") {
+          return (/** @type {any[]} */ ...a) => {
+            if (this._lazyPath && !this._initing && (isWrite(prop, a[0]) || existsSync(this._lazyPath))) this._materialize(); // a write creates the file; a file that appeared since (another process) is picked up
+            return this._cur[prop](...a);
+          };
+        }
+        const v = this._cur[prop];
+        return typeof v === "function" ? v.bind(this._cur) : v;
+      },
+    });
+    this._initing = true; // schema setup on the stand-in must not create the file
+    this._init();
+    this._initing = false;
+  }
+
+  /** @returns {boolean} true while the db file has not been created yet (the store is an empty stand-in) */
+  get pending() {
+    if (this._lazyPath !== null && !this._initing && existsSync(this._lazyPath)) this._materialize(); // someone else created it
+    return this._lazyPath !== null;
+  }
+
+  /** Create the real file (and its folder) now and move onto it. Called by the first write; the stand-in holds nothing. */
+  _materialize() {
+    const path = /** @type {string} */ (this._lazyPath);
+    const standIn = this._cur;
+    // Lazy mode ends only once the real file is open AND initialised: if mkdirSync/open/init throws (read-only
+    // folder), the stand-in stays and every later write retries and throws again, never "succeeds" into memory.
+    let real;
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      real = new Database(path);
+      this._cur = real;
+      this._lazyPath = null; // _init (reset, pending) must see the real file
+      this._init();
+    } catch (e) {
+      this._cur = standIn;
+      this._lazyPath = path;
+      if (real) real.close();
+      throw e;
+    }
+    standIn.close();
+  }
+
+  /** Pragmas, schema and self-heal on the current connection. */
+  _init() {
     // Write/throughput pragmas (aurora-borrowed; ledger §12). The index is rebuildable, so
     // synchronous=NORMAL (durable under WAL, loses at most the last txn on power loss) is the
     // right trade. No-ops on :memory:, harmless there.
@@ -1063,6 +1154,7 @@ export class Store {
    * @returns {number}
    */
   evictStash(sel) {
+    if (this.pending) return 0; // an empty stand-in has nothing to delete (and must not create the file)
     /** @type {string} */ let where;
     /** @type {(string | number)[]} */ let params;
     if (sel.id != null) (where = "WHERE path = ?"), (params = [sel.id]);
@@ -1091,6 +1183,7 @@ export class Store {
    * @returns {number}
    */
   forgetMemory(sel) {
+    if (this.pending) return 0; // an empty stand-in has nothing to delete (and must not create the file)
     if (sel.ownerFenced) return this.forgetMemoryByOwner(sel.owner ?? null, sel.kind, sel.id != null || sel.idPrefix != null ? { id: sel.id, idPrefix: sel.idPrefix } : undefined);
     /** @type {Record<string, string>} */
     const params = {};
@@ -1188,6 +1281,7 @@ export class Store {
    * @returns {number}
    */
   forgetMemoryByOwner(owner, kind, precise) {
+    if (this.pending) return 0; // an empty stand-in has nothing to delete (and must not create the file)
     /** @type {Record<string, string>} */
     const params = {};
     // tenant → exact owner (JOIN); GLOBAL/ownerless → owner IS NULL (LEFT JOIN, matching a present
@@ -1264,6 +1358,7 @@ export class Store {
    * @returns {number}
    */
   purge(now) {
+    if (this.pending) return 0;
     const tx = this.db.transaction(() => {
       const dead = /** @type {{ path: string }[]} */ (
         this.db.prepare("SELECT path FROM doc_scope WHERE expires_at IS NOT NULL AND expires_at <= ?").all(now)
@@ -1840,6 +1935,16 @@ export class Store {
    */
   storedStamp() {
     return Number(this.db.pragma("user_version", { simple: true }));
+  }
+
+  /**
+   * Has an `index()` pass ever landed here? True when the db carries a stored stamp (a whole-index pass, finished
+   * or cut short) OR any file_index row (a `paths`-scoped pass never stamps). Written memory alone is not an index.
+   * Reads only: on a store whose file does not exist yet this is false and creates nothing.
+   * @returns {boolean}
+   */
+  isIndexed() {
+    return this.storedStamp() !== 0 || this.db.prepare("SELECT 1 FROM file_index LIMIT 1").get() !== undefined;
   }
 
   /**

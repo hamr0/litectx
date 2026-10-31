@@ -19,7 +19,8 @@
 // here. Dashboards and batch tooling should use the lib or CLI (`--no-log`), not MCP.
 
 import { createInterface } from "node:readline";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { LiteCtx, KINDS } from "../src/index.js";
 
 // version for serverInfo — fs read, not a JSON import (import attributes need Node ≥20.10; engines floor is 18)
@@ -32,6 +33,15 @@ const flagValue = (flag) => {
 };
 const root = flagValue("--root") ?? process.cwd();
 const ctx = new LiteCtx({ root, embeddings: !process.argv.includes("--no-embeddings") });
+/** @returns {boolean} is the served root the home directory itself (compared by real path)? */
+const rootIsHome = () => {
+  try {
+    return realpathSync(root) === realpathSync(homedir());
+  } catch {
+    return false;
+  }
+};
+const NOT_INDEXED = "note: this folder is not indexed yet; run the index tool, then ask again.";
 let warmed = false; // one-shot guard for the background warm-index kicked on `initialize`
 let warmFails = 0; // consecutive warm-index failures — bounds retry so a persistent failure can't thrash
 const WARM_MAX_ATTEMPTS = 3; // total warm-index tries before giving up until the process restarts
@@ -196,6 +206,11 @@ async function handle(req) {
     // session hook to build it, so the model would otherwise recall against an empty or stale index.
     // Fire-and-forget: the handshake response above never waits on this — a cold first build is one-time
     // per repo (warm boots are ~ms). Opt out with LITECTX_NO_WARM_INDEX to manage indexing yourself.
+    if (!warmed && !process.env.LITECTX_NO_WARM_INDEX && rootIsHome()) {
+      // an MCP client started in ~ is not working on a project: a pass over the whole home would run for hours
+      warmed = true;
+      console.error(`litectx-mcp: not indexing ${root} on start — it is your home directory, not a project. Run litectx index <project> for a real folder.`);
+    }
     if (!warmed && !process.env.LITECTX_NO_WARM_INDEX) {
       warmed = true; // set before firing so a concurrent re-initialize can't start a second pass
       ctx.index().catch((e) => {
@@ -216,12 +231,15 @@ async function handle(req) {
   if (method === "ping") return send({ jsonrpc: "2.0", id, result: {} });
   if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
   if (method === "tools/call") {
+    // recall/get/impact answer "nothing" the same way for an empty folder and an unindexed one; a second text block
+    // (the first stays exactly what it was, so a client parsing it as JSON is unaffected) says which it is
+    const note = () => (["recall", "get", "impact"].includes(params.name) && !ctx.indexed ? [{ type: "text", text: NOT_INDEXED }] : []);
     try {
       const text = await callTool(params.name, params.arguments ?? {});
-      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], isError: false } });
+      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }, ...note()], isError: false } });
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e);
-      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }], isError: true } });
+      return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text }, ...note()], isError: true } });
     }
   }
   if (id !== undefined) send({ jsonrpc: "2.0", id, error: { code: -32601, message: `method not found: ${method}` } });

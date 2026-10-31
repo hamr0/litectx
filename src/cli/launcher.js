@@ -7,7 +7,7 @@ import net from "node:net";
 import { closeSync, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cyan } from "./style.js";
-import { lockFile, logFile, pagesDir, pidFile, pkgDir, stateDir } from "./paths.js";
+import { lockFile, logFile, pagesDir, pidFile, pkgDir, startingFile, stateDir } from "./paths.js";
 
 const DEFAULT_PORT = 4747;
 const PORT_TRIES = 20;
@@ -69,7 +69,7 @@ function alive(pid) {
  * list), else null. `pid` is absent from an older litectx ui.
  * @param {string} url
  * @param {number} [timeoutMs]
- * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null } | null>}
+ * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null, current: PageCurrent | null } | null>}
  */
 async function probe(url, timeoutMs = PROBE_TIMEOUT_MS) {
   try {
@@ -78,7 +78,9 @@ async function probe(url, timeoutMs = PROBE_TIMEOUT_MS) {
     const j = /** @type {any} */ (await r.json());
     if (typeof j?.version !== "string" || !Array.isArray(j?.sources)) return null;
     const src = j.sources.find((/** @type {any} */ x) => x?.name === j.active);
-    return { pid: Number.isInteger(j.pid) ? j.pid : null, source: src ? { name: String(src.name), path: String(src.path) } : null };
+    const c = j.current;
+    const current = c && typeof c.files === "number" ? { files: c.files, mode: /** @type {"repo" | "repos"} */ (c.mode === "repos" ? "repos" : "repo"), repos: Number(src?.repos) || 0, meaning: c.embeddings === true && c.meaningOff !== true } : null;
+    return { pid: Number.isInteger(j.pid) ? j.pid : null, source: src ? { name: String(src.name), path: String(src.path) } : null, current };
   } catch {
     return null;
   }
@@ -89,7 +91,9 @@ async function answers(url) {
   return (await probe(url, READY_PROBE_MS)) !== null;
 }
 
-/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null }} LivePage */
+/** @typedef {{ files: number, mode: "repo" | "repos", repos: number, meaning: boolean }} PageCurrent what the page reports about the folder it has open */
+
+/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null, current: PageCurrent | null }} LivePage */
 
 /** @typedef {{ pid: number, url: string, port: number, path: string | null, startedAt: string }} PageEntry */
 
@@ -155,7 +159,7 @@ export async function liveUis() {
   for (const { url, info } of found) {
     if (!info) continue;
     const pid = info.pid ?? reg.find((e) => e.url === url)?.pid ?? (rec && rec.url === url ? rec.pid : null);
-    pages.push({ url, pid, source: info.source });
+    pages.push({ url, pid, source: info.source, current: info.current });
   }
   return pages;
 }
@@ -182,6 +186,17 @@ function isLitectxUi(page) {
   }
   const i = cmd.findIndex((a) => /(^|[\\/])litectx(\.js)?$/.test(a));
   return i >= 0 && cmd[i + 1] === "ui";
+}
+
+/** Is `pid` a `litectx ui` process? Needs /proc: without it the answer is no (a starting page is never signalled unconfirmed). @param {number} pid @returns {boolean} */
+function startingIsUi(pid) {
+  try {
+    const cmd = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+    const i = cmd.findIndex((a) => /(^|[\\/])litectx(\.js)?$/.test(a));
+    return i >= 0 && cmd[i + 1] === "ui";
+  } catch {
+    return false;
+  }
 }
 
 /** @returns {UiRecord | null} the pid file's contents, or null if absent/unreadable */
@@ -405,11 +420,26 @@ async function startUiLocked(o, release) {
   child.unref();
   const pid = child.pid;
   if (pid === undefined) throw new Error(`could not start the search page (see ${log})`);
+  // A big folder keeps the new page busy for a long time before it listens or registers; until then nothing
+  // else can see it, so `stop` would say "no search page running". This file is how `stop` finds it.
+  writeFileSync(startingFile(), JSON.stringify({ pid }) + "\n");
+  try {
+    return await waitForPage(pid, log, open, () => exited);
+  } finally {
+    rmSync(startingFile(), { force: true });
+  }
+}
 
+/**
+ * Wait for the page spawned as `pid` to answer; on success record it, on timeout stop it and say so.
+ * @param {number} pid @param {string} log @param {boolean} open @param {() => boolean} hasExited
+ * @returns {Promise<{ url: string, started: boolean, log: string, live: LivePage[] }>}
+ */
+async function waitForPage(pid, log, open, hasExited) {
   const t0 = Date.now();
   let url = null;
   while (Date.now() - t0 < START_TIMEOUT_MS) {
-    if (exited) throw new Error(`the search page exited at start-up — see ${log}`);
+    if (hasExited()) throw new Error(`the search page exited at start-up — see ${log}`);
     url ??= /litectx ui: (http:\/\/127\.0\.0\.1:\d+)/.exec(readFileSync(log, "utf8"))?.[1] ?? null;
     if (url && (await answers(url))) break;
     await sleep(100);
@@ -458,7 +488,37 @@ export async function stopUi() {
       lines.push(`${p.url} (pid ${p.pid}) did not exit within ${limit / 1000}s after SIGTERM — run: kill -9 ${p.pid}`);
     } else lines.push(`stopped ${p.url} (pid ${p.pid})`);
   }
-  if (!pages.length) lines.push("no search page running");
+  // a page `start` spawned that is still starting up: not listening or registered yet, so not in `pages`
+  let starting = null;
+  try {
+    starting = JSON.parse(readFileSync(startingFile(), "utf8")).pid;
+  } catch {
+    // none
+  }
+  if (Number.isInteger(starting)) {
+    if (!alive(starting) || !startingIsUi(starting)) {
+      // gone, or the pid was reused by something else / /proc is unavailable: never signal what cannot be confirmed
+      rmSync(startingFile(), { force: true });
+    } else {
+      try {
+        process.kill(starting, "SIGTERM");
+        const t0 = Date.now();
+        const limit = stopTimeoutMs();
+        while (alive(starting) && Date.now() - t0 < limit) await sleep(50);
+        if (alive(starting)) {
+          ok = false;
+          lines.push(`the search page that was still starting (pid ${starting}) did not exit within ${limit / 1000}s after SIGTERM — run: kill -9 ${starting}`);
+        } else {
+          rmSync(startingFile(), { force: true });
+          lines.push(`stopped the search page that was still starting (pid ${starting})`);
+        }
+      } catch (e) {
+        ok = false;
+        lines.push(`could not signal the search page that was still starting (pid ${starting}): ${/** @type {Error} */ (e).message}`);
+      }
+    }
+  }
+  if (!lines.length) lines.push("no search page running");
   if (rec && !pages.some((p) => p.pid === rec.pid && alive(p.pid)) && existsSync(pidFile())) rmSync(pidFile(), { force: true });
   return { ok, lines };
 }

@@ -924,6 +924,39 @@ test("a live page that answers slower than 1.5s still counts as live: status rep
   }
 });
 
+test("stop finds a page that `start` spawned and is still waiting for (not listening, not registered): it stops it, never says 'no search page running'", async () => {
+  const sb = sandbox();
+  const base = await baseWithRoom();
+  sb.env.LITECTX_DEFAULT_PORT = String(base);
+  // a stand-in named litectx.js (argv `litectx.js ui`) that never listens: a page busy with a big folder
+  const dir = join(sb.dir, "busy");
+  mkdirSync(dir, { recursive: true });
+  const script = join(dir, "litectx.js");
+  writeFileSync(script, "setInterval(() => {}, 1000);\n");
+  const stub = spawn(process.execPath, [script, "ui"], { env: sb.env, stdio: "ignore" });
+  const victim = spawn("sleep", ["30"], { stdio: "ignore" });
+  mkdirSync(join(sb.home, ".litectx"), { recursive: true });
+  const starting = join(sb.home, ".litectx", "ui.starting");
+  try {
+    writeFileSync(starting, JSON.stringify({ pid: stub.pid }) + "\n"); // what startUi writes right after spawning
+    const s = await cliAsync(sb, ["stop"]);
+    assert.equal(s.code, 0, s.err + s.out);
+    assert.match(s.out, new RegExp(`stopped the search page that was still starting \\(pid ${stub.pid}\\)`));
+    assert.doesNotMatch(s.out, /no search page running/);
+    assert.equal(await until(() => !alive(/** @type {number} */ (stub.pid)), 5000), true);
+    assert.equal(existsSync(starting), false, "the record is removed");
+    // a record whose pid is not a litectx ui (reused pid) is dropped, never signalled
+    writeFileSync(starting, JSON.stringify({ pid: victim.pid }) + "\n");
+    const t = await cliAsync(sb, ["stop"]);
+    assert.match(t.out, /no search page running/);
+    assert.equal(alive(/** @type {number} */ (victim.pid)), true, "never signalled");
+    assert.equal(existsSync(starting), false);
+  } finally {
+    stub.kill("SIGKILL");
+    victim.kill("SIGKILL");
+  }
+});
+
 test("one page: start with several pages live ends with the (+N more — run litectx stop) hint; with one page it does not", async () => {
   const sb = sandbox();
   const repo = join(sb.dir, "repo");

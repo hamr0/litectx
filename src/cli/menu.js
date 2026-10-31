@@ -2,10 +2,12 @@
 // runs the same code as its subcommand and exits.
 
 import { createInterface } from "node:readline/promises";
-import { claudeSummary, indexInfo, moreNote, statusLines, uiInfo } from "./status.js";
+import { claudeSummary, modeText, moreNote, openingLine, realIndex, savedSource, shortPath, statusLines, uiInfo } from "./status.js";
+import { detectMode } from "../ui/config.js";
 import { runSetup } from "./setup.js";
 import { liveMessage, startUi, stopUi } from "./launcher.js";
 import { version } from "./paths.js";
+import { confirmFolder } from "./indexcheck.js";
 import { updateCmd } from "./update.js";
 import { bcyan, cyan, dim, green, red, rule, sep, yellow } from "./style.js";
 
@@ -24,6 +26,30 @@ export async function askFolder(rl) {
 }
 
 /**
+ * The `page:` banner line. A running page reports its own folder (it opens the one saved in ui.json, which is
+ * not the current directory); a stopped one shows what `start` will open.
+ * @param {Awaited<ReturnType<typeof uiInfo>>} u
+ * @returns {string}
+ */
+function pageLine(u) {
+  if (u.running) {
+    const c = u.current;
+    const parts = [`${green("running")} at ${cyan(u.url)}`];
+    if (u.source) parts.push(shortPath(u.source.path));
+    if (c) parts.push(modeText(c), `${c.files.toLocaleString("en-US")} files`);
+    return parts.join(sep()) + moreNote(u.extra);
+  }
+  const path = savedSource();
+  if (!path) return `${dim("not running")}${sep()}no folder saved yet`;
+  const parts = [dim("not running"), `will open ${shortPath(path)}`];
+  const m = detectMode(path);
+  if (!m.ok) return parts.join(sep()) + sep() + m.error;
+  parts.push(modeText(m.mode));
+  // no file count: reading it means copying the whole index (629 MB, ~856 ms on a real 46-repo folder)
+  return parts.join(sep());
+}
+
+/**
  * @param {{ index: (path: string) => Promise<void> }} actions  `index` lives in the CLI (it owns the library calls)
  * @returns {Promise<number>} exit code
  */
@@ -33,12 +59,12 @@ export async function menu(actions) {
     const c = claudeSummary();
     const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("5")}`;
     const u = await uiInfo();
-    const page = u.running ? `page ${green("running")} at ${cyan(u.url)}${moreNote(u.extra)}` : `page ${dim("not running")}`;
-    const ix = indexInfo(process.cwd());
+    const ix = realIndex(process.cwd());
     const ixLine = !ix ? dim("none here") : ix.error ? red("unreadable") : [`${(ix.files ?? 0).toLocaleString("en-US")} files`, ...(ix.repos !== undefined ? [`${ix.repos} repos`] : []), `meaning ${ix.meaning ? "on" : dim("off")}`].join(sep());
     console.log(`\n${rule()}`);
-    console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}${sep()}${page}`);
-    console.log(`${dim("index:")} ${ixLine}`);
+    console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}`);
+    console.log(`${dim("here:")}  ${shortPath(process.cwd())}${sep()}${ixLine}`);
+    console.log(`${dim("page:")}  ${pageLine(u)}`);
     console.log(rule());
     console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} restart   ${bcyan("4")} index   ${bcyan("5")} setup   ${bcyan("6")} status   ${bcyan("7")} update   ${bcyan("q")} quit`);
     let a = "";
@@ -58,6 +84,7 @@ export async function menu(actions) {
         return r.ok;
       };
       const start = async () => {
+        console.log(`  ${dim(openingLine())}`); // before the wait: a big folder makes start slow, and this says which one
         const r = await startUi({});
         if (r.started) console.log(`  started: ${cyan(r.url)}`);
         else for (const p of r.live) console.log(`  ${liveMessage(p)}`);
@@ -69,8 +96,14 @@ export async function menu(actions) {
         if (!(await stop())) return 1; // a page that would not stop is not started over
         await start();
       } else if (a === "4") {
-        const p = await askFolder(rl);
-        if (p === null) return 1;
+        const p = await confirmFolder(process.cwd(), (q) => rl.question(q), { askIfIndexed: true });
+        if (p === null) {
+          console.log(dim("  cancelled"));
+          return 1;
+        }
+        // An open readline holds the terminal in raw mode, where Ctrl+C is a keypress for it, not a SIGINT for
+        // the process: a long pass could not be stopped. Close it first; nothing else is asked after this.
+        rl.close();
         await actions.index(p);
       } else if (a === "5") {
         const r = await runSetup({}, (q) => rl.question(q));

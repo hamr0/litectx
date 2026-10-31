@@ -20,6 +20,8 @@ export const pidFile = () => join(stateDir(), "ui.pid");
 export const pagesDir = () => join(stateDir(), "pages");
 /** @returns {string} ~/.litectx/start.lock — held while a page is being started */
 export const lockFile = () => join(stateDir(), "start.lock");
+/** @returns {string} ~/.litectx/ui.starting — the pid of a page that `start` spawned and is still waiting for */
+export const startingFile = () => join(stateDir(), "ui.starting");
 /** @returns {string} */
 export const logFile = () => join(stateDir(), "ui.out");
 

@@ -121,7 +121,9 @@ test("W4: getNode finds a single-tenant instance's own fact by public id, and a 
 test("W4 migration: a legacy owner-tagged row (pre-W4 bare-id key) re-keys on open; a re-remember supersedes (no duplicate)", async () => {
   const { root, dbPath } = sharedDb();
   // 1. build the W4 schema, then close — migration runs on an empty store (no-op).
-  new LiteCtx({ root, dbPath }).close();
+  const c0 = new LiteCtx({ root, dbPath });
+  await c0.remember("seed", "seed"); // the file is created on the first write
+  c0.close();
   // 2. hand-seed a PRE-W4 owner-tagged fact: path = bare id, owner in mem_scope (how 0.21/0.22 wrote it).
   const raw = new Database(dbPath);
   raw.prepare("INSERT INTO mem(path, kind, format, provenance, occurred_at, body) VALUES (?, 'fact', 'text', 'human', NULL, ?)").run("fact:legacy", "the auth service uses jwt tokens");
