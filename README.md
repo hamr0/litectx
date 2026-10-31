@@ -34,8 +34,9 @@ litectx
 
 ```text
 ────────────────────────────────────────────────────────
-litectx · Claude ✓ · page running at http://127.0.0.1:4747
-index: 7,246 files · 44 repos · meaning off
+litectx · Claude ✓
+here:  ~/PycharmProjects · 7,246 files · 44 repos · meaning off
+page:  running at http://127.0.0.1:4747 · ~/PycharmProjects · 44 repos · 7,246 files
 ────────────────────────────────────────────────────────
   1 start   2 stop   3 restart   4 index   5 setup   6 status   7 update   q quit
 >
