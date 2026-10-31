@@ -12,10 +12,28 @@ import { claudeState } from "./setup.js";
 import { pkgDir, version } from "./paths.js";
 import { bold, cyan, dim, green, yellow, yn } from "./style.js";
 
-/** @returns {Promise<{ running: boolean, url: string, extra: number }>} the search page, whoever started it; `extra` = further live pages */
+/** @returns {Promise<{ running: boolean, url: string, extra: number, source: { name: string, path: string } | null, current: import("./launcher.js").PageCurrent | null }>} the search page, whoever started it; `extra` = further live pages; `source`/`current` = the folder it has open */
 export async function uiInfo() {
   const pages = await liveUis();
-  return pages.length ? { running: true, url: pages[0].url, extra: pages.length - 1 } : { running: false, url: `http://127.0.0.1:${basePort()}`, extra: 0 };
+  return pages.length ? { running: true, url: pages[0].url, extra: pages.length - 1, source: pages[0].source, current: pages[0].current } : { running: false, url: `http://127.0.0.1:${basePort()}`, extra: 0, source: null, current: null };
+}
+
+/** @param {string} p @returns {string} `p` with the home directory as ~ */
+export function shortPath(p) {
+  const home = homedir();
+  return p === home ? "~" : p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p;
+}
+
+/** @param {{ mode: string, repos: number }} m @returns {string} e.g. "46 repos" or "one repo" */
+export const modeText = (m) => (m.mode === "repos" ? `${m.repos} repos` : "one repo");
+
+/**
+ * The saved active source's path in ui.json (what the page opens when it starts), or null if none saved.
+ * @returns {string | null}
+ */
+export function savedSource() {
+  const c = loadConfig();
+  return c.sources.find((s) => s.name === c.active)?.path ?? null;
 }
 
 /** @param {number} extra @returns {string} e.g. " (+1 more — run litectx stop)", yellow; "" for none */
@@ -78,13 +96,10 @@ export function indexInfo(path) {
  * @returns {string} e.g. "opening ~/PycharmProjects · all repos (46 found)"
  */
 export function openingLine(path) {
-  const home = homedir();
-  const short = (/** @type {string} */ p) => (p === home ? "~" : p.startsWith(`${home}/`) ? `~${p.slice(home.length)}` : p);
-  const c = loadConfig();
-  const target = path ? resolve(path) : c.sources.find((s) => s.name === c.active)?.path;
+  const target = path ? resolve(path) : savedSource();
   if (!target) return "no folder saved yet — the page opens its add-folder form";
   const m = detectMode(target);
-  return `opening ${short(target)} · ${m.ok ? describeMode(m.mode) : m.error}`;
+  return `opening ${shortPath(target)} · ${m.ok ? describeMode(m.mode) : m.error}`;
 }
 
 /** @param {string} path @returns {string[]} lines about the index at `path` */

@@ -2,7 +2,8 @@
 // runs the same code as its subcommand and exits.
 
 import { createInterface } from "node:readline/promises";
-import { claudeSummary, indexInfo, moreNote, openingLine, statusLines, uiInfo } from "./status.js";
+import { claudeSummary, indexInfo, modeText, moreNote, openingLine, savedSource, shortPath, statusLines, uiInfo } from "./status.js";
+import { detectMode } from "../ui/config.js";
 import { runSetup } from "./setup.js";
 import { liveMessage, startUi, stopUi } from "./launcher.js";
 import { version } from "./paths.js";
@@ -25,6 +26,31 @@ export async function askFolder(rl) {
 }
 
 /**
+ * The `page:` banner line. A running page reports its own folder (it opens the one saved in ui.json, which is
+ * not the current directory); a stopped one shows what `start` will open.
+ * @param {Awaited<ReturnType<typeof uiInfo>>} u
+ * @returns {string}
+ */
+function pageLine(u) {
+  if (u.running) {
+    const c = u.current;
+    const parts = [`${green("running")} at ${cyan(u.url)}`];
+    if (u.source) parts.push(shortPath(u.source.path));
+    if (c) parts.push(modeText(c), `${c.files.toLocaleString("en-US")} files`);
+    return parts.join(sep()) + moreNote(u.extra);
+  }
+  const path = savedSource();
+  if (!path) return `${dim("not running")}${sep()}no folder saved yet`;
+  const parts = [dim("not running"), `will open ${shortPath(path)}`];
+  const m = detectMode(path);
+  if (!m.ok) return parts.join(sep()) + sep() + m.error;
+  parts.push(modeText(m.mode));
+  const i = indexInfo(path); // one db read (~10-25 ms for a 46-repo, 15k-file index)
+  if (i && !i.error) parts.push(`${(i.files ?? 0).toLocaleString("en-US")} files`);
+  return parts.join(sep());
+}
+
+/**
  * @param {{ index: (path: string) => Promise<void> }} actions  `index` lives in the CLI (it owns the library calls)
  * @returns {Promise<number>} exit code
  */
@@ -34,12 +60,12 @@ export async function menu(actions) {
     const c = claudeSummary();
     const claude = c === "yes" ? green("Claude ✓") : `${c === "no" ? red("Claude not set up") : yellow("Claude partly set up")} — pick ${bcyan("5")}`;
     const u = await uiInfo();
-    const page = u.running ? `page ${green("running")} at ${cyan(u.url)}${moreNote(u.extra)}` : `page ${dim("not running")}`;
     const ix = indexInfo(process.cwd());
     const ixLine = !ix ? dim("none here") : ix.error ? red("unreadable") : [`${(ix.files ?? 0).toLocaleString("en-US")} files`, ...(ix.repos !== undefined ? [`${ix.repos} repos`] : []), `meaning ${ix.meaning ? "on" : dim("off")}`].join(sep());
     console.log(`\n${rule()}`);
-    console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}${sep()}${page}`);
-    console.log(`${dim("index:")} ${ixLine}`);
+    console.log(`${bcyan("litectx")} ${dim(version())}${sep()}${claude}`);
+    console.log(`${dim("here:")}  ${shortPath(process.cwd())}${sep()}${ixLine}`);
+    console.log(`${dim("page:")}  ${pageLine(u)}`);
     console.log(rule());
     console.log(`  ${bcyan("1")} start   ${bcyan("2")} stop   ${bcyan("3")} restart   ${bcyan("4")} index   ${bcyan("5")} setup   ${bcyan("6")} status   ${bcyan("7")} update   ${bcyan("q")} quit`);
     let a = "";

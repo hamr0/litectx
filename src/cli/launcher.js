@@ -69,7 +69,7 @@ function alive(pid) {
  * list), else null. `pid` is absent from an older litectx ui.
  * @param {string} url
  * @param {number} [timeoutMs]
- * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null } | null>}
+ * @returns {Promise<{ pid: number | null, source: { name: string, path: string } | null, current: PageCurrent | null } | null>}
  */
 async function probe(url, timeoutMs = PROBE_TIMEOUT_MS) {
   try {
@@ -78,7 +78,9 @@ async function probe(url, timeoutMs = PROBE_TIMEOUT_MS) {
     const j = /** @type {any} */ (await r.json());
     if (typeof j?.version !== "string" || !Array.isArray(j?.sources)) return null;
     const src = j.sources.find((/** @type {any} */ x) => x?.name === j.active);
-    return { pid: Number.isInteger(j.pid) ? j.pid : null, source: src ? { name: String(src.name), path: String(src.path) } : null };
+    const c = j.current;
+    const current = c && typeof c.files === "number" ? { files: c.files, mode: /** @type {"repo" | "repos"} */ (c.mode === "repos" ? "repos" : "repo"), repos: Number(src?.repos) || 0, meaning: c.embeddings === true && c.meaningOff !== true } : null;
+    return { pid: Number.isInteger(j.pid) ? j.pid : null, source: src ? { name: String(src.name), path: String(src.path) } : null, current };
   } catch {
     return null;
   }
@@ -89,7 +91,9 @@ async function answers(url) {
   return (await probe(url, READY_PROBE_MS)) !== null;
 }
 
-/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null }} LivePage */
+/** @typedef {{ files: number, mode: "repo" | "repos", repos: number, meaning: boolean }} PageCurrent what the page reports about the folder it has open */
+
+/** @typedef {{ url: string, pid: number | null, source: { name: string, path: string } | null, current: PageCurrent | null }} LivePage */
 
 /** @typedef {{ pid: number, url: string, port: number, path: string | null, startedAt: string }} PageEntry */
 
@@ -155,7 +159,7 @@ export async function liveUis() {
   for (const { url, info } of found) {
     if (!info) continue;
     const pid = info.pid ?? reg.find((e) => e.url === url)?.pid ?? (rec && rec.url === url ? rec.pid : null);
-    pages.push({ url, pid, source: info.source });
+    pages.push({ url, pid, source: info.source, current: info.current });
   }
   return pages;
 }
