@@ -1425,7 +1425,9 @@ belong on the lib or the CLI's `--no-log`.
 answering the `initialize` handshake the server kicks a **background** `ctx.index()` — fire-and-forget,
 the handshake never waits on it, and a rejection is logged to stderr (never the JSON-RPC stdout stream).
 A cold first build is one-time per repo; warm boots are a ~ms no-op. Set `LITECTX_NO_WARM_INDEX` to opt
-out and manage indexing yourself. The background rebuild is **atomic** — its destructive clear runs inside
+out and manage indexing yourself. **The home directory is never warmed:** when the served root is the home
+directory (compared by real path) the pass is skipped and one stderr line says so — it is not a project, and
+a pass over it would run for hours. Every other root warms as above. The background rebuild is **atomic** — its destructive clear runs inside
 the same transaction that re-populates the index, so a `recall`/`get` arriving mid-rebuild sees the old
 complete index or the new one, never an empty window. (A failed warm-index is retried on the next
 `initialize`, bounded to a few attempts so a persistently-failing index — read-only or full disk, a
