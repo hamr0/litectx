@@ -5,6 +5,27 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.41.0] - 2026-10-31
+
+### Added
+
+- **`lc.indexed`** (getter): `true` when the database has a stored index stamp or any indexed-file row; written memory alone is not an index. It is a read that creates nothing, and it is listed in `primitives.json`. `recall`'s return is unchanged.
+- **MCP "not indexed yet" note**: `recall`, `get` and `impact` on a folder that is not indexed add a second text block saying so; the first block stays the plain answer.
+- **Menu pick 4 (index) starts from the current folder and asks first.** A folder with no index shows its file count and a rough time, then `y` / another folder / `q`; a folder that is already indexed asks whether to update it. An index with 0 files counts as no index. `litectx index` is unchanged.
+- **Two-line menu banner**: `here:` is this folder's index, `page:` is the folder the search page has open (a running page shows its folder, mode and file count; a stopped one shows the saved folder and mode, without a file count, since counting copies the whole db when no writer is live).
+
+### Changed
+
+- **`index.db` is created on the first write, not by `new LiteCtx`.** Constructing a `LiteCtx` no longer creates `.litectx/`; reads on a missing db answer as an empty store and create nothing. The file and folder appear on the first write. A directory that cannot be written now fails at the first write instead of at construction. `:memory:` and existing files open as before.
+- **MCP warm-on-boot skips the home directory.** When the served root is the home directory no background index pass starts, and one stderr line says why; every other root warms as before.
+- `litectx start` and menu 1 / 3 print which folder they are opening before waiting.
+
+### Fixed
+
+- **Ctrl+C works during a menu index** (the prompt is closed before indexing starts).
+- **`litectx stop` stops a page that `start` is still waiting for**, not only a page that is already answering.
+- **A failed lazy creation of `index.db` keeps the store lazy**, so every later write throws instead of silently landing in the in-memory stand-in and vanishing.
+
 ## [0.40.0] - 2026-10-30
 
 ### Added
