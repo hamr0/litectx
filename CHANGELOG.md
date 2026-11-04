@@ -14,6 +14,7 @@ All notable changes to this project are documented here, following
 ### Fixed
 
 - **The search page's repo filter no longer drops a repo's hits.** In all-repos mode it filtered after recall had already cut the list, so a repo whose hits ranked past the cut came back empty ("readme" in one repo: 0 rows, now 10). The filter now runs inside the search.
+- **`litectx start` no longer gives up on a big folder.** The page now answers before its first index pass begins; that pass used to block the page for 10-20 s on a large multi-repo folder, past the 15 s start limit.
 
 ## [0.41.1] - 2026-11-04
 

@@ -114,6 +114,15 @@ export async function createUi(opts = {}) {
     o.ctx.close();
   }
 
+  // The startup pass can block the event loop for many seconds before its first yield (a big folder), which would
+  // keep the page from ever answering `litectx start`. So it starts only after the first response has been sent.
+  let initialPass = false;
+  function kickInitialPass() {
+    if (!initialPass) return;
+    initialPass = false;
+    void reindex();
+  }
+
   /** One incremental index pass of the active source; concurrent callers share it. @returns {Promise<void>} */
   function reindex() {
     const o = cur;
@@ -158,6 +167,7 @@ export async function createUi(opts = {}) {
     cfg.active = name;
     saveConfig(cfg);
     openSource(s);
+    initialPass = false;
     void reindex();
   }
 
@@ -237,7 +247,7 @@ export async function createUi(opts = {}) {
       saveConfig(cfg);
     }
     openSource(first); // sets curError instead of throwing when the saved path has gone bad
-    void reindex();
+    initialPass = true; // the first index pass waits until the page has answered once (see kickInitialPass)
   }
 
   // ---- state for the page -------------------------------------------------------------------------
@@ -263,7 +273,7 @@ export async function createUi(opts = {}) {
             mode: cur.mode.mode,
             modeText: describeMode(cur.mode),
             files: (cur.files ??= cur.ctx.size()), // count(DISTINCT path) over the FTS tables is ~100 ms on a 200k-node index: not per poll
-            indexing: cur.running !== null,
+            indexing: cur.running !== null || initialPass, // a pass that is queued behind the first response counts as running
             error: cur.error,
             last: cur.last,
             progress: cur.running !== null ? cur.progress : null,
@@ -290,6 +300,7 @@ export async function createUi(opts = {}) {
   for (const [, [f]] of Object.entries(assets)) assetBody[f] = web(f);
 
   const server = createServer((req, res) => {
+    res.once("finish", () => setImmediate(kickInitialPass));
     handle(req, res).catch((e) => {
       if (res.headersSent) return res.end();
       if (e instanceof HttpError) return json(res, e.status, { error: e.message });
@@ -457,10 +468,12 @@ export async function createUi(opts = {}) {
     describe: () => (cur ? `${cur.name} · mode: ${describeMode(cur.mode)}${cur.embeddings ? " · meaning: on" : ""}` : curError ?? "no sources yet — open the page to add one"),
     /** resolves when the active source's index pass (if any) has finished */
     idle: async () => {
+      kickInitialPass();
       while (cur?.running) await cur.running;
     },
     state,
     async close() {
+      initialPass = false;
       await new Promise((ok) => {
         server.close(() => ok(undefined));
         server.closeAllConnections();
