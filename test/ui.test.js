@@ -1172,3 +1172,25 @@ test("page state: sourceAtPath finds the source already on a folder (trailing sl
   assert.equal(sourceAtPath(src, "/x/gamma"), null);
   assert.equal(sourceAtPath(src, ""), null);
 });
+
+test("state() serves a cached file count: recounted after an index pass, not on every poll", async () => {
+  const root = manyRepos();
+  const alpha = join(root, "alpha");
+  const ui = await createUi({ port: 0, path: alpha });
+  try {
+    await ui.idle();
+    const n0 = (await get(ui, "/api/sources")).json().current.files;
+    assert.ok(n0 > 0);
+    // another writer adds a file to the same index behind the page's back
+    writeFileSync(join(alpha, "extra.md"), "# Extra\n\nquokka extra\n");
+    execFileSync("git", ["-C", alpha, "add", "extra.md"]);
+    const other = new LiteCtx({ root: alpha });
+    await other.index();
+    other.close();
+    assert.equal((await get(ui, "/api/sources")).json().current.files, n0, "a poll does not recount");
+    await post(ui, "/api/reindex", { wait: true });
+    assert.equal((await get(ui, "/api/sources")).json().current.files, n0 + 1, "the pass refreshes the count");
+  } finally {
+    await ui.close();
+  }
+});

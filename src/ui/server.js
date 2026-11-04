@@ -33,6 +33,7 @@ const web = (f) => readFileSync(new URL(`./web/${f}`, import.meta.url), "utf8");
  * @property {LiteCtx} ctx
  * @property {LiteCtx | null} kwCtx   embeddings-off handle on the same db, opened on the first search during a meaning pass
  * @property {string[]} repoNames
+ * @property {number | null} files            cached file count shown in state(); null = recount on the next state() (set at open, after every pass)
  * @property {number} inflight                searches currently using ctx/kwCtx (a switch defers closing them until these end)
  * @property {boolean} retired                no longer the active source: close once idle
  * @property {boolean} closed
@@ -79,6 +80,7 @@ export async function createUi(opts = {}) {
       retired: false,
       closed: false,
       repoNames: m.mode.mode === "repos" ? childRepos(s.path) : [s.name],
+      files: null,
       running: null,
       abort: null,
       error: null,
@@ -140,6 +142,7 @@ export async function createUi(opts = {}) {
         o.running = null;
         o.abort = null;
         o.progress = null;
+        o.files = null; // the pass changed the count: recount once, on the next state()
       }
     })();
     return o.running;
@@ -259,7 +262,7 @@ export async function createUi(opts = {}) {
             name: cur.name,
             mode: cur.mode.mode,
             modeText: describeMode(cur.mode),
-            files: cur.ctx.size(),
+            files: (cur.files ??= cur.ctx.size()), // count(DISTINCT path) over the FTS tables is ~100 ms on a 200k-node index: not per poll
             indexing: cur.running !== null,
             error: cur.error,
             last: cur.last,
