@@ -75,6 +75,7 @@ const code = lc.recall("how does auth work", { kind: "code" });      // flat Hit
 const both = lc.recall("how does auth work");                        // grouped { code:[…5], doc:[…5] }
 const more = lc.recall("how does auth work", { kind: "code", n: 30 }); // dig deeper
 const full = lc.recall("how does auth work", { kind: "code", body: true }); // inline each hit's content
+const one = lc.recall("readme", { kind: "doc", pathPrefixes: ["myrepo"] }); // code/doc only, API-only: rank inside one folder, fence applied before the cut
 ```
 
 `Hit → { path, kind, format, score, keyword, chunk, body?, meta? }` — `score` is the value the list is ordered by (BM25 + spreading, plus `embedWeight` × cosine with embeddings on, each scaled per query; comparable within one list only). `keyword` is `true` when the hit matched the keyword (FTS) index (id/path tokens count; fact/episode match stemmed forms), `false` when added by meaning only (KNN nominee; use it, not `score > 0`). `body` is populated only with

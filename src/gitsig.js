@@ -25,15 +25,17 @@ const FMT = "--pretty=format:\x01%ct";
  * @param {string} root
  * @param {string[]} [pathspecs]
  * @param {boolean} [children]  root holds git repos one level down: collect each, keys prefixed `<repo>/`
+ * @param {Set<string>} [only]  with `children`: collect just these repos (a repo with nothing to index is not read — `git log` over a full history is the slow part)
  * @returns {Map<string, GitSig>}
  */
-export function collectGitSig(root, pathspecs, children = false) {
+export function collectGitSig(root, pathspecs, children = false, only) {
   if (children) {
     /** @type {Map<string, GitSig>} */
     const all = new Map();
     const repos = childRepos(root);
     const names = new Set(repos);
     for (const repo of repos) {
+      if (only && !only.has(repo)) continue;
       const specs = repoPathspecs(repo, pathspecs, names);
       if (specs === null) continue;
       for (const [f, g] of collectGitSig(join(root, repo), specs)) all.set(`${repo}/${f}`, g);

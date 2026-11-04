@@ -5,6 +5,18 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.42.0] - 2026-11-04
+
+### Added
+
+- **`recall({ pathPrefixes })`** restricts `code`/`doc` hits to given folders (whole path segments, applied before the result cut). API-only; ignored for `fact`/`episode`. Use it to search inside one repo of a multi-repo index.
+
+### Fixed
+
+- **The search page's repo filter no longer drops a repo's hits.** In all-repos mode it filtered after recall had already cut the list, so a repo whose hits ranked past the cut came back empty ("readme" in one repo: 0 rows, now 10). The filter now runs inside the search.
+- **`litectx start` no longer gives up on a big folder.** The page now answers before its first index pass begins; that pass used to block the page for 10-20 s on a large multi-repo folder, past the 15 s start limit.
+- **A re-index of a big multi-repo folder starts answering sooner.** Git history is now read only for the repos that have a changed file, not all of them (about 5 s to about 1 s before the first pause on a 48-repo folder).
+
 ## [0.41.1] - 2026-11-04
 
 ### Changed

@@ -59,9 +59,13 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
   const kinds = (o.kinds?.length ? o.kinds : ["doc", "code"]).filter((k) => k === "doc" || k === "code");
   if (!q.trim() || !kinds.length) return { rows: [], facets: { exts: [], folders: [] } };
   const wanted = o.repos?.length ? new Set(o.repos) : null;
-  // overfetch when filtering to repos: the wanted repo's hits may sit far below other repos' hits
+  // in all-repos mode the repo filter is applied INSIDE recall (before its cut), so a repo's hits rank among
+  // themselves however many other repos match the word; one-repo mode has no repo prefix to fence on.
+  // n: a repo filter fetches 200, no filter 60. The extra is headroom, not for the repo fence (that ranks before the
+  // cut): grouping merges chunk hits into fewer rows and the ext/folder filters run after the cut, so a filtered
+  // search still has candidates left to fill the 50-row limit.
   const n = wanted ? 200 : 60;
-  const r = await ctx.recall(q, { kind: kinds, n });
+  const r = await ctx.recall(q, { kind: kinds, n, ...(wanted && mode === "repos" ? { pathPrefixes: [...wanted] } : {}) });
   // filter to the wanted repos BEFORE interleaving: interleaving by global rank first lets one repo's code
   // hold early slots and its docs late ones, burying its docs behind all its code
   const repoOf = (/** @type {{ path: string }} */ h) => (mode === "repos" ? (h.path.split("/")[0] ?? "") : sourceName);

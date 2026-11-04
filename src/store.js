@@ -27,6 +27,25 @@ const STASH_TAIL = 80;
  * @param {T[]} rows
  * @returns {T[]}
  */
+/**
+ * SQL fence keeping only rows whose path lies under one of `prefixes` (whole segments: "rwx" matches
+ * "rwx/a.js", never "rwxlite/a.js"). `substr(...) = p || '/'` with bound params — no LIKE, so `%`/`_` in a
+ * name are literal. Applied in the candidate SELECT, before any LIMIT. No prefixes → empty fragment (SQL unchanged).
+ * @param {string} col  a constant column name, never caller input
+ * @param {string[]} prefixes  normalised: non-empty, no trailing "/"
+ * @returns {{ sql: string, params: Record<string, string> }}
+ */
+function pathFence(col, prefixes) {
+  if (!prefixes.length) return { sql: "", params: {} };
+  /** @type {Record<string, string>} */
+  const params = {};
+  const terms = prefixes.map((p, i) => {
+    params[`pp${i}`] = p + "/";
+    return `substr(${col}, 1, length(:pp${i})) = :pp${i}`;
+  });
+  return { sql: `AND (${terms.join(" OR ")}) `, params };
+}
+
 function scaleScores(rows) {
   if (!rows.length) return rows;
   let lo = Infinity;
@@ -2190,7 +2209,7 @@ export class Store {
    * @param {number} [spreadWeight=0]  0 = pure BM25; ~0.4 = v1 default (set by the caller)
    * For `fact`/`episode` the doc fields above are inert; the per-call owner fence rides
    * `filter.memOwner`/`filter.memSeeAll` instead (multis M4 — see {@link _memFilter}).
-   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null, memOwner?: string|null, memSeeAll?: boolean }} [filter]  resolved R2 scope + R5 expiry (doc axis) + per-call owner fence (mem axis)
+   * @param {{ scope?: string|null, seeAll?: boolean, now?: number|null, memOwner?: string|null, memSeeAll?: boolean, pathPrefixes?: string[] }} [filter]  resolved R2 scope + R5 expiry (doc axis) + per-call owner fence (mem axis) + whole-segment path fence (code/doc only)
    * @returns {Hit[]}
    */
   /**
@@ -2214,9 +2233,11 @@ export class Store {
    * most of the table), and path/kind/format/source are fetched for the winners only. doc_fts holds kind='doc' rows only,
    * so `kind = :kind` is a tautology here.
    * @param {string} match @param {string|null} scope @param {number} seeAll @param {number|null} now @param {number} limit
+   * @param {string[]} [prefixes]  whole-segment path prefixes (see {@link pathFence}); empty = no fence
    * @returns {any[]}
    */
-  _docPool(match, scope, seeAll, now, limit) {
+  _docPool(match, scope, seeAll, now, limit, prefixes = []) {
+    const pf = pathFence("doc_fts.path", prefixes);
     this.healDocScopeRid(); // O(1) probe — the fence below keys on doc_scope.rid; a row with no rid yet would read as global
     const top = /** @type {{ rid: number, score: number }[]} */ (
       this.db
@@ -2226,9 +2247,10 @@ export class Store {
             "WHERE doc_fts MATCH :match " +
             "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
             "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
+            pf.sql +
             "ORDER BY score DESC LIMIT :limit"
         )
-        .all({ match, scope, seeAll, now, limit })
+        .all({ match, scope, seeAll, now, limit, ...pf.params })
     );
     if (!top.length) return [];
     const meta = new Map(
@@ -2248,6 +2270,7 @@ export class Store {
     // (tests, the MCP/CLI bins) is byte-identical pre-strict; the facade passes it explicitly.
     const seeAll = (filter.seeAll ?? scope == null) ? 1 : 0;
     const now = filter.now ?? null;
+    const pf = pathFence(kind === "doc" ? "doc_fts.path" : "docs.path", filter.pathPrefixes ?? []); // code/doc only — the mem branch below ignores it
     // written-memory kinds route to the stemmed `mem` table (§5.1) — their own ranking domain
     // (kinds never share a ranking, so no BM25 score ever merges across the two tables). No
     // spreading: facts/episodes have no edges. Shape matches `docs` hits (`git` → null).
@@ -2285,7 +2308,7 @@ export class Store {
     // constant names, never caller input.
     const T = kind === "doc" ? "doc_fts" : "docs";
     const rows = /** @type {Hit[]} */ (
-      kind === "doc" ? this._docPool(match, scope, seeAll, now, pool) : this.db
+      kind === "doc" ? this._docPool(match, scope, seeAll, now, pool, filter.pathPrefixes) : this.db
         .prepare(
           `SELECT ${T}.rowid AS rid, ${T}.path AS path, ${T}.kind AS kind, ${T}.format AS format, ${T}.source AS source, -bm25(${T}) AS score ` +
             `FROM ${T} LEFT JOIN doc_scope ds ON ds.path = ${T}.path ` +
@@ -2294,9 +2317,10 @@ export class Store {
             // plus the reader's own tenant when a scope is set. seeAll=0 + scope NULL = global-only (GLOBAL).
             "AND (:seeAll = 1 OR ds.scope IS NULL OR (:scope IS NOT NULL AND ds.scope = :scope)) " +
             "AND (:now IS NULL OR ds.expires_at IS NULL OR ds.expires_at > :now) " +
+            pf.sql +
             "ORDER BY score DESC LIMIT :limit"
         )
-        .all({ match, kind, scope, seeAll, now, limit: pool })
+        .all({ match, kind, scope, seeAll, now, limit: pool, ...pf.params })
     );
     // an indexed-md SECTION row names its own chunk up front (attachChunks then leaves it alone); a legacy/whole-file row has none.
     // Looked up for the pool only AFTER the top-N was chosen (not joined per matching row before the sort); doc_sections.doc_rowid

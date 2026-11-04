@@ -888,6 +888,7 @@ test("search while a meaning pass runs skips the query embed (keywords only); af
   await pre.index(); // already keyword-indexed, so the meaning pass is a backfill and hits exist while it is parked
   pre.close();
   const ui = await createUi({ port: 0, path: root, embeddings: true });
+  await get(ui, "/api/sources"); // the first answer is what starts the startup index pass
   try {
     for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
     assert.ok(seen.length > 0, "precondition: the pass is inside a file embed");
@@ -958,6 +959,7 @@ test("regression: close() (Ctrl+C) stops a running meaning pass after the in-fli
     return new Float32Array(384).fill(0.05);
   };
   const ui = await createUi({ port: 0, path: root, embeddings: true });
+  await get(ui, "/api/sources"); // the first answer is what starts the startup index pass
   try {
     for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
     assert.ok(seen.length > 0, "precondition: the pass is inside a file embed");
@@ -1072,6 +1074,7 @@ test("regression: toggling meaning while a pass is mid-embed does not start a se
     return new Float32Array(384).fill(0.05);
   };
   const ui = await createUi({ port: 0, path: root, embeddings: true });
+  await get(ui, "/api/sources"); // the first answer is what starts the startup index pass
   try {
     for (let i = 0; i < 200 && seen.length === 0; i++) await new Promise((r) => setTimeout(r, 10));
     assert.equal(seen.length, 1, "precondition: the first pass is parked inside its first embed");

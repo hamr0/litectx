@@ -315,6 +315,7 @@ return shape follows the `kind` argument:
   ranking). A kind with no content returns an empty array — honest, not an error.
 - `opts.n?: number` — max hits **per kind**; raise to dig deeper. No hard cap, no
   pagination (a larger `n` is a larger context — your budget to manage).
+- `opts.pathPrefixes?: string[]` — keep only `code`/`doc` hits under these folders (whole path segments: `"rwx"` never matches `rwxlite/`; trailing `/` stripped; `[]`/unset = no fence). Applied before the cut, so a folder's hits rank among themselves however many other folders match — use it to search one repo of a `childRepos` index. Ignored for `fact`/`episode`. API-only (not on the CLI or MCP).
 - `opts.body?: boolean` (default `false`) — inline each hit's content as `hit.body`. Off by
   default: recall returns **pointers**, not payloads. Opt in to skip the follow-up `get()`s when
   mounting litectx as a memory store or feeding an assembler. Written memory comes back **verbatim**;
@@ -370,7 +371,7 @@ return shape follows the `kind` argument:
 > the list's weakest hit scores 0 — never filter on `score` to decide whether something matched.
 >
 > `git` is **grounding, not scored** — file-level commit count + last-commit unix-time (seconds),
-> from one `git log` pass at index time. It never affects ranking; `null` means no commit history
+> from one `git log` pass at index time (with `childRepos`, only for the repos that have a changed file; the rest keep their stored values). It never affects ranking; `null` means no commit history
 > (a non-git tree, or a tracked-but-uncommitted file).
 >
 > `provenance` / `use` / `occurredAt` (slice 5c) are the **written-memory analog of `git` — surfaced,
@@ -1377,7 +1378,7 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
   `<folder>/.litectx/index.db` (`childRepos`); neither → refused ("no git repos found"). Only
   git-tracked files are read. **Removing a source never deletes a one-repo index**; for an
   all-repos index the Remove box can also delete it (unticked by default).
-- **Indexing** runs once on start (incremental: only changed files are re-read) and on the
+- **Indexing** runs once on start (incremental: only changed files are re-read), begun only after the page has answered its first request so a big folder cannot keep `litectx start` waiting, and on the
   *re-index* button. While a pass has files to index the busy label reads "building index: 2,100
   of 7,244 files" (`index({ onProgress })`), and a first build commits in batches, so search
   results fill in as it runs. **Embeddings are off** unless you pass `--embeddings` or switch *meaning* on

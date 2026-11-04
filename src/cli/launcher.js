@@ -438,13 +438,17 @@ async function startUiLocked(o, release) {
 async function waitForPage(pid, log, open, hasExited) {
   const t0 = Date.now();
   let url = null;
+  let ready = false;
   while (Date.now() - t0 < START_TIMEOUT_MS) {
     if (hasExited()) throw new Error(`the search page exited at start-up — see ${log}`);
     url ??= /litectx ui: (http:\/\/127\.0\.0\.1:\d+)/.exec(readFileSync(log, "utf8"))?.[1] ?? null;
-    if (url && (await answers(url))) break;
+    if (url && (await answers(url))) {
+      ready = true; // do not probe again: the page starts its index pass right after this answer, and a second probe could hang behind it
+      break;
+    }
     await sleep(100);
   }
-  if (!url || !(await answers(url))) {
+  if (!ready || !url) {
     try {
       process.kill(pid, "SIGTERM");
     } catch {

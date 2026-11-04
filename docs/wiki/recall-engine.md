@@ -110,6 +110,8 @@ explicitly. Three query modes: a single kind returns a flat list (default `n=10`
 or an omitted kind return results grouped per kind (default `n=5` each — the safe CLI/agent
 default); `n` caps results per kind (litectx-prd.md:893-896).
 
+`pathPrefixes` (code/doc, API-only) fences the candidate query to whole-segment folder prefixes before the cut, so a folder's hits rank among themselves; unset is byte-identical.
+
 This was validated on aurora's 497 `.py` files indexed together with its 196 `.md` design docs:
 recalling `kind:"code"` held — and slightly beat — the py-only baseline (MRR 0.525 → 0.545),
 whereas a shared ranking dropped it to 0.480 with 12/22 queries prose-buried
