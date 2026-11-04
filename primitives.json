@@ -159,7 +159,7 @@
       "category": "recall",
       "when": "Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP. `pathPrefixes` (search inside one folder / one repo of a multi-repo index) is API-only, not on MCP/CLI.",
       "import": "import { LiteCtx } from 'litectx'",
-      "signature": "liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>",
+      "signature": "liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope?, pathPrefixes? }) => Promise<Hit[] | Record<kind, Hit[]>>",
       "fails": "Never throws on a miss — returns `[]` (or per-kind `{}`); a single stale chunk under `body:true` is nulled, not thrown; throws only under `strictScope` when a doc-kind query omits `scope`.",
       "example": "import { LiteCtx } from 'litectx'\nconst ctx = new LiteCtx({ root: process.cwd() })\nconst hits = await ctx.recall('retry backoff', { kind: 'code', n: 5 })\n// omit kind → grouped by kind: { code: [...], doc: [...], fact: [...] }\nconst grouped = await ctx.recall('rate limit')"
     },

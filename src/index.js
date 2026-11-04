@@ -805,7 +805,7 @@ export class LiteCtx {
    * @category recall
    * @when Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP. `pathPrefixes` (search inside one folder / one repo of a multi-repo index) is API-only, not on MCP/CLI.
    * @fails Never throws on a miss — returns `[]` (or per-kind `{}`); a single stale chunk under `body:true` is nulled, not thrown; throws only under `strictScope` when a doc-kind query omits `scope`.
-   * @signature liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>
+   * @signature liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope?, pathPrefixes? }) => Promise<Hit[] | Record<kind, Hit[]>>
    * @example
    * import { LiteCtx } from 'litectx'
    * const ctx = new LiteCtx({ root: process.cwd() })
