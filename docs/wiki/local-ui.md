@@ -82,8 +82,15 @@ environment variable). These are the UI's own settings, separate from
 - **Title line** (small, muted): `litectx tinymem · v<version> · lightning local retrieval`; the
   version is read from litectx's own package.json by the server (also in the tab title).
 - **Top bar**: `pycharm ▾ · 7,108 files · ↻ re-index · meaning: off`. Picking another source makes
-  it the remembered default.
+  it the remembered default. The dropdown stays enabled during an index pass: switching aborts the old
+  pass and the new source's pass queues behind it (never two passes on one db). While the switch is
+  pending the dropdown shows the picked source, and a status poll never rebuilds the open `<select>`.
+  The file count is cached and recounted once after each pass, not on every poll.
 - **Settings page**: lists sources (name, path, mode) with Add, Remove and Set default.
+  One folder is one source: the path is normalised (trailing slash, symlinks), so adding a folder
+  that is already listed never makes a second entry (no name typed re-selects it; a typed name gets
+  `409 already added as <name>`), and a `ui.json` that already holds twins on one path is healed to
+  one at the next start (the active twin wins; no index is deleted).
   Remove never deletes a one-repo index, because agents use it. For an all-repos index, an "also
   delete its index" box is offered, unticked by default.
 

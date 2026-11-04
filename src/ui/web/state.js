@@ -51,5 +51,22 @@
   function passText(last) {
     return last ? "+" + last.added + " ~" + last.updated + " -" + last.removed + " · " + (last.ms / 1000).toFixed(1) + " s" : "";
   }
-  root.litectxState = { encodeState: encodeState, decodeState: decodeState, mergeRepos: mergeRepos, hasFilters: hasFilters, clearFilters: clearFilters, passText: passText };
+  // The listed source whose path is `path` (trailing slashes ignored), else null: the Add form refuses a second entry for one folder.
+  function sourceAtPath(sources, path) {
+    var norm = function (p) { return String(p || "").replace(/\/+$/, ""); }, want = norm(path);
+    if (!want) return null;
+    for (var i = 0; i < (sources || []).length; i++) if (norm(sources[i].path) === want) return sources[i];
+    return null;
+  }
+  // The source the top-bar <select> shows: the one the user just picked while its switch is pending, else the server's active one.
+  function selectedSource(sources, active, pick) {
+    for (var i = 0; i < (sources || []).length; i++) if (sources[i].name === pick) return pick;
+    return active;
+  }
+  // Change-guard for the top bar: its HTML minus the live parts (elapsed seconds, progress label) plus the selected source.
+  // Equal signature = keep the live DOM, so the open <select> is never torn down by a status poll.
+  function barSignature(html, selected) {
+    return String(html).replace(/<span id="elapsed">[^<]*<\/span>/, "").replace(/<span id="label">[^<]*<\/span>/, "") + "|" + selected;
+  }
+  root.litectxState = { selectedSource: selectedSource, barSignature: barSignature, sourceAtPath: sourceAtPath, encodeState: encodeState, decodeState: decodeState, mergeRepos: mergeRepos, hasFilters: hasFilters, clearFilters: clearFilters, passText: passText };
 })(window);

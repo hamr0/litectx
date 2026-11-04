@@ -438,7 +438,7 @@ test("Origin check: state-changing requests from another origin are refused and 
     assert.deepEqual((await get(ui, "/api/sources")).json().sources, [], "nothing was added");
     // same origin (and no Origin at all) is fine
     assert.equal((await post(ui, "/api/sources", body, { origin: `http://127.0.0.1:${ui.port}` })).status, 200);
-    assert.equal((await post(ui, "/api/sources", { ...body, name: "y" })).status, 200);
+    assert.equal((await post(ui, "/api/sources", { name: "y", path: join(root, "beta") })).status, 200);
   } finally {
     await ui.close();
   }
@@ -915,13 +915,14 @@ test("regression: a status poll must not rebuild the top bar when only the elaps
   try {
     const app = (await get(ui, "/app.js")).text;
     const rt = app.slice(app.indexOf("function renderTop"), app.indexOf("function fail("));
-    // the rebuilt bar is compared with the live one (elapsed span excluded) and the DOM is kept when equal
-    assert.ok(/outerHTML\.replace\(\/<span id="elapsed">/.test(rt), "signature ignores the elapsed seconds");
-    assert.ok(/if \(sig === topSig && t\.firstChild\) return;/.test(rt), "an unchanged bar is left alone");
+    // the rebuilt bar is compared with the live one via the pure barSignature (unit-tested above) and the DOM is kept when equal
+    assert.ok(/ST\.barSignature\(bar\.outerHTML/.test(rt), "signature comes from barSignature");
+    assert.ok(/if \(sig === topSig && t\.firstChild\) \{[^}]*\breturn;/.test(rt), "an unchanged bar is left alone");
     assert.ok(rt.indexOf("t.innerHTML = \"\"") > rt.indexOf("return;"), "the live bar is cleared only after the unchanged check");
+    assert.ok(/live\.textContent = labelText/.test(rt), "the progress label is updated in place");
     // a pass the server started itself (page reload) has no click to start the ticker, so adopting it must: nothing else refreshes "elapsed"
     assert.ok(/s\.busy = \{ what: "reindex"[^\n]*setInterval\(tick, 1000\)/.test(app), "an adopted pass starts the elapsed ticker");
-    assert.ok(/st && st\.active/.test(rt), "a source switch (select value is a property, not markup) still rebuilds");
+    assert.ok(/ST\.selectedSource\(/.test(rt), "a source switch (select value is a property, not markup) still rebuilds");
   } finally {
     await ui.close();
   }
@@ -1118,6 +1119,147 @@ test("regression: switching sources while a search is parked in its query embed 
   } finally {
     release();
     Embedder.prototype.embed = real;
+    await ui.close();
+  }
+});
+
+// ---- one path = one source (fix/ui-sources) ----------------------------------------------------------
+
+test("adding a path that is already a source never makes a second one (name typed -> 409, trailing slash too)", async () => {
+  const root = manyRepos();
+  const ui = await createUi({ port: 0 });
+  try {
+    await post(ui, "/api/sources", { name: "a", path: join(root, "alpha") });
+    await ui.idle();
+    let r = await post(ui, "/api/sources", { name: "b", path: join(root, "alpha") });
+    assert.equal(r.status, 409);
+    assert.match(r.json().error, /already added as a/);
+    r = await post(ui, "/api/sources", { name: "c", path: join(root, "alpha") + "/" });
+    assert.equal(r.status, 409, "a trailing slash is the same path");
+    r = await post(ui, "/api/sources", { path: join(root, "alpha") + "//" });
+    assert.equal(r.status, 200, "no name: re-activates the existing source");
+    assert.equal(r.json().sources.length, 1);
+    assert.deepEqual(cfg().sources.map((s) => s.name), ["a"]);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("a config with two sources on one path heals to one on load, keeps the active twin, deletes no index", async () => {
+  const root = manyRepos();
+  let ui = await createUi({ port: 0, path: root });
+  await ui.idle();
+  await ui.close();
+  const idx = join(root, ".litectx", "index.db");
+  assert.ok(existsSync(idx));
+  writeFileSync(/** @type {string} */ (process.env.LITECTX_UI_CONFIG), JSON.stringify({ active: "Pycharm", sources: [{ name: "PycharmProjects", path: root }, { name: "Pycharm", path: root + "/" }, { name: "alpha", path: join(root, "alpha") }] }));
+  ui = await createUi({ port: 0 });
+  try {
+    await ui.idle();
+    assert.deepEqual(cfg().sources.map((s) => s.name), ["Pycharm", "alpha"]);
+    assert.equal(cfg().active, "Pycharm");
+    assert.deepEqual((await get(ui, "/api/sources")).json().sources.map((s) => s.name), ["Pycharm", "alpha"]);
+    assert.ok(existsSync(idx), "the shared index survives the heal");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("page state: sourceAtPath finds the source already on a folder (trailing slashes ignored)", () => {
+  const { sourceAtPath } = pageState();
+  const src = [{ name: "a", path: "/x/alpha" }, { name: "b", path: "/x/beta" }];
+  assert.equal(sourceAtPath(src, "/x/beta/").name, "b");
+  assert.equal(sourceAtPath(src, "/x/alpha").name, "a");
+  assert.equal(sourceAtPath(src, "/x/gamma"), null);
+  assert.equal(sourceAtPath(src, ""), null);
+});
+
+test("state() serves a cached file count: recounted after an index pass, not on every poll", async () => {
+  const root = manyRepos();
+  const alpha = join(root, "alpha");
+  const ui = await createUi({ port: 0, path: alpha });
+  try {
+    await ui.idle();
+    const n0 = (await get(ui, "/api/sources")).json().current.files;
+    assert.ok(n0 > 0);
+    // another writer adds a file to the same index behind the page's back
+    writeFileSync(join(alpha, "extra.md"), "# Extra\n\nquokka extra\n");
+    execFileSync("git", ["-C", alpha, "add", "extra.md"]);
+    const other = new LiteCtx({ root: alpha });
+    await other.index();
+    other.close();
+    assert.equal((await get(ui, "/api/sources")).json().current.files, n0, "a poll does not recount");
+    await post(ui, "/api/reindex", { wait: true });
+    assert.equal((await get(ui, "/api/sources")).json().current.files, n0 + 1, "the pass refreshes the count");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("switching source in the middle of a pass is safe: the old pass aborts, the new one runs alone, nothing errors", async () => {
+  const root = join(scratch(), "many");
+  const files = {};
+  for (let i = 0; i < 300; i++) files[`src/f${i}.js`] = `export function fn${i}(a) { return a + ${i}; }\n`;
+  repo(join(root, "big"), files);
+  repo(join(root, "small"), { "a.md": "# A\n\nhello\n" });
+  const ui = await createUi({ port: 0 });
+  const state = async () => (await get(ui, "/api/sources")).json();
+  try {
+    await post(ui, "/api/sources", { name: "big", path: join(root, "big") });
+    await post(ui, "/api/sources", { name: "small", path: join(root, "small") }); // switches away while big's cold pass runs
+    await post(ui, "/api/sources", { active: "big" }); // and back, with the first big pass possibly still settling
+    await post(ui, "/api/sources", { active: "small" });
+    await post(ui, "/api/sources", { active: "big" });
+    await ui.idle();
+    const st = await state();
+    assert.equal(st.current.name, "big");
+    assert.equal(st.current.error, null);
+    assert.equal(st.current.indexing, false);
+    assert.equal(st.current.files, 300, "the last pass finished the whole index");
+    assert.equal(st.current.last.aborted, false);
+    assert.equal((await find(ui, "fn299")).hits.length > 0, true, "the index is usable");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("the source dropdown is not disabled while a pass runs", () => {
+  assert.doesNotMatch(readFileSync(new URL("../src/ui/web/app.js", import.meta.url), "utf8"), /sel\.disabled\s*=/);
+});
+
+test("top bar: a progress-label or elapsed-seconds change never rebuilds the bar (the open <select> survives a poll)", () => {
+  const { barSignature } = pageState();
+  const bar = (label, secs) => `<div><select><option>a</option><option>b</option></select><span class="dim"><span class="spin"></span><span id="label"> ${label}</span><span id="elapsed"> ${secs} s</span></span></div>`;
+  assert.equal(barSignature(bar("building index: 10 of 300 files", 1), "a"), barSignature(bar("building index: 140 of 300 files", 7), "a"));
+  assert.notEqual(barSignature(bar("x", 1), "a"), barSignature(bar("x", 1).replace("<option>b</option>", "<option>b</option><option>c</option>"), "a"), "a changed source list rebuilds");
+  assert.notEqual(barSignature(bar("x", 1), "a"), barSignature(bar("x", 1), "b"), "a changed selection rebuilds");
+});
+
+test("top bar: during a pending switch the select shows the source the user picked, not the old active one", () => {
+  const { selectedSource } = pageState();
+  const src = [{ name: "a" }, { name: "b" }];
+  assert.equal(selectedSource(src, "a", "b"), "b");
+  assert.equal(selectedSource(src, "a", undefined), "a");
+  assert.equal(selectedSource(src, "a", "gone"), "a", "a pick that is no longer listed falls back to the active source");
+  assert.equal(selectedSource(src, "b", null), "b");
+});
+
+test("switching source mid-pass aborts the old pass: it stops short instead of indexing the whole old source", async () => {
+  const root = join(scratch(), "many");
+  const files = {};
+  for (let i = 0; i < 300; i++) files[`src/f${i}.js`] = `export function fn${i}(a) { return a + ${i}; }\n`;
+  repo(join(root, "big"), files);
+  repo(join(root, "small"), { "a.md": "# A\n\nhello\n" });
+  const ui = await createUi({ port: 0 });
+  try {
+    await post(ui, "/api/sources", { name: "big", path: join(root, "big") }); // starts big's cold pass
+    await post(ui, "/api/sources", { name: "small", path: join(root, "small") }); // switch away: big's pass must be aborted
+    await ui.idle();
+    let indexed = 0;
+    const probe = new LiteCtx({ root: join(root, "big") });
+    try { indexed = probe.size(); } finally { probe.close(); }
+    assert.ok(indexed < 300, `big's retired pass stopped early (indexed ${indexed} of 300)`);
+  } finally {
     await ui.close();
   }
 });
