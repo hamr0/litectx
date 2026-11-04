@@ -780,23 +780,29 @@ export class LiteCtx {
    * is ownerless; under `strictScope`, a memory- or doc-touching recall with no scope THROWS — fail-closed).
    * Code/file rows are repo-global, unaffected. Expired rows (R5 `expiresAt`) are always excluded.
    *
+   * `pathPrefixes` restricts `code`/`doc` hits to paths under any of the given folders (whole segments:
+   * `"rwx"` matches `rwx/a.js`, never `rwxlite/a.js`; a trailing `/` is stripped). The fence is applied in
+   * the candidate query BEFORE the cut, so a folder's hits are ranked among themselves however many other
+   * folders match the word. Unset, `[]`, or all-empty = no fence (ranking byte-identical). Ignored for
+   * `fact`/`episode` (they have no paths). API-only: not exposed on the CLI or MCP.
+   *
    * @overload
    * @param {string} query
-   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} opts
+   * @param {{ kind: string, n?: number, log?: boolean, body?: boolean, scope?: string | symbol, pathPrefixes?: string[] }} opts
    * @returns {Promise<import("./store.js").Hit[]>}
    */
   /**
    * @overload
    * @param {string} query
-   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} [opts]
+   * @param {{ kind?: string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol, pathPrefixes?: string[] }} [opts]
    * @returns {Promise<Record<string, import("./store.js").Hit[]>>}
    */
   /**
    * @param {string} query
-   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol }} [opts]
+   * @param {{ kind?: string | string[], n?: number, log?: boolean, body?: boolean, scope?: string | symbol, pathPrefixes?: string[] }} [opts]
    * @returns {Promise<import("./store.js").Hit[] | Record<string, import("./store.js").Hit[]>>}
    * @category recall
-   * @when Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP.
+   * @when Find the most relevant code/docs/memory for a query — ranked search (BM25 + import-spreading, +cosine when embeddings on). The model calls this directly via MCP. `pathPrefixes` (search inside one folder / one repo of a multi-repo index) is API-only, not on MCP/CLI.
    * @fails Never throws on a miss — returns `[]` (or per-kind `{}`); a single stale chunk under `body:true` is nulled, not thrown; throws only under `strictScope` when a doc-kind query omits `scope`.
    * @signature liteCtx.recall(query: string, opts?: { kind?, n?, body?, scope? }) => Promise<Hit[] | Record<kind, Hit[]>>
    * @example
@@ -818,7 +824,11 @@ export class LiteCtx {
     const touchesDoc = typeof opts.kind === "string" ? opts.kind === "doc" : (Array.isArray(opts.kind) ? opts.kind : KINDS).includes("doc");
     const rs = this._resolveReadScope(opts.scope, this.strictScope && touchesDoc, "recall({ kind: 'doc' })");
     // `now` is stamped once so a recall is internally consistent; expired rows are excluded live here.
+    /** @type {{ scope: string|null|undefined, seeAll: boolean, now: number, memOwner?: string|null, memSeeAll?: boolean, pathPrefixes?: string[] }} */
     const filter = { scope: rs.scope, seeAll: rs.seeAll, now: Date.now() };
+    // path fence (code/doc): trailing "/" stripped, blanks dropped; nothing left = no fence (unset path byte-identical)
+    const pathPrefixes = (opts.pathPrefixes ?? []).map((p) => p.replace(/\/+$/, "")).filter(Boolean);
+    if (pathPrefixes.length) filter.pathPrefixes = pathPrefixes;
     // memory axis (multis M4): when the query touches fact/episode, resolve the per-call owner fence and
     // ride it on the same `filter`. Computed ONLY when a mem kind is in play — a code/doc-only query
     // never pays it (and never throws under strict on the mem axis). The fence falls back to the instance
