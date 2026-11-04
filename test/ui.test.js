@@ -1225,3 +1225,23 @@ test("switching source in the middle of a pass is safe: the old pass aborts, the
 test("the source dropdown is not disabled while a pass runs", () => {
   assert.doesNotMatch(readFileSync(new URL("../src/ui/web/app.js", import.meta.url), "utf8"), /sel\.disabled\s*=/);
 });
+
+test("switching source mid-pass aborts the old pass: it stops short instead of indexing the whole old source", async () => {
+  const root = join(scratch(), "many");
+  const files = {};
+  for (let i = 0; i < 300; i++) files[`src/f${i}.js`] = `export function fn${i}(a) { return a + ${i}; }\n`;
+  repo(join(root, "big"), files);
+  repo(join(root, "small"), { "a.md": "# A\n\nhello\n" });
+  const ui = await createUi({ port: 0 });
+  try {
+    await post(ui, "/api/sources", { name: "big", path: join(root, "big") }); // starts big's cold pass
+    await post(ui, "/api/sources", { name: "small", path: join(root, "small") }); // switch away: big's pass must be aborted
+    await ui.idle();
+    let indexed = 0;
+    const probe = new LiteCtx({ root: join(root, "big") });
+    try { indexed = probe.size(); } finally { probe.close(); }
+    assert.ok(indexed < 300, `big's retired pass stopped early (indexed ${indexed} of 300)`);
+  } finally {
+    await ui.close();
+  }
+});
