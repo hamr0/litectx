@@ -5,6 +5,16 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+
+- **`recall({ pathPrefixes })`** restricts `code`/`doc` hits to given folders (whole path segments, applied before the result cut). API-only; ignored for `fact`/`episode`. Use it to search inside one repo of a multi-repo index.
+
+### Fixed
+
+- **The search page's repo filter no longer drops a repo's hits.** In all-repos mode it filtered after recall had already cut the list, so a repo whose hits ranked past the cut came back empty ("readme" in one repo: 0 rows, now 10). The filter now runs inside the search.
+
 ## [0.41.1] - 2026-11-04
 
 ### Changed

@@ -315,6 +315,7 @@ return shape follows the `kind` argument:
   ranking). A kind with no content returns an empty array — honest, not an error.
 - `opts.n?: number` — max hits **per kind**; raise to dig deeper. No hard cap, no
   pagination (a larger `n` is a larger context — your budget to manage).
+- `opts.pathPrefixes?: string[]` — keep only `code`/`doc` hits under these folders (whole path segments: `"rwx"` never matches `rwxlite/`; trailing `/` stripped; `[]`/unset = no fence). Applied before the cut, so a folder's hits rank among themselves however many other folders match — use it to search one repo of a `childRepos` index. Ignored for `fact`/`episode`. API-only (not on the CLI or MCP).
 - `opts.body?: boolean` (default `false`) — inline each hit's content as `hit.body`. Off by
   default: recall returns **pointers**, not payloads. Opt in to skip the follow-up `get()`s when
   mounting litectx as a memory store or feeding an assembler. Written memory comes back **verbatim**;
