@@ -5,6 +5,21 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.41.1] - 2026-11-04
+
+### Changed
+
+- **Dependencies:** the optional peer / dev range for `@huggingface/transformers` is raised to `^4.3.2` (from the Dependabot update). Transitive bumps: protobufjs 7.6.6, sharp 0.35.5, @xmldom/xmldom 0.8.15, adm-zip 0.6.1.
+- **The search page no longer recounts files on every refresh.** The file count is cached and refreshed after each index pass.
+
+### Fixed
+
+- **One folder is one source in the search page.** Adding a folder that is already a source under a new name is refused with "already added as <name>"; a trailing slash or a symlink counts as the same folder. The add form shows that message and stays open.
+- **Configs that already hold two entries for one folder heal on start.** The selected entry is kept, and no index is deleted.
+- **Removing a source never deletes an index that another source still uses.**
+- **The source dropdown stays usable during an index pass** (switching mid-pass was already safe; only the page locked the select).
+- **The source dropdown no longer closes under you on status refreshes.** The progress label updates in place, and a pending pick stays shown while the switch happens.
+
 ## [0.41.0] - 2026-10-31
 
 ### Added
