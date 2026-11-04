@@ -505,7 +505,8 @@ export class LiteCtx {
     // git activity metadata for the changed files (slice 4) — one `git log` pass, scoped like the
     // index. Grounding shown on hits, never scored (§4.1). Skipped when nothing changed.
     if (upserts.length) {
-      const sig = collectGitSig(this.root, opts.paths ?? this.pathspecs, this.childRepos);
+      // childRepos: read git only for the repos that have a file to write (the rest keep their stored rows)
+      const sig = collectGitSig(this.root, opts.paths ?? this.pathspecs, this.childRepos, this.childRepos ? new Set(upserts.map((u) => u.path.split("/")[0] ?? "")) : undefined);
       for (const u of upserts) u.git = sig.get(u.path);
     }
 
