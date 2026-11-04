@@ -1110,3 +1110,49 @@ test("status: a cold build that was cut short is reported as incomplete; a compl
   stamp(indexStamp());
   assert.doesNotMatch(cli(sb, ["status", repo]).out, /incomplete/);
 });
+
+test("start: after the page's first good answer it is not probed again (a second probe hangs behind the page's index pass and times out)", async () => {
+  const sb = sandbox();
+  // a copy of the launcher inside a fake package dir whose bin/litectx.js is a page that answers /api/sources
+  // ONCE, then blocks its event loop (as a real page does when its index pass starts) for longer than a probe waits
+  const pkg = join(sb.dir, "fakepkg");
+  mkdirSync(join(pkg, "src", "cli"), { recursive: true });
+  mkdirSync(join(pkg, "bin"));
+  for (const f of ["launcher.js", "paths.js", "style.js"]) cpSync(join(PKG, "src", "cli", f), join(pkg, "src", "cli", f));
+  writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "fake", version: "0.0.0", type: "module" }));
+  writeFileSync(
+    join(pkg, "bin", "litectx.js"),
+    `import http from "node:http";
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+const s = http.createServer((req, res) => {
+  res.setHeader("content-type", "application/json");
+  res.end(JSON.stringify({ version: "0", sources: [], active: null }));
+  res.on("finish", () => setImmediate(() => { const t = Date.now(); while (Date.now() - t < 8000); process.exit(0); }));
+});
+s.listen(port, "127.0.0.1", () => console.error("litectx ui: http://127.0.0.1:" + port));
+`
+  );
+  const runner = join(sb.dir, "run.mjs");
+  writeFileSync(runner, `import { startUi } from ${JSON.stringify(join(pkg, "src", "cli", "launcher.js"))};\nconst r = await startUi({ port: Number(process.argv[2]), open: false });\nconsole.log(JSON.stringify(r));\n`);
+  const port = await freePort();
+  const pidFile = join(sb.home, ".litectx", "ui.pid");
+  try {
+    const t0 = Date.now();
+    const r = await new Promise((ok) => {
+      const p = spawn(process.execPath, [runner, String(port)], { env: sb.env, stdio: ["ignore", "pipe", "pipe"] });
+      let out = "", err = "";
+      p.stdout.on("data", (c) => (out += c));
+      p.stderr.on("data", (c) => (err += c));
+      p.on("close", (code) => ok({ code, out, err }));
+    });
+    assert.equal(r.code, 0, r.err + r.out);
+    assert.equal(JSON.parse(r.out).started, true);
+    assert.ok(Date.now() - t0 < 5000, `start took ${Date.now() - t0}ms: it waited on a second probe`);
+  } finally {
+    try {
+      process.kill(JSON.parse(readFileSync(pidFile, "utf8")).pid, "SIGKILL");
+    } catch {
+      // never recorded or already gone
+    }
+  }
+});
