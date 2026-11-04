@@ -61,8 +61,9 @@ export async function search(ctx, root, mode, sourceName, q, o = {}) {
   const wanted = o.repos?.length ? new Set(o.repos) : null;
   // in all-repos mode the repo filter is applied INSIDE recall (before its cut), so a repo's hits rank among
   // themselves however many other repos match the word; one-repo mode has no repo prefix to fence on.
-  // n: a filter fetches 200, no filter 60. The extra is inert headroom in repos mode (the fence already ranks
-  // before the cut); in one-repo mode `keep` below is all-or-nothing (every hit is the one source) so it adds nothing there either.
+  // n: a repo filter fetches 200, no filter 60. The extra is headroom, not for the repo fence (that ranks before the
+  // cut): grouping merges chunk hits into fewer rows and the ext/folder filters run after the cut, so a filtered
+  // search still has candidates left to fill the 50-row limit.
   const n = wanted ? 200 : 60;
   const r = await ctx.recall(q, { kind: kinds, n, ...(wanted && mode === "repos" ? { pathPrefixes: [...wanted] } : {}) });
   // filter to the wanted repos BEFORE interleaving: interleaving by global rank first lets one repo's code
