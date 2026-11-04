@@ -80,8 +80,8 @@
   }
   // ---- busy state: set by the page at click time, cleared when the server reports the pass finished -----
   var tickTimer = null;
-  function startBusy(what, label) {
-    s.busy = { what: what, label: label, t0: Date.now(), pending: true };
+  function startBusy(what, label, pick) {
+    s.busy = { what: what, label: label, t0: Date.now(), pending: true, pick: pick };
     clearInterval(tickTimer); tickTimer = setInterval(tick, 1000);
     renderTop();
   }
@@ -104,8 +104,8 @@
   // run a server action behind an instant busy state; the page never waits on the server to show it
   // `quick`: the call itself is the whole job (remove) — drop the label once it returns, so a pass the server
   // started for the next source shows as its own "re-indexing…" instead of keeping "removing …" up for minutes
-  function act(what, label, call, quick) {
-    startBusy(what, label);
+  function act(what, label, call, quick, pick) {
+    startBusy(what, label, pick);
     return call().then(function () { if (quick) { s.busy = null; clearInterval(tickTimer); } else s.busy && (s.busy.pending = false); return refresh(); })
       .catch(function (e) { s.busy = null; clearInterval(tickTimer); fail(e); renderTop(); });
   }
@@ -143,14 +143,15 @@
     var left = el("div", "row");
     if (st && st.sources.length) {
       var sel = el("select", "chip"); sel.setAttribute("aria-label", "source");
-      st.sources.forEach(function (x) { var o = el("option", "", x.name); o.value = x.name; if (x.name === st.active) o.selected = true; sel.appendChild(o); });
-      sel.onchange = function () { s.repos = []; s.open = null; act("reindex", "opening " + sel.value + "…", function () { return api("POST", "/api/sources", { active: sel.value }); }); };
+      st.sources.forEach(function (x) { var o = el("option", "", x.name); o.value = x.name; if (x.name === ST.selectedSource(st.sources, st.active, s.busy && s.busy.pick)) o.selected = true; sel.appendChild(o); });
+      sel.onchange = function () { var v = sel.value; s.repos = []; s.open = null; act("reindex", "opening " + v + "…", function () { return api("POST", "/api/sources", { active: v }); }, false, v); };
       // not disabled during a pass: the server aborts the old pass cleanly and queues the new one behind it (never two passes on one db)
       left.appendChild(sel);
     }
-    var info = el("span", "dim");
+    var info = el("span", "dim"), labelText = null;
     if (s.busy) {
-      info.appendChild(el("span", "spin")); info.appendChild(document.createTextNode(" " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : progressLabel(c, s.busy.label))));
+      info.appendChild(el("span", "spin")); labelText = " " + (s.busy.cancelling ? "cancelling… (stops after the file in progress)" : progressLabel(c, s.busy.label));
+      var lb = el("span", "", labelText); lb.id = "label"; info.appendChild(lb);
       var ev = el("span", "", " " + Math.round((Date.now() - s.busy.t0) / 1000) + " s"); ev.id = "elapsed"; info.appendChild(ev);
     }
     else if (c) info.textContent = c.files.toLocaleString() + " files" + (s.searched && s.q ? " · " + s.hits.length + " results · " + s.ms + " ms" : "") + " · " + c.modeText + (s.result ? " · " + s.result : "");
@@ -183,11 +184,12 @@
     th.textContent = "theme: " + (document.documentElement.getAttribute("data-theme") || "auto");
     right.appendChild(th);
     bar.appendChild(left); bar.appendChild(right);
-    // status polls re-render this bar every 1.5 s: if nothing visible changed (the elapsed seconds aside, which tick() keeps
-    // current), keep the live DOM so a focused chip stays focused and a click never lands on a replaced element
-    var sig = bar.outerHTML.replace(/<span id="elapsed">[^<]*<\/span>/, "") + "|" + (st && st.active);
-    if (sig === topSig && t.firstChild) return;
-    topSig = sig; t.innerHTML = ""; t.appendChild(bar); // the label is not part of the signature: it repaints itself
+    // status polls re-render this bar every 1.5 s: if nothing visible changed (the elapsed seconds and the progress label
+    // aside; tick() and the in-place update below keep those current), keep the live DOM so the open <select> and a focused
+    // chip survive and a click never lands on a replaced element
+    var sig = ST.barSignature(bar.outerHTML, st && ST.selectedSource(st.sources, st.active, s.busy && s.busy.pick));
+    if (sig === topSig && t.firstChild) { var live = $("label"); if (live && labelText !== null) live.textContent = labelText; return; }
+    topSig = sig; t.innerHTML = ""; t.appendChild(bar);
   }
   function fail(e) { if (e.unreachable) return; s.msg = e.message; renderPanel(); renderResults(); }
 
@@ -201,7 +203,7 @@
       var r = el("div", "src");
       r.innerHTML = '<b class="sym">' + esc(x.name) + '</b><span class="dim">' + esc(x.path) + "</span><span>" +
         (x.error ? '<span class="err">' + esc(x.error) + "</span>" : x.mode === "repo" ? "one repo" : "all repos (" + esc(x.repos) + ")") + "</span>";
-      if (x.name !== s.st.active) r.appendChild(chip("set default", false, function () { s.repos = []; act("reindex", "opening " + x.name + "…", function () { return api("POST", "/api/sources", { active: x.name }); }); }));
+      if (x.name !== s.st.active) r.appendChild(chip("set default", false, function () { s.repos = []; act("reindex", "opening " + x.name + "…", function () { return api("POST", "/api/sources", { active: x.name }); }, false, x.name); }));
       var lab = el("label", "dim");
       var cb = document.createElement("input"); cb.type = "checkbox"; cb.setAttribute("aria-label", "also delete the index of " + x.name);
       if (x.mode === "repos") { lab.appendChild(cb); lab.appendChild(document.createTextNode(" also delete its index")); }

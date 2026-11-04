@@ -915,13 +915,14 @@ test("regression: a status poll must not rebuild the top bar when only the elaps
   try {
     const app = (await get(ui, "/app.js")).text;
     const rt = app.slice(app.indexOf("function renderTop"), app.indexOf("function fail("));
-    // the rebuilt bar is compared with the live one (elapsed span excluded) and the DOM is kept when equal
-    assert.ok(/outerHTML\.replace\(\/<span id="elapsed">/.test(rt), "signature ignores the elapsed seconds");
-    assert.ok(/if \(sig === topSig && t\.firstChild\) return;/.test(rt), "an unchanged bar is left alone");
+    // the rebuilt bar is compared with the live one via the pure barSignature (unit-tested above) and the DOM is kept when equal
+    assert.ok(/ST\.barSignature\(bar\.outerHTML/.test(rt), "signature comes from barSignature");
+    assert.ok(/if \(sig === topSig && t\.firstChild\) \{[^}]*\breturn;/.test(rt), "an unchanged bar is left alone");
     assert.ok(rt.indexOf("t.innerHTML = \"\"") > rt.indexOf("return;"), "the live bar is cleared only after the unchanged check");
+    assert.ok(/live\.textContent = labelText/.test(rt), "the progress label is updated in place");
     // a pass the server started itself (page reload) has no click to start the ticker, so adopting it must: nothing else refreshes "elapsed"
     assert.ok(/s\.busy = \{ what: "reindex"[^\n]*setInterval\(tick, 1000\)/.test(app), "an adopted pass starts the elapsed ticker");
-    assert.ok(/st && st\.active/.test(rt), "a source switch (select value is a property, not markup) still rebuilds");
+    assert.ok(/ST\.selectedSource\(/.test(rt), "a source switch (select value is a property, not markup) still rebuilds");
   } finally {
     await ui.close();
   }
@@ -1224,6 +1225,23 @@ test("switching source in the middle of a pass is safe: the old pass aborts, the
 
 test("the source dropdown is not disabled while a pass runs", () => {
   assert.doesNotMatch(readFileSync(new URL("../src/ui/web/app.js", import.meta.url), "utf8"), /sel\.disabled\s*=/);
+});
+
+test("top bar: a progress-label or elapsed-seconds change never rebuilds the bar (the open <select> survives a poll)", () => {
+  const { barSignature } = pageState();
+  const bar = (label, secs) => `<div><select><option>a</option><option>b</option></select><span class="dim"><span class="spin"></span><span id="label"> ${label}</span><span id="elapsed"> ${secs} s</span></span></div>`;
+  assert.equal(barSignature(bar("building index: 10 of 300 files", 1), "a"), barSignature(bar("building index: 140 of 300 files", 7), "a"));
+  assert.notEqual(barSignature(bar("x", 1), "a"), barSignature(bar("x", 1).replace("<option>b</option>", "<option>b</option><option>c</option>"), "a"), "a changed source list rebuilds");
+  assert.notEqual(barSignature(bar("x", 1), "a"), barSignature(bar("x", 1), "b"), "a changed selection rebuilds");
+});
+
+test("top bar: during a pending switch the select shows the source the user picked, not the old active one", () => {
+  const { selectedSource } = pageState();
+  const src = [{ name: "a" }, { name: "b" }];
+  assert.equal(selectedSource(src, "a", "b"), "b");
+  assert.equal(selectedSource(src, "a", undefined), "a");
+  assert.equal(selectedSource(src, "a", "gone"), "a", "a pick that is no longer listed falls back to the active source");
+  assert.equal(selectedSource(src, "b", null), "b");
 });
 
 test("switching source mid-pass aborts the old pass: it stops short instead of indexing the whole old source", async () => {
