@@ -438,7 +438,7 @@ test("Origin check: state-changing requests from another origin are refused and 
     assert.deepEqual((await get(ui, "/api/sources")).json().sources, [], "nothing was added");
     // same origin (and no Origin at all) is fine
     assert.equal((await post(ui, "/api/sources", body, { origin: `http://127.0.0.1:${ui.port}` })).status, 200);
-    assert.equal((await post(ui, "/api/sources", { ...body, name: "y" })).status, 200);
+    assert.equal((await post(ui, "/api/sources", { name: "y", path: join(root, "beta") })).status, 200);
   } finally {
     await ui.close();
   }
@@ -1120,4 +1120,55 @@ test("regression: switching sources while a search is parked in its query embed 
     Embedder.prototype.embed = real;
     await ui.close();
   }
+});
+
+// ---- one path = one source (fix/ui-sources) ----------------------------------------------------------
+
+test("adding a path that is already a source never makes a second one (name typed -> 409, trailing slash too)", async () => {
+  const root = manyRepos();
+  const ui = await createUi({ port: 0 });
+  try {
+    await post(ui, "/api/sources", { name: "a", path: join(root, "alpha") });
+    await ui.idle();
+    let r = await post(ui, "/api/sources", { name: "b", path: join(root, "alpha") });
+    assert.equal(r.status, 409);
+    assert.match(r.json().error, /already added as a/);
+    r = await post(ui, "/api/sources", { name: "c", path: join(root, "alpha") + "/" });
+    assert.equal(r.status, 409, "a trailing slash is the same path");
+    r = await post(ui, "/api/sources", { path: join(root, "alpha") + "//" });
+    assert.equal(r.status, 200, "no name: re-activates the existing source");
+    assert.equal(r.json().sources.length, 1);
+    assert.deepEqual(cfg().sources.map((s) => s.name), ["a"]);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("a config with two sources on one path heals to one on load, keeps the active twin, deletes no index", async () => {
+  const root = manyRepos();
+  let ui = await createUi({ port: 0, path: root });
+  await ui.idle();
+  await ui.close();
+  const idx = join(root, ".litectx", "index.db");
+  assert.ok(existsSync(idx));
+  writeFileSync(/** @type {string} */ (process.env.LITECTX_UI_CONFIG), JSON.stringify({ active: "Pycharm", sources: [{ name: "PycharmProjects", path: root }, { name: "Pycharm", path: root + "/" }, { name: "alpha", path: join(root, "alpha") }] }));
+  ui = await createUi({ port: 0 });
+  try {
+    await ui.idle();
+    assert.deepEqual(cfg().sources.map((s) => s.name), ["Pycharm", "alpha"]);
+    assert.equal(cfg().active, "Pycharm");
+    assert.deepEqual((await get(ui, "/api/sources")).json().sources.map((s) => s.name), ["Pycharm", "alpha"]);
+    assert.ok(existsSync(idx), "the shared index survives the heal");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("page state: sourceAtPath finds the source already on a folder (trailing slashes ignored)", () => {
+  const { sourceAtPath } = pageState();
+  const src = [{ name: "a", path: "/x/alpha" }, { name: "b", path: "/x/beta" }];
+  assert.equal(sourceAtPath(src, "/x/beta/").name, "b");
+  assert.equal(sourceAtPath(src, "/x/alpha").name, "a");
+  assert.equal(sourceAtPath(src, "/x/gamma"), null);
+  assert.equal(sourceAtPath(src, ""), null);
 });

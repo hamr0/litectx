@@ -51,5 +51,12 @@
   function passText(last) {
     return last ? "+" + last.added + " ~" + last.updated + " -" + last.removed + " · " + (last.ms / 1000).toFixed(1) + " s" : "";
   }
-  root.litectxState = { encodeState: encodeState, decodeState: decodeState, mergeRepos: mergeRepos, hasFilters: hasFilters, clearFilters: clearFilters, passText: passText };
+  // The listed source whose path is `path` (trailing slashes ignored), else null: the Add form refuses a second entry for one folder.
+  function sourceAtPath(sources, path) {
+    var norm = function (p) { return String(p || "").replace(/\/+$/, ""); }, want = norm(path);
+    if (!want) return null;
+    for (var i = 0; i < (sources || []).length; i++) if (norm(sources[i].path) === want) return sources[i];
+    return null;
+  }
+  root.litectxState = { sourceAtPath: sourceAtPath, encodeState: encodeState, decodeState: decodeState, mergeRepos: mergeRepos, hasFilters: hasFilters, clearFilters: clearFilters, passText: passText };
 })(window);

@@ -1367,7 +1367,7 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
 
 - **Sources** are `{name, path}` pairs in `~/.litectx/ui.json` (`{ "active": "...", "sources": [...] }`;
   set `LITECTX_UI_CONFIG` to use another file). The page's top bar switches source; the *sources*
-  panel adds, removes and sets the default. The first run, with no sources, opens on the Add form.
+  panel adds, removes and sets the default. One folder is one source: adding a path that is already listed (trailing slash or symlink included) never makes a second entry (no name typed re-selects it; a typed name is refused with `already added as <name>`), and a `ui.json` that already holds twins on one path is healed to one on the next start (the active twin wins; no index is deleted). The first run, with no sources, opens on the Add form.
   A small `● online` / `● offline` label at the far right of the title line shows whether the page's server still answers (it turns red within about 10 s of the server stopping and green again by itself when it is back, no reload).
   The click log (`ui-log.jsonl`, one `{ts, source, q, path, rank}` line per opened result) is
   written beside the settings file.

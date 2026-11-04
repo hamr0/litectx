@@ -1,9 +1,9 @@
 // `litectx ui` settings: the sources list (~/.litectx/ui.json) and per-path mode detection.
 // These are the UI's own settings, separate from LiteCtxConfig (docs/wiki/local-ui.md).
 
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { childRepos } from "../indexer.js";
 
 /**
@@ -41,6 +41,46 @@ export function loadConfig() {
   } catch {
     return { active: null, sources: [] };
   }
+}
+
+/**
+ * Canonical form of a source path, for comparing two sources: resolved (no trailing slash, no `..`) and, when the
+ * directory exists, symlink-free. A relative path is returned as given (detectMode refuses it anyway).
+ * @param {string} p @returns {string}
+ */
+export function normPath(p) {
+  if (!isAbsolute(p)) return p;
+  const r = resolve(p);
+  try {
+    return realpathSync(r);
+  } catch {
+    return r;
+  }
+}
+
+/**
+ * Heal a config that holds several sources on one path (they share one index.db, so the twins are the same
+ * source twice). Keeps the active one if it is among the twins, else the first; mutates `cfg`. Deletes no index.
+ * @param {UiConfig} cfg @returns {boolean} true when something was dropped (the caller saves once)
+ */
+export function dedupeSources(cfg) {
+  /** @type {Map<string, Source>} */
+  const keep = new Map();
+  for (const s of cfg.sources) {
+    const k = normPath(s.path);
+    const prev = keep.get(k);
+    if (!prev || (s.name === cfg.active && prev.name !== cfg.active)) keep.set(k, s);
+  }
+  if (keep.size === cfg.sources.length) return false;
+  const kept = new Set(keep.values());
+  const survivors = cfg.sources.filter((s) => kept.has(s));
+  if (!survivors.some((s) => s.name === cfg.active)) {
+    const twin = cfg.sources.find((s) => s.name === cfg.active);
+    const sv = twin ? keep.get(normPath(twin.path)) : undefined;
+    cfg.active = sv?.name ?? survivors[0]?.name ?? null;
+  }
+  cfg.sources = survivors;
+  return true;
 }
 
 /** Atomic write (tmp + rename) so a crash never leaves half a config. @param {UiConfig} cfg */

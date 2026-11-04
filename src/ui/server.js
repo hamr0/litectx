@@ -9,7 +9,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LiteCtx } from "../index.js";
 import { childRepos } from "../indexer.js";
-import { detectMode, describeMode, loadConfig, logPath, resolveEditor, saveConfig } from "./config.js";
+import { dedupeSources, detectMode, describeMode, loadConfig, logPath, normPath, resolveEditor, saveConfig } from "./config.js";
 import { search } from "./search.js";
 
 const MAX_BODY = 64 * 1024;
@@ -57,6 +57,7 @@ export async function createUi(opts = {}) {
   /** Settles when every pass of a closed source has finished (each ends within one in-flight embed of its abort). @type {Promise<unknown>} */
   let settling = Promise.resolve();
   let cfg = loadConfig();
+  if (dedupeSources(cfg)) saveConfig(cfg); // two sources on one path share one index: keep one, delete no index
 
   /** @param {import("./config.js").Source} s */
   function openSource(s) {
@@ -165,10 +166,12 @@ export async function createUi(opts = {}) {
    * @returns {string} the source name
    */
   function addSource(path, name, makeActive = true, open = true) {
+    path = normPath(path);
     const m = detectMode(path);
     if (!m.ok) throw new HttpError(400, m.error);
-    const same = cfg.sources.find((s) => s.path === path);
-    if (same && name === undefined) {
+    const same = cfg.sources.find((s) => normPath(s.path) === path);
+    if (same && name !== undefined) throw new HttpError(409, `already added as ${same.name}`);
+    if (same) {
       if (makeActive) record(same.name, open);
       return same.name;
     }
@@ -203,7 +206,8 @@ export async function createUi(opts = {}) {
     // A one-repo index is the repo's own `.litectx/index.db` — agents use it, so removing the source
     // NEVER deletes it. Only a combined all-repos index may go, and only when the caller ticked the box.
     const m = detectMode(s.path);
-    if (deleteIndex && m.ok && m.mode.mode === "repos") {
+    const shared = cfg.sources.some((x) => normPath(x.path) === normPath(s.path)); // a remaining source on this path uses the same index.db
+    if (deleteIndex && !shared && m.ok && m.mode.mode === "repos") {
       for (const suffix of ["", "-wal", "-shm"]) rmSync(join(s.path, ".litectx", `index.db${suffix}`), { force: true });
     }
     cfg.active = cfg.sources.some((x) => x.name === cfg.active) ? cfg.active : (cfg.sources[0]?.name ?? null);

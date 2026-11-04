@@ -218,6 +218,8 @@
       ev.preventDefault();
       var name = f.elements.name.value.trim(), body = { path: f.elements.path.value.trim() };
       if (name) body.name = name;
+      var dup = ST.sourceAtPath(s.st.sources, body.path); // the folder is already a source: say so, keep the panel open (the server refuses a named twin too)
+      if (dup) { s.msg = "already added as " + dup.name; renderPanel(); return; }
       act("reindex", "adding source…", function () { return api("POST", "/api/sources", body).then(function () { s.settings = false; s.msg = ""; s.repos = []; }); });
     };
     box.appendChild(f);
