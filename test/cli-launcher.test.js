@@ -1118,7 +1118,7 @@ test("start: after the page's first good answer it is not probed again (a second
   const pkg = join(sb.dir, "fakepkg");
   mkdirSync(join(pkg, "src", "cli"), { recursive: true });
   mkdirSync(join(pkg, "bin"));
-  for (const f of ["launcher.js", "paths.js", "style.js"]) cpSync(join(PKG, "src", "cli", f), join(pkg, "src", "cli", f));
+  cpSync(join(PKG, "src", "cli"), join(pkg, "src", "cli"), { recursive: true });
   writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "fake", version: "0.0.0", type: "module" }));
   writeFileSync(
     join(pkg, "bin", "litectx.js"),
