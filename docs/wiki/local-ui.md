@@ -30,7 +30,7 @@ hosted tier.
 | 3 | Where it lives | Inside litectx, as the `litectx ui` CLI command (3B). This is the first web server in the package; see the amended non-goal in the PRD core. |
 | 4 | Repo discovery depth | One level under the given folder (4A). |
 | 5 | Combined index location | `<folder>/.litectx/index.db`, the same convention as a single repo (5A). |
-| 6 | When it re-indexes | Once on start, plus a re-index button. Incremental: only changed files are re-read (6A). |
+| 6 | When it re-indexes | Once on start (after the page has answered its first request, so `litectx start` is not held up by a big folder's first pass), plus a re-index button. Incremental: only changed files are re-read (6A). |
 | 7 | Embeddings | Off by default; a `--embeddings` flag and a "meaning" toggle (7A). Code/doc recall is BM25-gated, so embeddings only re-order; first build ≈15 min for ~7k files (an estimate scaled from 67 s / 497 files, not measured). |
 | — | File types | Git-tracked files only for now. A plain-folder "files mode" (PDF/Word/notes, no git) is parked. |
 | — | LLM | Not in litectx. A Rewrite step (an LLM adds search words) belongs in bareagent's version of the UI (option B). litectx calling bareagent would be a dependency loop and would break the no-LLM-inside rule. |
@@ -216,7 +216,7 @@ condition is met.
 
 | Idea | Un-defer when |
 |---|---|
-| A path/repo filter on `recall` (e.g. `recall(q, {under: "rwxmap/"})`) | The UI ships it and its probe score holds (#1 ≥ 11/25 on the frozen set). |
+| A path/repo filter on `recall` | Shipped as `recall({ pathPrefixes })` (code/doc, API-only; the UI uses it in all-repos mode with a repo filter). The frozen-set probe score (#1 ≥ 11/25) has not been re-run on it. |
 | Multi-repo indexing as a library feature (not only for the UI) | Build step 1 lands; it ships with the UI. |
 | One entry per file in results | The click log shows duplicate chunks of one file pushing other good files out of the top 10. |
 | Old/tests ranked last | Scored on the frozen set and on click-log queries without lowering the #1 count. |
