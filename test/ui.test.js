@@ -1194,3 +1194,34 @@ test("state() serves a cached file count: recounted after an index pass, not on 
     await ui.close();
   }
 });
+
+test("switching source in the middle of a pass is safe: the old pass aborts, the new one runs alone, nothing errors", async () => {
+  const root = join(scratch(), "many");
+  const files = {};
+  for (let i = 0; i < 300; i++) files[`src/f${i}.js`] = `export function fn${i}(a) { return a + ${i}; }\n`;
+  repo(join(root, "big"), files);
+  repo(join(root, "small"), { "a.md": "# A\n\nhello\n" });
+  const ui = await createUi({ port: 0 });
+  const state = async () => (await get(ui, "/api/sources")).json();
+  try {
+    await post(ui, "/api/sources", { name: "big", path: join(root, "big") });
+    await post(ui, "/api/sources", { name: "small", path: join(root, "small") }); // switches away while big's cold pass runs
+    await post(ui, "/api/sources", { active: "big" }); // and back, with the first big pass possibly still settling
+    await post(ui, "/api/sources", { active: "small" });
+    await post(ui, "/api/sources", { active: "big" });
+    await ui.idle();
+    const st = await state();
+    assert.equal(st.current.name, "big");
+    assert.equal(st.current.error, null);
+    assert.equal(st.current.indexing, false);
+    assert.equal(st.current.files, 300, "the last pass finished the whole index");
+    assert.equal(st.current.last.aborted, false);
+    assert.equal((await find(ui, "fn299")).hits.length > 0, true, "the index is usable");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("the source dropdown is not disabled while a pass runs", () => {
+  assert.doesNotMatch(readFileSync(new URL("../src/ui/web/app.js", import.meta.url), "utf8"), /sel\.disabled\s*=/);
+});

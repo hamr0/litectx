@@ -145,7 +145,7 @@
       var sel = el("select", "chip"); sel.setAttribute("aria-label", "source");
       st.sources.forEach(function (x) { var o = el("option", "", x.name); o.value = x.name; if (x.name === st.active) o.selected = true; sel.appendChild(o); });
       sel.onchange = function () { s.repos = []; s.open = null; act("reindex", "opening " + sel.value + "…", function () { return api("POST", "/api/sources", { active: sel.value }); }); };
-      sel.disabled = !!s.busy;
+      // not disabled during a pass: the server aborts the old pass cleanly and queues the new one behind it (never two passes on one db)
       left.appendChild(sel);
     }
     var info = el("span", "dim");
