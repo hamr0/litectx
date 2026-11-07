@@ -6,10 +6,11 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { LiteCtx } from "../index.js";
 import { childRepos } from "../indexer.js";
 import { dedupeSources, detectMode, describeMode, loadConfig, logPath, normPath, resolveEditor, saveConfig } from "./config.js";
+import { renderMd } from "./markdown.js";
 import { search } from "./search.js";
 
 const MAX_BODY = 64 * 1024;
@@ -443,16 +444,21 @@ export async function createUi(opts = {}) {
     if (st.size > MAX_VIEW_BYTES) throw new HttpError(413, "file too large to view");
     const s = Math.max(0, Number.parseInt(sp.get("s") ?? "", 10) || 0); // 0 = no range
     const e = Math.max(s, Number.parseInt(sp.get("e") ?? "", 10) || s);
-    const lines = readFileSync(target, "utf8").split("\n");
-    const body = lines
-      .map((l, i) => `<div id="L${i + 1}" class="ln${s && i + 1 >= s && i + 1 <= e ? " on" : ""}"><span class="no">${i + 1}</span>${esc(l)}</div>`)
-      .join("");
-    return send(
-      res,
-      200,
-      "text/html; charset=utf-8",
-      `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rel)}</title><link rel="stylesheet" href="/app.css"><script src="/theme.js"></script></head><body class="viewer"><p class="dim"><a href="/">← search</a> · ${esc(rel)}${s ? ` · lines ${s}–${e}` : ""}</p><pre class="file">${body}</pre></body></html>`
-    );
+    const text = readFileSync(target, "utf8");
+    const head = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rel)}</title><link rel="stylesheet" href="/app.css"><script src="/theme.js"></script></head>`;
+    const range = s ? ` · lines ${s}–${e}` : "";
+    // .md opens formatted unless raw=1; routed by extension only. Everything else is the numbered-lines view.
+    if (extname(rel).toLowerCase() === ".md") {
+      const raw = sp.get("raw") === "1";
+      const q = `/view?p=${encodeURIComponent(rel)}${s ? `&s=${s}&e=${e}` : ""}`;
+      const sw = raw
+        ? `<a href="${esc(q)}">formatted</a> | <b>lines</b>`
+        : `<b>formatted</b> | <a href="${esc(`${q}&raw=1${s ? `#L${s}` : ""}`)}">lines</a>`;
+      const bar = `<p class="dim"><a href="/">← search</a> · ${esc(rel)}${range} · <span class="vsw">${sw}</span></p>`;
+      const main = raw ? `<pre class="file">${lineRows(text, s, e)}</pre>` : `<main class="md">${renderMd(text, s, e)}</main>`;
+      return send(res, 200, "text/html; charset=utf-8", `${head}<body class="viewer">${bar}${main}</body></html>`);
+    }
+    return send(res, 200, "text/html; charset=utf-8", `${head}<body class="viewer"><p class="dim"><a href="/">← search</a> · ${esc(rel)}${range}</p><pre class="file">${lineRows(text, s, e)}</pre></body></html>`);
   }
 
   await new Promise((ok, fail) => {
@@ -487,6 +493,14 @@ export async function createUi(opts = {}) {
       closeCurrent();
     },
   };
+}
+
+/** numbered-lines markup of the file view, the range s..e highlighted. @param {string} text @param {number} s @param {number} e */
+function lineRows(text, s, e) {
+  return text
+    .split("\n")
+    .map((l, i) => `<div id="L${i + 1}" class="ln${s && i + 1 >= s && i + 1 <= e ? " on" : ""}"><span class="no">${i + 1}</span>${esc(l)}</div>`)
+    .join("");
 }
 
 /**

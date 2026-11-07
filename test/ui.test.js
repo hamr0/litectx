@@ -350,14 +350,14 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
   const ui = await createUi({ port: 0, path: root });
   try {
     await ui.idle();
-    const ok = await get(ui, "/view?p=a.md&s=3&e=4");
+    const ok = await get(ui, "/view?p=a.md&s=3&e=4&raw=1");
     assert.equal(ok.status, 200);
     assert.match(ok.text, /<div id="L3" class="ln on">/);
     assert.match(ok.text, /<div id="L4" class="ln on">/);
     assert.match(ok.text, /<div id="L2" class="ln">/);
     assert.ok(!ok.text.includes("<script>alert(1)"), "file text is HTML-escaped");
     assert.ok(ok.text.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
-    const bare = await get(ui, "/view?p=a.md");
+    const bare = await get(ui, "/view?p=a.md&raw=1");
     assert.equal(bare.status, 200);
     assert.doesNotMatch(bare.text, /class="ln on"/, "no range → nothing highlighted");
     assert.doesNotMatch(bare.text, /lines \d/, "no range → no 'lines N–M' label");
@@ -384,6 +384,40 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
 });
 
 // ---- network guards ---------------------------------------------------------------------------------
+
+
+test("/view: .md opens formatted with a switch; raw=1 is the numbered-lines view; non-md is unchanged", async () => {
+  const root = join(scratch(), "r");
+  repo(root, { "a.md": "# Title\n\nfirst para\n\n## Sub\n\nsecond <b>para</b> [x](javascript:alert(1)) [ok](#sub)\n", "b.js": "export const b = 1;\n", "c.py": "# not md\n" });
+  const ui = await createUi({ port: 0, path: root });
+  try {
+    await ui.idle();
+    const f = await get(ui, "/view?p=a.md&s=7&e=7#L7");
+    assert.equal(f.status, 200);
+    assert.match(f.text, /<main class="md">/);
+    assert.match(f.text, /<h1 id="title" data-l="1" class="blk">Title<\/h1>/);
+    assert.match(f.text, /<p id="B7" data-l="7" class="blk on">/, "the highlight lands on the block holding line 7");
+    assert.match(f.text, /<p id="B3" data-l="3" class="blk">/);
+    assert.doesNotMatch(f.text, /class="ln/, "formatted view has no numbered lines");
+    assert.match(f.text, /<b>formatted<\/b> \| <a href="\/view\?p=a\.md&amp;s=7&amp;e=7&amp;raw=1#L7">lines<\/a>/);
+    assert.match(f.text, /<a href="#sub"/);
+    assert.doesNotMatch(f.text, /<a href="javascript|<b>para/, "raw html and javascript: stay inert text");
+
+    const r = await get(ui, "/view?p=a.md&s=7&e=7&raw=1");
+    assert.match(r.text, /<div id="L7" class="ln on">/);
+    assert.match(r.text, /<div id="L3" class="ln">/);
+    assert.doesNotMatch(r.text, /<main/);
+    assert.match(r.text, /<a href="\/view\?p=a\.md&amp;s=7&amp;e=7">formatted<\/a> \| <b>lines<\/b>/);
+
+    for (const p of ["b.js", "c.py"]) {
+      const o = await get(ui, `/view?p=${p}&s=1&e=1`);
+      assert.match(o.text, /<div id="L1" class="ln on">/, p);
+      assert.doesNotMatch(o.text, /<main|vsw/, `${p}: no switch, not rendered`);
+    }
+  } finally {
+    await ui.close();
+  }
+});
 
 test("the server binds 127.0.0.1 only", async () => {
   scratch();
