@@ -42,7 +42,7 @@ function inline(raw) {
 }
 
 const TABLE_RULE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
-const BLOCK_START = /^(#{1,6}\s|```|>|\s*([-*+]|\d+[.)])\s|(-{3,}|\*{3,}|_{3,})\s*$|\|)/;
+const BLOCK_START = /^(#{1,6}\s|```|>|\s*([-*+]|\d+[.)])\s|(-{3,}|\*{3,}|_{3,})\s*$|\s*\|)/;
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)/;
 
 /**
@@ -59,7 +59,13 @@ export function renderMd(src, s = 0, e = 0) {
   const slugs = new Map();
   const blk = (/** @type {string} */ tag, /** @type {number} */ from, /** @type {number} */ to, /** @type {string} */ inner, extra = "", id = `B${from}`) =>
     out.push(`<${tag} id="${id}" data-l="${from}" class="blk${extra}${s && from <= e && to >= s ? " on" : ""}">${inner}</${tag}>`);
-  for (let i = 0; i < L.length; ) {
+  let i = 0;
+  const fm = L[0] === "---" ? L.indexOf("---", 1) : -1; // YAML front matter: shown dimmed as text, not as hr + paragraph
+  if (fm > 0 && fm < 40) {
+    blk("pre", 1, fm + 1, `<code>${esc(L.slice(1, fm).join("\n"))}</code>`, " rawhtml");
+    i = fm + 1;
+  }
+  while (i < L.length) {
     const l = L[i].replace(/\r$/, "");
     const n = i + 1;
     if (!l.trim()) { i++; continue; }
@@ -85,33 +91,34 @@ export function renderMd(src, s = 0, e = 0) {
       while (j < L.length && L[j].startsWith(">")) buf.push(L[j++].replace(/^>\s?/, ""));
       blk("blockquote", n, j, inline(buf.join(" ")));
       i = j;
-    } else if (l.startsWith("|") && TABLE_RULE.test(L[i + 1] ?? "")) {
+    } else if (l.trimStart().startsWith("|") && TABLE_RULE.test((L[i + 1] ?? "").trim())) { // indented tables (under a list item) too
       const cells = (/** @type {string} */ r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
       let j = i + 2;
       const rows = [];
-      while (j < L.length && L[j].startsWith("|")) rows.push(`<tr data-l="${j + 1}">${cells(L[j++]).map((c) => `<td>${c}</td>`).join("")}</tr>`);
+      while (j < L.length && L[j].trimStart().startsWith("|")) rows.push(`<tr data-l="${j + 1}">${cells(L[j++]).map((c) => `<td>${c}</td>`).join("")}</tr>`);
       blk("table", n, j, `<thead><tr>${cells(l).map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody>`);
       i = j;
     } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+/.exec(l))) {
       const tag = /\d/.test(m[2]) ? "ol" : "ul";
       const base = m[1].length;
       let j = i;
-      let html = "";
-      let open = "";
+      /** @type {{ line: number, nested: boolean, ord: boolean, text: string }[]} */
+      const items = [];
       for (; j < L.length && L[j].trim(); j++) {
         const im = ITEM.exec(L[j]);
-        if (!im) {
-          if (/^\s+\S/.test(L[j]) && !BLOCK_START.test(L[j])) html = html.replace(/(<\/li>)?$/, ` ${inline(L[j].trim())}</li>`); // wrapped item text
-          else break;
-          continue;
-        }
-        const nested = im[1].length >= base + 2;
-        if (nested && !open) {
-          open = /\d/.test(im[2]) ? "ol" : "ul";
+        if (im) items.push({ line: j + 1, nested: im[1].length >= base + 2, ord: /\d/.test(im[2]), text: im[3] });
+        else if (/^\s+\S/.test(L[j]) && !BLOCK_START.test(L[j])) items[items.length - 1].text += ` ${L[j].trim()}`; // wrapped item text, inlined whole so **bold** can span lines
+        else break;
+      }
+      let html = "";
+      let open = "";
+      for (const it of items) {
+        if (it.nested && !open) {
+          open = it.ord ? "ol" : "ul";
           html = html.replace(/<\/li>$/, "") + `<${open}>`;
         }
-        if (!nested && open) { html += `</${open}></li>`; open = ""; }
-        html += `<li data-l="${j + 1}">${inline(im[3])}</li>`;
+        if (!it.nested && open) { html += `</${open}></li>`; open = ""; }
+        html += `<li data-l="${it.line}">${inline(it.text)}</li>`;
       }
       if (open) html += `</${open}></li>`;
       blk(tag, n, j, html);

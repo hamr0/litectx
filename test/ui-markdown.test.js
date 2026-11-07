@@ -34,6 +34,10 @@ test("lists: bullets, numbers, wrapped item text, one nesting level", () => {
   assert.match(h, /<ol id="B7"[^>]*><li data-l="7">a<\/li><li data-l="8">b<\/li><\/ol>/);
 });
 
+test("lists: bold that spans a wrapped item line still renders", () => {
+  assert.match(renderMd("- see **a very\n  long phrase** here\n"), /<li data-l="1">see <strong>a very long phrase<\/strong> here<\/li>/);
+});
+
 test("fenced code is escaped and untouched by inline rules; blockquote; hr; table", () => {
   const h = renderMd("```js\nconst a = '<b>' * 2; // **x**\n```\n\n> quoted *q*\n\n---\n\n| A | B |\n|---|:-:|\n| 1 | `x` |\n");
   assert.match(h, /<pre id="B1"[^>]*><code>const a = &#39;&lt;b&gt;&#39; \* 2; \/\/ \*\*x\*\*<\/code><\/pre>/);
@@ -41,6 +45,10 @@ test("fenced code is escaped and untouched by inline rules; blockquote; hr; tabl
   assert.match(h, /<hr id="B7"/);
   assert.match(h, /<th>A<\/th><th>B<\/th>/);
   assert.match(h, /<td>1<\/td><td><code>x<\/code><\/td>/);
+});
+
+test("a table indented under a list item still renders as a table", () => {
+  assert.match(renderMd("  | A | B |\n  |---|---|\n  | 1 | 2 |\n"), /<table id="B1"[^>]*><thead><tr><th>A<\/th><th>B<\/th><\/tr><\/thead><tbody><tr data-l="3"><td>1<\/td><td>2<\/td>/);
 });
 
 test("highlight: only blocks overlapping [s,e] get 'on'; block ids and data-l are start lines", () => {
@@ -57,6 +65,13 @@ test("raw HTML shows as escaped text; a block of only HTML is dimmed, not hidden
   assert.ok(h.includes("&lt;img src=&quot;x.png&quot;"), "visible as text");
   assert.ok(!h.includes("<img"));
   assert.equal(h.match(/rawhtml/g)?.length, 1, "a paragraph with real text is not dimmed");
+});
+
+test("YAML front matter shows as one dimmed text block, not hr + paragraph", () => {
+  const h = renderMd("---\ntitle: X <b>\ntype: ref\n---\n\n# Real\n");
+  assert.match(h, /^<pre id="B1" data-l="1" class="blk rawhtml"><code>title: X &lt;b&gt;\ntype: ref<\/code><\/pre>\n<h1 id="real"/);
+  assert.doesNotMatch(h, /<hr/);
+  assert.match(renderMd("---\n\ntext\n"), /<hr/, "a lone leading rule is still a rule");
 });
 
 test("a NUL in the source cannot forge a placeholder to pull in other markup", () => {
