@@ -20,14 +20,6 @@ const STASH_HEAD = 160;
 const STASH_TAIL = 80;
 
 /**
- * The one definition of a BM25-only `score`: raw -bm25 min-max scaled to [0,1] across the list (top
- * lexical hit = 1; a lone hit, or all-equal scores, = 1). Raw bm25 magnitudes are corpus-dependent and
- * can print as 0.00 for a top hit, so every kind (code/doc/fact/episode) is scaled here, once.
- * @template {{ score: number }} T
- * @param {T[]} rows
- * @returns {T[]}
- */
-/**
  * SQL fence keeping only rows whose path lies under one of `prefixes` (whole segments: "rwx" matches
  * "rwx/a.js", never "rwxlite/a.js"). `substr(...) = p || '/'` with bound params — no LIKE, so `%`/`_` in a
  * name are literal. Applied in the candidate SELECT, before any LIMIT. No prefixes → empty fragment (SQL unchanged).
@@ -46,6 +38,14 @@ function pathFence(col, prefixes) {
   return { sql: `AND (${terms.join(" OR ")}) `, params };
 }
 
+/**
+ * The one definition of a BM25-only `score`: raw -bm25 min-max scaled to [0,1] across the list (top
+ * lexical hit = 1; a lone hit, or all-equal scores, = 1). Raw bm25 magnitudes are corpus-dependent and
+ * can print as 0.00 for a top hit, so every kind (code/doc/fact/episode) is scaled here, once.
+ * @template {{ score: number }} T
+ * @param {T[]} rows
+ * @returns {T[]}
+ */
 function scaleScores(rows) {
   if (!rows.length) return rows;
   let lo = Infinity;
