@@ -67,6 +67,8 @@ export function renderMd(src, s = 0, e = 0) {
   const out = [];
   /** @type {Map<string, number>} */
   const slugs = new Map();
+  /** @type {Set<string>} every heading id emitted so far */
+  const ids = new Set();
   const blk = (/** @type {string} */ tag, /** @type {number} */ from, /** @type {number} */ to, /** @type {string} */ inner, extra = "", id = `B${from}`) =>
     out.push(`<${tag} id="${id}" data-l="${from}" class="blk${extra}${s && from <= e && to >= s ? " on" : ""}">${inner}</${tag}>`);
   let i = 0;
@@ -88,10 +90,13 @@ export function renderMd(src, s = 0, e = 0) {
       i = j + 1;
     } else if ((m = /^(#{1,6})\s+([\s\S]*)$/.exec(l))) {
       m[2] = headingText(m[2]);
-      const base = slugOf(m[2]);
-      const k = slugs.get(base) ?? 0;
+      const base = slugOf(m[2]) || "section"; // a heading of only punctuation would otherwise get an empty id
+      let k = slugs.get(base) ?? 0;
+      let id = k ? `${base}-${k}` : base;
+      while (ids.has(id)) id = `${base}-${++k}`; // `a`, `a`, `a-1` must not repeat `a-1`
       slugs.set(base, k + 1);
-      blk("h" + m[1].length, n, n, inline(m[2]), "", k ? `${base}-${k}` : base);
+      ids.add(id);
+      blk("h" + m[1].length, n, n, inline(m[2]), "", id);
       i++;
     } else if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) {
       blk("div", n, n, "<hr>", " rule"); // a div wrapper: a pseudo-element (the gutter number) does not render on an hr itself

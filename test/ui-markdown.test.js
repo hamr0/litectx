@@ -144,3 +144,11 @@ test("inline spans: normal links, bold, italic still render; slug of a link head
   assert.match(h, /<h1 id="see-the-docs-now"/);
   assert.match(h, /<strong>bold text<\/strong> and <em>em text<\/em> and <em>und<\/em>/);
 });
+
+test("heading ids: never empty, never repeated (`# !!!`, and `a`,`a`,`a-1`)", () => {
+  const h = renderMd("# !!!\n\n# ???\n\n# a\n\n# a\n\n# a-1\n");
+  const ids = [...h.matchAll(/<h1 id="([^"]*)"/g)].map((x) => x[1]);
+  assert.ok(ids.every(Boolean), "no empty id");
+  assert.equal(new Set(ids).size, ids.length, ids.join(","));
+  assert.deepEqual(ids.slice(2, 4), ["a", "a-1"], "ordinary duplicate numbering is unchanged");
+});
