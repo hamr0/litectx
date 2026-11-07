@@ -51,6 +51,25 @@ function inline(raw) {
   return t.replace(/\0(\d+)\0/g, (_, i) => keep[+i] ?? "");
 }
 
+/** Table cells of one row: split on `|` except inside a (closed) backtick span; `\|` is a literal pipe. @param {string} r */
+function splitRow(r) {
+  r = r.trim();
+  if (r.startsWith("|")) r = r.slice(1);
+  if (r.endsWith("|") && !r.endsWith("\\|")) r = r.slice(0, -1);
+  const cells = [];
+  let cur = "";
+  let code = false;
+  for (let i = 0; i < r.length; i++) {
+    const c = r[i];
+    if (c === "\\" && r[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (c === "`" && (code || r.indexOf("`", i + 1) > 0)) code = !code;
+    if (c === "|" && !code) { cells.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  cells.push(cur);
+  return cells;
+}
+
 const TABLE_RULE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 const BLOCK_START = /^(#{1,6}\s|```|>|\s*([-*+]|\d+[.)])\s|(-{3,}|\*{3,}|_{3,})\s*$|\s*\|)/;
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)/;
@@ -110,7 +129,7 @@ export function renderMd(src, s = 0, e = 0) {
     } else if (l.trimStart().startsWith("|") && TABLE_RULE.test((L[i + 1] ?? "").trim())) { // indented tables (under a list item) too
       // the first cell carries the row's line (data-l) so the CSS gutter can number the row
       const cells = (/** @type {string} */ r, /** @type {string} */ tag, /** @type {number} */ line) =>
-        r.trim().replace(/^\||\|$/g, "").split("|").map((c, k) => `<${tag}${k ? "" : ` data-l="${line}"`}>${inline(c.trim())}</${tag}>`).join("");
+        splitRow(r).map((c, k) => `<${tag}${k ? "" : ` data-l="${line}"`}>${inline(c.trim())}</${tag}>`).join("");
       let j = i + 2;
       const rows = [];
       for (; j < L.length && L[j].trimStart().startsWith("|"); j++) rows.push(`<tr data-l="${j + 1}">${cells(L[j], "td", j + 1)}</tr>`);

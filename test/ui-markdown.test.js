@@ -152,3 +152,9 @@ test("heading ids: never empty, never repeated (`# !!!`, and `a`,`a`,`a-1`)", ()
   assert.equal(new Set(ids).size, ids.length, ids.join(","));
   assert.deepEqual(ids.slice(2, 4), ["a", "a-1"], "ordinary duplicate numbering is unchanged");
 });
+
+test("tables: a | inside a code span or escaped as \\| stays in its cell", () => {
+  const h = renderMd("| expr | note |\n|---|---|\n| `a|b` | x \\| y |\n| plain | `unclosed | z |\n");
+  assert.match(h, /<td data-l="3"><code>a\|b<\/code><\/td><td>x \| y<\/td>/);
+  assert.match(h, /<td data-l="4">plain<\/td><td>`unclosed<\/td><td>z<\/td>/, "an unclosed backtick does not swallow the row");
+});
