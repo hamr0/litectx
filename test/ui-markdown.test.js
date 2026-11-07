@@ -119,11 +119,22 @@ test("security: the allowlist function", () => {
   for (const bad of ["javascript:x", "JAVASCRIPT:x", "//e.com", "data:x", "mailto:a@b", "file:///x", "https://", " javascript:x", "a\tb", "&#106;x", "\\\\e.com", "/\\evil.com", "/\\\\evil.com", "a\\b"]) assert.equal(safeHref(bad), false, bad);
 });
 
-test("perf: a heading line with a long whitespace run renders in linear time (was cubic: 2000 spaces ~10 s)", () => {
-  const t = Date.now();
-  renderMd("# a" + " ".repeat(2000) + "x");
-  renderMd("## a" + " ".repeat(2000) + "x ##");
-  assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
+/** best of 3 wall-clock ms for one render (min cuts scheduler/load noise) @param {string} src */
+function best(src) {
+  let m = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const t = performance.now();
+    renderMd(src);
+    m = Math.min(m, performance.now() - t);
+  }
+  return m;
+}
+
+test("perf: a heading line with a long whitespace run costs about the same as a plain one of equal size (was cubic: 1500 spaces ~1.5 s)", () => {
+  // relative, not absolute: a loaded box slows both sides alike. Old code is ~1000x the plain line, new ~1x.
+  const plain = best("# a" + "b".repeat(1500) + "x");
+  const spaced = Math.max(best("# a" + " ".repeat(1500) + "x"), best("## a" + " ".repeat(1500) + "x ##"));
+  assert.ok(spaced < 25 * Math.max(plain, 4), `spaced ${spaced.toFixed(1)} ms vs plain ${plain.toFixed(1)} ms`);
 });
 
 test("headings: closing # run and surrounding space are stripped", () => {
@@ -132,11 +143,14 @@ test("headings: closing # run and surrounding space are stripped", () => {
   assert.match(renderMd("# C#"), />C<\/h1>/, "trailing # is a closing run, as before");
 });
 
-test("perf: unclosed [ / ]( / * / _ runs render in bounded time (were quadratic: 20000 `[` ~1.6 s, 50000 ~8.8 s)", () => {
-  const cases = ["[".repeat(50000), "[x](".repeat(12500), " *a".repeat(20000), " *a*a".repeat(10000), " _a_a".repeat(10000)];
-  const t = Date.now();
-  for (const c of cases) renderMd(c);
-  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms`);
+test("perf: unclosed [ / ]( / * / _ runs scale linearly (were quadratic: 4x the input = ~16x the time)", () => {
+  const cases = [(/** @type {number} */ n) => "[".repeat(n), (n) => "[x](".repeat(n / 4), (n) => " *a".repeat(n / 3), (n) => " *a*a".repeat(n / 5), (n) => " _a_a".repeat(n / 5)];
+  for (const mk of cases) {
+    // sizes past the 1000-char span bound, where bounded work is linear in n; quadratic would be 16x, linear 4x
+    const small = best(mk(10000));
+    const big = best(mk(40000));
+    assert.ok(big < 9 * Math.max(small, 2), `${JSON.stringify(mk(8).slice(0, 8))}: 4x input took ${(big / small).toFixed(1)}x (${small.toFixed(1)} -> ${big.toFixed(1)} ms)`);
+  }
 });
 
 test("inline spans: normal links, bold, italic still render; slug of a link heading unchanged", () => {
