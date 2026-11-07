@@ -42,7 +42,7 @@ test("fenced code is escaped and untouched by inline rules; blockquote; hr; tabl
   const h = renderMd("```js\nconst a = '<b>' * 2; // **x**\n```\n\n> quoted *q*\n\n---\n\n| A | B |\n|---|:-:|\n| 1 | `x` |\n");
   assert.match(h, /<pre id="B1"[^>]*><code>const a = &#39;&lt;b&gt;&#39; \* 2; \/\/ \*\*x\*\*<\/code><\/pre>/);
   assert.match(h, /<blockquote[^>]*>quoted <em>q<\/em><\/blockquote>/);
-  assert.match(h, /<hr id="B7"/);
+  assert.match(h, /<div id="B7" data-l="7" class="blk rule"><hr><\/div>/);
   assert.match(h, /<th data-l="9">A<\/th><th>B<\/th>/, "header row carries its line for the gutter");
   assert.match(h, /<tr data-l="11"><td data-l="11">1<\/td><td><code>x<\/code><\/td>/, "body row too");
 });

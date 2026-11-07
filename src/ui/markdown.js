@@ -83,7 +83,7 @@ export function renderMd(src, s = 0, e = 0) {
       blk("h" + m[1].length, n, n, inline(m[2]), "", k ? `${base}-${k}` : base);
       i++;
     } else if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) {
-      blk("hr", n, n, "");
+      blk("div", n, n, "<hr>", " rule"); // a div wrapper: a pseudo-element (the gutter number) does not render on an hr itself
       i++;
     } else if (l.startsWith(">")) {
       let j = i;

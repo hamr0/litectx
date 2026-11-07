@@ -60,21 +60,24 @@ aside pre.code{color:var(--text);background:var(--panel);padding:8px;margin:8px 
 /* file viewer */
 body.viewer pre.file{color:var(--text);font-size:13px;margin:8px 0}
 .vsw b{color:var(--fg)}
-main.md{max-width:80ch;margin:12px 0;font-family:ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.6;color:var(--text)}
-main.md .blk{position:relative;margin:0 0 10px;padding:0 6px 0 56px;border-left:2px solid transparent}
-/* line gutter: the source line each block / list item / table row starts on (CSS content, so not selectable) */
+main.md{position:relative;max-width:80ch;margin:12px 0;padding-left:56px;font-family:ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.6;color:var(--text)}
+main.md .blk{margin:0 0 10px;padding:0 6px;border-left:2px solid transparent}
+/* Line gutter: the source line each block / list item / table row starts on. One column in main's left padding:
+   every numbered element's ::before is absolute with left:0 and no top, so it sits at the element's first line
+   and its containing block is main (no .blk/td/li is positioned), clear of bullets, list numbers and borders.
+   CSS content, so it cannot be selected. */
 main.md .blk::before,main.md li[data-l]::before,main.md td[data-l]::before,main.md th[data-l]::before{content:attr(data-l);position:absolute;left:0;width:40px;text-align:right;font:13px/1.6 "Courier New",Courier,ui-monospace,monospace;color:var(--mute);user-select:none}
-main.md .blk::before{top:0}
 main.md ul.blk::before,main.md ol.blk::before,main.md table.blk::before{content:none}
-main.md td[data-l],main.md th[data-l]{position:relative}main.md td[data-l]::before,main.md th[data-l]::before{left:-56px}
-main.md .blk.on{background:var(--sel);border-left-color:var(--blue)}
-main.md h1,main.md h2,main.md h3,main.md h4,main.md h5,main.md h6{color:var(--fg);line-height:1.3;margin:18px 0 8px}
+main.md .blk.on{background:var(--sel);border-left-color:var(--blue);box-shadow:-56px 0 0 var(--sel)} /* the shadow carries the band across the gutter */
+main.md h1,main.md h2,main.md h3,main.md h4,main.md h5,main.md h6{color:var(--fg);line-height:1.3em;margin:18px 0 8px}
+main.md :is(h1,h2,h3,h4,h5,h6)::before{line-height:inherit}
 main.md h1{font-size:1.7em}main.md h2{font-size:1.4em;border-bottom:1px solid var(--line)}main.md h3{font-size:1.2em}
 main.md code{font-family:"Courier New",Courier,ui-monospace,monospace;font-size:.9em;background:var(--panel);padding:1px 4px}
 main.md pre.blk{white-space:pre;overflow:auto;background:var(--panel);padding:8px;font-size:13px;color:var(--text)}
 main.md pre.blk code{background:none;padding:0;font-size:inherit}
 main.md blockquote{margin-left:0;border-left:3px solid var(--line);color:var(--mute);padding-left:10px}
 main.md table{border-collapse:collapse}main.md th,main.md td{border:1px solid var(--line);padding:3px 8px;text-align:left;vertical-align:top}main.md th{color:var(--fg)}
+main.md .rule{height:1.6em}main.md .rule hr{margin:.8em 0 0}
 main.md hr{border:0;border-top:1px solid var(--line)}
 main.md .rawhtml{opacity:.45}
 .ln{white-space:pre-wrap}.ln.on{background:var(--sel)}.ln .no{display:inline-block;width:5em;color:var(--mute);user-select:none}
