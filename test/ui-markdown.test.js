@@ -131,3 +131,16 @@ test("headings: closing # run and surrounding space are stripped", () => {
   assert.match(renderMd("##   spaced   ###   "), />spaced<\/h2>/);
   assert.match(renderMd("# C#"), />C<\/h1>/, "trailing # is a closing run, as before");
 });
+
+test("perf: unclosed [ / ]( / * / _ runs render in bounded time (were quadratic: 20000 `[` ~1.6 s, 50000 ~8.8 s)", () => {
+  const cases = ["[".repeat(50000), "[x](".repeat(12500), " *a".repeat(20000), " *a*a".repeat(10000), " _a_a".repeat(10000)];
+  const t = Date.now();
+  for (const c of cases) renderMd(c);
+  assert.ok(Date.now() - t < 3000, `took ${Date.now() - t} ms`);
+});
+
+test("inline spans: normal links, bold, italic still render; slug of a link heading unchanged", () => {
+  const h = renderMd("# See [the docs](docs/a.md) now\n\n**bold text** and *em text* and _und_ [l](https://x.dev)");
+  assert.match(h, /<h1 id="see-the-docs-now"/);
+  assert.match(h, /<strong>bold text<\/strong> and <em>em text<\/em> and <em>und<\/em>/);
+});

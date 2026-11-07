@@ -26,9 +26,11 @@ function headingText(t) {
   return t.slice(0, k).trimEnd();
 }
 
+// Bounded spans: an unclosed `[`/`*`/`_` would otherwise scan to the end of the line from every start (quadratic).
+// 1000 chars of link text / emphasis and 2000 of URL are far above anything in real docs.
 /** GitHub-style heading slug: lowercase, spaces to -, punctuation dropped. @param {string} raw */
 function slugOf(raw) {
-  const t = raw.replace(/<[^>]*>/g, "").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*]/g, "");
+  const t = raw.replace(/<[^>]*>/g, "").replace(/!?\[([^\]]{0,1000})\]\([^)]{0,2000}\)/g, "$1").replace(/[`*]/g, "");
   return t.toLowerCase().replace(/[^\p{L}\p{N}_\- ]/gu, "").replace(/ /g, "-");
 }
 
@@ -38,14 +40,14 @@ function inline(raw) {
   const keep = []; // finished HTML parked behind a placeholder so later passes can't touch it
   const park = (/** @type {string} */ h) => `\0${keep.push(h) - 1}\0`;
   let t = esc(raw.replace(/\0/g, "")).replace(/`([^`]+)`/g, (_, c) => park(`<code>${c}</code>`));
-  t = t.replace(/!?\[([^\]]*)\]\(([^)\s]+)\)/g, (m, txt, url) => {
+  t = t.replace(/!?\[([^\]]{0,1000})\]\(([^)\s]{1,2000})\)/g, (m, txt, url) => {
     const href = url.replace(/&amp;/g, "&").replace(/&quot;/g, '"');
     if (!safeHref(href)) return m;
     const ext = /^https?:/i.test(href);
     return `${park(`<a href="${url}" rel="noopener noreferrer"${ext ? ' target="_blank"' : ""}>`)}${txt || url}${park("</a>")}`;
   });
-  t = t.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w*])\*(?!\s)(.+?)\*(?!\w)/g, "$1<em>$2</em>");
-  t = t.replace(/(^|\W)_(?!\s)(.+?)_(?!\w)/g, "$1<em>$2</em>");
+  t = t.replace(/\*\*(.{1,1000}?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w*])\*(?!\s)(.{1,1000}?)\*(?!\w)/g, "$1<em>$2</em>");
+  t = t.replace(/(^|\W)_(?!\s)(.{1,1000}?)_(?!\w)/g, "$1<em>$2</em>");
   return t.replace(/\0(\d+)\0/g, (_, i) => keep[+i] ?? "");
 }
 
