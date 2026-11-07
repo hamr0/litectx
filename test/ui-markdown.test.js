@@ -118,3 +118,16 @@ test("security: the allowlist function", () => {
   for (const ok of ["https://a.dev/x", "http://a.dev", "#frag", "docs/a.md", "./a.md", "../a.md", "a.md#x", "/abs/p", "a?b=c:d"]) assert.equal(safeHref(ok), true, ok);
   for (const bad of ["javascript:x", "JAVASCRIPT:x", "//e.com", "data:x", "mailto:a@b", "file:///x", "https://", " javascript:x", "a\tb", "&#106;x", "\\\\e.com"]) assert.equal(safeHref(bad), false, bad);
 });
+
+test("perf: a heading line with a long whitespace run renders in linear time (was cubic: 2000 spaces ~10 s)", () => {
+  const t = Date.now();
+  renderMd("# a" + " ".repeat(2000) + "x");
+  renderMd("## a" + " ".repeat(2000) + "x ##");
+  assert.ok(Date.now() - t < 500, `took ${Date.now() - t} ms`);
+});
+
+test("headings: closing # run and surrounding space are stripped", () => {
+  assert.match(renderMd("## title ##"), />title<\/h2>/);
+  assert.match(renderMd("##   spaced   ###   "), />spaced<\/h2>/);
+  assert.match(renderMd("# C#"), />C<\/h1>/, "trailing # is a closing run, as before");
+});

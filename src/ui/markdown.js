@@ -18,6 +18,14 @@ export function safeHref(u) {
   return !/^[^/?#]*:/.test(u); // a colon before the first / ? # is a scheme
 }
 
+/** Heading text without its closing `##` run and surrounding space (string ops, a lazy regex backtracks cubically). @param {string} t */
+function headingText(t) {
+  t = t.trimEnd();
+  let k = t.length;
+  while (k > 0 && t[k - 1] === "#") k--;
+  return t.slice(0, k).trimEnd();
+}
+
 /** GitHub-style heading slug: lowercase, spaces to -, punctuation dropped. @param {string} raw */
 function slugOf(raw) {
   const t = raw.replace(/<[^>]*>/g, "").replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[`*]/g, "");
@@ -76,7 +84,8 @@ export function renderMd(src, s = 0, e = 0) {
       while (j < L.length && !/^```/.test(L[j])) buf.push(L[j++]);
       blk("pre", n, Math.min(j + 1, L.length), `<code>${esc(buf.join("\n"))}</code>`);
       i = j + 1;
-    } else if ((m = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(l))) {
+    } else if ((m = /^(#{1,6})\s+([\s\S]*)$/.exec(l))) {
+      m[2] = headingText(m[2]);
       const base = slugOf(m[2]);
       const k = slugs.get(base) ?? 0;
       slugs.set(base, k + 1);
