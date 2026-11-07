@@ -448,17 +448,17 @@ export async function createUi(opts = {}) {
     const head = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(rel)}</title><link rel="stylesheet" href="/app.css"><script src="/theme.js"></script></head>`;
     const range = s ? ` · lines ${s}–${e}` : "";
     // .md opens formatted unless raw=1; routed by extension only. Everything else is the numbered-lines view.
+    let main = `<pre class="file">${lineRows(text, s, e)}</pre>`;
+    let sw = "";
     if (extname(rel).toLowerCase() === ".md") {
       const raw = sp.get("raw") === "1";
       const q = `/view?p=${encodeURIComponent(rel)}${s ? `&s=${s}&e=${e}` : ""}`;
-      const sw = raw
+      sw = ` · <span class="vsw">${raw
         ? `<a href="${esc(q)}">formatted</a> | <b>lines</b>`
-        : `<b>formatted</b> | <a href="${esc(`${q}&raw=1${s ? `#L${s}` : ""}`)}">lines</a>`;
-      const bar = `<p class="dim"><a href="/">← search</a> · ${esc(rel)}${range} · <span class="vsw">${sw}</span></p>`;
-      const main = raw ? `<pre class="file">${lineRows(text, s, e)}</pre>` : `<main class="md">${renderMd(text, s, e)}</main>`;
-      return send(res, 200, "text/html; charset=utf-8", `${head}<body class="viewer">${bar}${main}</body></html>`);
+        : `<b>formatted</b> | <a href="${esc(`${q}&raw=1${s ? `#L${s}` : ""}`)}">lines</a>`}</span>`;
+      if (!raw) main = `<main class="md">${renderMd(text, s, e)}</main>`;
     }
-    return send(res, 200, "text/html; charset=utf-8", `${head}<body class="viewer"><p class="dim"><a href="/">← search</a> · ${esc(rel)}${range}</p><pre class="file">${lineRows(text, s, e)}</pre></body></html>`);
+    return send(res, 200, "text/html; charset=utf-8", `${head}<body class="viewer"><p class="dim"><a href="/">← search</a> · ${esc(rel)}${range}${sw}</p>${main}</body></html>`);
   }
 
   await new Promise((ok, fail) => {
