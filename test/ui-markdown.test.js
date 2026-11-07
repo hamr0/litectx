@@ -115,8 +115,8 @@ test("security: <script>, <img onerror>, and HTML in link text or a URL are esca
 });
 
 test("security: the allowlist function", () => {
-  for (const ok of ["https://a.dev/x", "http://a.dev", "#frag", "docs/a.md", "./a.md", "../a.md", "a.md#x", "/abs/p", "a?b=c:d"]) assert.equal(safeHref(ok), true, ok);
-  for (const bad of ["javascript:x", "JAVASCRIPT:x", "//e.com", "data:x", "mailto:a@b", "file:///x", "https://", " javascript:x", "a\tb", "&#106;x", "\\\\e.com"]) assert.equal(safeHref(bad), false, bad);
+  for (const ok of ["https://a.dev/x", "http://a.dev", "#frag", "docs/a.md", "./a.md", "../a.md", "a.md#x", "/abs/p", "a?b=c:d", "../y.md#h", "#a", "https://x.y/p"]) assert.equal(safeHref(ok), true, ok);
+  for (const bad of ["javascript:x", "JAVASCRIPT:x", "//e.com", "data:x", "mailto:a@b", "file:///x", "https://", " javascript:x", "a\tb", "&#106;x", "\\\\e.com", "/\\evil.com", "/\\\\evil.com", "a\\b"]) assert.equal(safeHref(bad), false, bad);
 });
 
 test("perf: a heading line with a long whitespace run renders in linear time (was cubic: 2000 spaces ~10 s)", () => {

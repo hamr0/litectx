@@ -8,13 +8,13 @@ const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, 
 
 /**
  * Link allowlist: http(s)://, #anchor, or a relative path. Anything with another scheme (javascript:, data:,
- * vbscript:, ...), a protocol-relative `//host`, control characters or whitespace, or an HTML entity is refused.
+ * vbscript:, ...), a protocol-relative `//host`, control characters, whitespace or a backslash, or an HTML entity is refused.
  * @param {string} u the URL with `&amp;`/`&quot;` already decoded
  */
 export function safeHref(u) {
-  if (/[\x00-\x20\x7f]/.test(u) || /&#?\w+;/.test(u)) return false;
+  if (/[\x00-\x20\x7f\\]/.test(u) || /&#?\w+;/.test(u)) return false; // a backslash: browsers read `/\` as `//`, docs never use it in a path
   if (/^https?:\/\/[^/]/i.test(u) || u.startsWith("#")) return true;
-  if (u.startsWith("//") || u.startsWith("\\")) return false;
+  if (u.startsWith("//")) return false;
   return !/^[^/?#]*:/.test(u); // a colon before the first / ? # is a scheme
 }
 
