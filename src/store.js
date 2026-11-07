@@ -407,9 +407,9 @@ export class Store {
     // Lazy file: a file-backed store whose file does not exist yet is served by an empty in-memory stand-in (reads
     // behave as an empty store) and the real file + folder are created on the FIRST WRITE (see `_materialize`).
     // `:memory:` and an existing file open exactly as before.
-    /** @type {string | null} */
     /** @type {boolean} */
     this._initing = false;
+    /** @type {string | null} */
     this._lazyPath = dbPath !== ":memory:" && !existsSync(dbPath) ? dbPath : null;
     /** @type {any} */
     this._cur = new Database(this._lazyPath ? ":memory:" : dbPath);
