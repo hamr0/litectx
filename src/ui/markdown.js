@@ -26,11 +26,123 @@ function headingText(t) {
   return t.slice(0, k).trimEnd();
 }
 
-// Bounded spans: an unclosed `[`/`*`/`_` would otherwise scan to the end of the line from every start (quadratic).
-// 1000 chars of link text / emphasis and 2000 of URL are far above anything in real docs.
+const WS = /\s/;
+const WORD = /\w/;
+const TERM = /[\n\r\u2028\u2029]/g; // what `.` cannot cross
+
+/** `<...>` runs removed with indexOf (a regex rescans to the end from every unclosed `<`, quadratic). @param {string} s */
+function stripTags(s) {
+  let out = "";
+  let pos = 0;
+  let i;
+  while ((i = s.indexOf("<", pos)) >= 0) {
+    const e = s.indexOf(">", i + 1);
+    if (e < 0) break; // no `>` anywhere after, so no later `<` can close either
+    out += s.slice(pos, i);
+    pos = e + 1;
+  }
+  return out + s.slice(pos);
+}
+
+/**
+ * Replace every `!?[text](url)` with `fn(match, text, url)`, in one left-to-right pass. Same matches as the regex
+ * `!?\[([^\]]*)\]\(url\)`, but never rescans: all `[` before one `]` share it, and a url run is found once.
+ * @param {string} t @param {boolean} strict url = 1+ chars without whitespace or `)` (else any run up to `)`)
+ * @param {(m: string, text: string, url: string) => string} fn
+ */
+function replaceLinks(t, strict, fn) {
+  let out = "";
+  let pos = 0;
+  let p = 0;
+  let q = -2; // first `]` after p, cached
+  let pe = -2; // first `)` at or after the url start, cached (non-strict)
+  let runFrom = 0;
+  let runEnd = -1; // strict: the `)`/whitespace/end that stops a url run, valid for any start in [runFrom, runEnd]
+  while ((p = t.indexOf("[", p)) >= 0) {
+    if (q !== -1 && q <= p) q = t.indexOf("]", p + 1);
+    if (q < 0) break;
+    if (t[q + 1] !== "(") { p = q; continue; }
+    const x = q + 2;
+    let e;
+    if (strict) {
+      if (x < runFrom || x > runEnd) {
+        runFrom = x;
+        runEnd = x;
+        while (runEnd < t.length && t[runEnd] !== ")" && !WS.test(t[runEnd])) runEnd++;
+      }
+      e = runEnd < t.length && t[runEnd] === ")" && runEnd > x ? runEnd : -1;
+    } else {
+      if (pe !== -1 && pe < x) pe = t.indexOf(")", x);
+      e = pe;
+    }
+    if (e < 0) { p = q; continue; }
+    const start = p > pos && t[p - 1] === "!" ? p - 1 : p;
+    out += t.slice(pos, start) + fn(t.slice(start, e + 1), t.slice(p + 1, q), t.slice(x, e));
+    pos = p = e + 1;
+  }
+  return out + t.slice(pos);
+}
+
+/** Index finder for the first line terminator (what `.` cannot cross) at or after p, cached so the total scan is linear. @param {string} t */
+function lineEnd(t) {
+  let nt = -1;
+  return (/** @type {number} */ p) => {
+    if (nt < p) {
+      TERM.lastIndex = p;
+      const m = TERM.exec(t);
+      nt = m ? m.index : t.length;
+    }
+    return nt;
+  };
+}
+
+/** `**x**` to <strong>: the first `**` after one char or more, on one line, found without rescanning. @param {string} t */
+function strongs(t) {
+  const end = lineEnd(t);
+  let out = "";
+  let pos = 0;
+  let from = 0;
+  let nk = -2; // first `**` at or after the last asked position, cached
+  while (true) {
+    const f = t.indexOf("**", from);
+    if (f < 0) break;
+    const c = f + 2;
+    if (nk !== -1 && nk < c + 1) nk = t.indexOf("**", c + 1);
+    const eol = end(c);
+    if (nk < 0 || nk >= eol) { from = eol > f ? eol : f + 1; continue; } // no closer on this line: no later opener on it has one
+    out += `${t.slice(pos, f)}<strong>${t.slice(c, nk)}</strong>`;
+    pos = from = nk + 2;
+  }
+  return out + t.slice(pos);
+}
+
+/**
+ * `*x*` / `_x_` to <em>: opener at the start or after a non-`bad` char and before a non-space, closer the first
+ * same char not followed by a word char, on one line; found without rescanning.
+ * @param {string} t @param {string} ch @param {RegExp} bad a char that may not precede the opener
+ */
+function emphasis(t, ch, bad) {
+  const end = lineEnd(t);
+  let out = "";
+  let pos = 0;
+  let j = 0;
+  while ((j = t.indexOf(ch, j)) >= 0) {
+    const c = j + 1;
+    if (c >= t.length) break;
+    if ((j > 0 && (j - 1 < pos || bad.test(t[j - 1]))) || WS.test(t[c])) { j = c; continue; }
+    const eol = end(c);
+    let k = c + 1;
+    while (k < eol && !(t[k] === ch && !WORD.test(t[k + 1] ?? ""))) k++;
+    if (k >= eol) { j = eol; continue; } // no closer on this line: no later opener on it has one
+    out += `${t.slice(pos, j)}<em>${t.slice(c, k)}</em>`;
+    pos = j = k + 1;
+  }
+  return out + t.slice(pos);
+}
+
 /** GitHub-style heading slug: lowercase, spaces to -, punctuation dropped. @param {string} raw */
 function slugOf(raw) {
-  const t = raw.replace(/<[^>]*>/g, "").replace(/!?\[([^\]]{0,1000})\]\([^)]{0,2000}\)/g, "$1").replace(/[`*]/g, "");
+  const t = replaceLinks(stripTags(raw), false, (_, text) => text).replace(/[`*]/g, "");
   return t.toLowerCase().replace(/[^\p{L}\p{N}_\- ]/gu, "").replace(/ /g, "-");
 }
 
@@ -40,14 +152,14 @@ function inline(raw) {
   const keep = []; // finished HTML parked behind a placeholder so later passes can't touch it
   const park = (/** @type {string} */ h) => `\0${keep.push(h) - 1}\0`;
   let t = esc(raw.replace(/\0/g, "")).replace(/`([^`]+)`/g, (_, c) => park(`<code>${c}</code>`));
-  t = t.replace(/!?\[([^\]]{0,1000})\]\(([^)\s]{1,2000})\)/g, (m, txt, url) => {
+  t = replaceLinks(t, true, (m, txt, url) => {
     const href = url.replace(/&amp;/g, "&").replace(/&quot;/g, '"');
     if (!safeHref(href)) return m;
     const ext = /^https?:/i.test(href);
     return `${park(`<a href="${url}" rel="noopener noreferrer"${ext ? ' target="_blank"' : ""}>`)}${txt || url}${park("</a>")}`;
   });
-  t = t.replace(/\*\*(.{1,1000}?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^\w*])\*(?!\s)(.{1,1000}?)\*(?!\w)/g, "$1<em>$2</em>");
-  t = t.replace(/(^|\W)_(?!\s)(.{1,1000}?)_(?!\w)/g, "$1<em>$2</em>");
+  t = emphasis(strongs(t), "*", /[\w*]/);
+  t = emphasis(t, "_", /\w/);
   return t.replace(/\0(\d+)\0/g, (_, i) => keep[+i] ?? "");
 }
 
@@ -147,18 +259,20 @@ export function renderMd(src, s = 0, e = 0) {
         else if (/^\s+\S/.test(L[j]) && !BLOCK_START.test(L[j])) items[items.length - 1].text += ` ${L[j].trim()}`; // wrapped item text, inlined whole so **bold** can span lines
         else break;
       }
-      let html = "";
+      const html = []; // pieces, each ending in </li>; the last one is reopened when a nested list starts
       let open = "";
       for (const it of items) {
         if (it.nested && !open) {
           open = it.ord ? "ol" : "ul";
-          html = html.replace(/<\/li>$/, "") + `<${open}>`;
+          const last = html.length - 1;
+          if (last >= 0 && html[last].endsWith("</li>")) html[last] = html[last].slice(0, -5);
+          html.push(`<${open}>`);
         }
-        if (!it.nested && open) { html += `</${open}></li>`; open = ""; }
-        html += `<li data-l="${it.line}">${inline(it.text)}</li>`;
+        if (!it.nested && open) { html.push(`</${open}></li>`); open = ""; }
+        html.push(`<li data-l="${it.line}">${inline(it.text)}</li>`);
       }
-      if (open) html += `</${open}></li>`;
-      blk(tag, n, j, html);
+      if (open) html.push(`</${open}></li>`);
+      blk(tag, n, j, html.join(""));
       i = j;
     } else {
       let j = i;

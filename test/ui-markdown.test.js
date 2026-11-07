@@ -146,11 +146,40 @@ test("headings: closing # run and surrounding space are stripped", () => {
 test("perf: unclosed [ / ]( / * / _ runs scale linearly (were quadratic: 4x the input = ~16x the time)", () => {
   const cases = [(/** @type {number} */ n) => "[".repeat(n), (n) => "[x](".repeat(n / 4), (n) => " *a".repeat(n / 3), (n) => " *a*a".repeat(n / 5), (n) => " _a_a".repeat(n / 5)];
   for (const mk of cases) {
-    // sizes past the 1000-char span bound, where bounded work is linear in n; quadratic would be 16x, linear 4x
+    // quadratic would be 16x for 4x the input, linear 4x
     const small = best(mk(10000));
     const big = best(mk(40000));
     assert.ok(big < 9 * Math.max(small, 2), `${JSON.stringify(mk(8).slice(0, 8))}: 4x input took ${(big / small).toFixed(1)}x (${small.toFixed(1)} -> ${big.toFixed(1)} ms)`);
   }
+});
+
+test("perf: an unclosed span in a large input costs about the same as plain text of equal size (bounded spans were ~1 s per 200 KB)", () => {
+  // relative to plain text, so a loaded box slows both sides alike; the bounded-regex code took 1.2-5 s here (~300x+), the scanner ~30 ms
+  const plain = best("a".repeat(200000));
+  for (const mk of [(/** @type {number} */ n) => "[".repeat(n), (n) => "![".repeat(n / 2), (n) => "[a](".repeat(n / 4), (n) => " *a".repeat(n / 3), (n) => " _a_a".repeat(n / 5), (n) => "**a".repeat(n / 3)]) {
+    const t = best(mk(200000));
+    assert.ok(t < 100 * Math.max(plain, 4), `${JSON.stringify(mk(8).slice(0, 8))}: ${t.toFixed(1)} ms vs plain ${plain.toFixed(1)} ms`);
+  }
+});
+
+test("perf: nested lists and a heading of unclosed < scale linearly (were ~cubic / quadratic)", () => {
+  const cases = [(/** @type {number} */ n) => "- a\n  - b\n".repeat(n / 10), (n) => "1. a\n   - b\n".repeat(n / 12), (n) => "# " + "<a ".repeat(n / 3), (n) => "# [x](" + "<a ".repeat(n / 3)];
+  for (const mk of cases) {
+    const small = best(mk(20000));
+    const big = best(mk(80000));
+    assert.ok(big < 9 * Math.max(small, 2), `${JSON.stringify(mk(12).slice(0, 12))}: 4x input took ${(big / small).toFixed(1)}x (${small.toFixed(1)} -> ${big.toFixed(1)} ms)`);
+  }
+});
+
+test("lists and headings: output of the linear rewrite (nested open/close, tag-stripped slug)", () => {
+  assert.equal(renderMd("- a\n  - b\n- c\n"), '<ul id="B1" data-l="1" class="blk"><li data-l="1">a<ul><li data-l="2">b</li></ul></li><li data-l="3">c</li></ul>');
+  assert.match(renderMd("# a <b>x</b> <c"), /<h1 id="a-x-c"/);
+  assert.match(renderMd("# [t](u) <i>z"), /<h1 id="t-z"/);
+});
+
+test("inline spans: a span longer than 1000 chars still styles", () => {
+  const long = "x".repeat(3000);
+  assert.match(renderMd(`**${long}** *${long}* _${long}_ [${long}](a.md)`), new RegExp(`<strong>x{3000}</strong> <em>x{3000}</em> <em>x{3000}</em> <a href="a.md"[^>]*>x{3000}</a>`));
 });
 
 test("inline spans: normal links, bold, italic still render; slug of a link heading unchanged", () => {
