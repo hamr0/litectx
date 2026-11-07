@@ -43,12 +43,12 @@ test("fenced code is escaped and untouched by inline rules; blockquote; hr; tabl
   assert.match(h, /<pre id="B1"[^>]*><code>const a = &#39;&lt;b&gt;&#39; \* 2; \/\/ \*\*x\*\*<\/code><\/pre>/);
   assert.match(h, /<blockquote[^>]*>quoted <em>q<\/em><\/blockquote>/);
   assert.match(h, /<hr id="B7"/);
-  assert.match(h, /<th>A<\/th><th>B<\/th>/);
-  assert.match(h, /<td>1<\/td><td><code>x<\/code><\/td>/);
+  assert.match(h, /<th data-l="9">A<\/th><th>B<\/th>/, "header row carries its line for the gutter");
+  assert.match(h, /<tr data-l="11"><td data-l="11">1<\/td><td><code>x<\/code><\/td>/, "body row too");
 });
 
 test("a table indented under a list item still renders as a table", () => {
-  assert.match(renderMd("  | A | B |\n  |---|---|\n  | 1 | 2 |\n"), /<table id="B1"[^>]*><thead><tr><th>A<\/th><th>B<\/th><\/tr><\/thead><tbody><tr data-l="3"><td>1<\/td><td>2<\/td>/);
+  assert.match(renderMd("  | A | B |\n  |---|---|\n  | 1 | 2 |\n"), /<table id="B1"[^>]*><thead><tr><th data-l="1">A<\/th><th>B<\/th><\/tr><\/thead><tbody><tr data-l="3"><td data-l="3">1<\/td><td>2<\/td>/);
 });
 
 test("highlight: only blocks overlapping [s,e] get 'on'; block ids and data-l are start lines", () => {

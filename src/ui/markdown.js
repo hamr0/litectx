@@ -92,11 +92,13 @@ export function renderMd(src, s = 0, e = 0) {
       blk("blockquote", n, j, inline(buf.join(" ")));
       i = j;
     } else if (l.trimStart().startsWith("|") && TABLE_RULE.test((L[i + 1] ?? "").trim())) { // indented tables (under a list item) too
-      const cells = (/** @type {string} */ r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+      // the first cell carries the row's line (data-l) so the CSS gutter can number the row
+      const cells = (/** @type {string} */ r, /** @type {string} */ tag, /** @type {number} */ line) =>
+        r.trim().replace(/^\||\|$/g, "").split("|").map((c, k) => `<${tag}${k ? "" : ` data-l="${line}"`}>${inline(c.trim())}</${tag}>`).join("");
       let j = i + 2;
       const rows = [];
-      while (j < L.length && L[j].trimStart().startsWith("|")) rows.push(`<tr data-l="${j + 1}">${cells(L[j++]).map((c) => `<td>${c}</td>`).join("")}</tr>`);
-      blk("table", n, j, `<thead><tr>${cells(l).map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody>`);
+      for (; j < L.length && L[j].trimStart().startsWith("|"); j++) rows.push(`<tr data-l="${j + 1}">${cells(L[j], "td", j + 1)}</tr>`);
+      blk("table", n, j, `<thead><tr>${cells(l, "th", n)}</tr></thead><tbody>${rows.join("")}</tbody>`);
       i = j;
     } else if ((m = /^(\s*)([-*+]|\d+[.)])\s+/.exec(l))) {
       const tag = /\d/.test(m[2]) ? "ol" : "ul";

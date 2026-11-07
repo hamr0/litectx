@@ -388,7 +388,7 @@ test("/view serves a file with the range highlighted, HTML-escaped; rejects ../ 
 
 test("/view: .md opens formatted with a switch; raw=1 is the numbered-lines view; non-md is unchanged", async () => {
   const root = join(scratch(), "r");
-  repo(root, { "a.md": "# Title\n\nfirst para\n\n## Sub\n\nsecond <b>para</b> [x](javascript:alert(1)) [ok](#sub)\n", "b.js": "export const b = 1;\n", "c.py": "# not md\n" });
+  repo(root, { "a.md": "# Title\n\nfirst para\n\n## Sub\n\nsecond <b>para</b> [x](javascript:alert(1)) [ok](#sub)\n\n- item one\n- item two\n\n| H |\n|---|\n| c |\n", "b.js": "export const b = 1;\n", "c.py": "# not md\n" });
   const ui = await createUi({ port: 0, path: root });
   try {
     await ui.idle();
@@ -399,6 +399,12 @@ test("/view: .md opens formatted with a switch; raw=1 is the numbered-lines view
     assert.match(f.text, /<p id="B7" data-l="7" class="blk on">/, "the highlight lands on the block holding line 7");
     assert.match(f.text, /<p id="B3" data-l="3" class="blk">/);
     assert.doesNotMatch(f.text, /class="ln/, "formatted view has no numbered lines");
+    // gutter numbers come from data-l (CSS attr()): blocks, a list item, a table header and body row
+    for (const m of [/<h1 id="title" data-l="1"/, /<p id="B3" data-l="3"/, /<h2 id="sub" data-l="5"/, /<li data-l="10">item two/, /<th data-l="12">H/, /<td data-l="14">c/]) assert.match(f.text, m);
+    const css = (await get(ui, "/app.css")).text;
+    assert.match(css, /main\.md \.blk::before[^{]*\{content:attr\(data-l\)/, "gutter is a CSS pseudo-element, so it cannot be selected");
+    assert.match(css, /main\.md \.blk\{[^}]*padding:0 6px 0 56px/, "room reserved for the gutter");
+    assert.match(css, /main\.md \.blk\.on\{background/, "the highlight band covers the gutter (it is padding of the block)");
     assert.match(f.text, /<b>formatted<\/b> \| <a href="\/view\?p=a\.md&amp;s=7&amp;e=7&amp;raw=1#L7">lines<\/a>/);
     assert.match(f.text, /<a href="#sub"/);
     assert.doesNotMatch(f.text, /<a href="javascript|<b>para/, "raw html and javascript: stay inert text");

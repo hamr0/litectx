@@ -9,7 +9,7 @@ All notable changes to this project are documented here, following
 
 ### Added
 
-- **`litectx ui` file view shows `.md` files formatted** (headings, lists, code, tables, links, `#anchor` links), with a `formatted | lines` switch; `lines` (`/view?p=…&raw=1`) is the numbered-lines view as before. Other file types are unchanged. Routed by file extension. Raw HTML in a markdown file stays visible as escaped text (blocks that are only HTML are dimmed), and only `http(s)://`, `#anchor` and relative links become links. The search range highlight works in both modes.
+- **`litectx ui` file view shows `.md` files formatted** (headings, lists, code, tables, links, `#anchor` links), with a `formatted | lines` switch; `lines` (`/view?p=…&raw=1`) is the numbered-lines view as before. Other file types are unchanged. Routed by file extension. Raw HTML in a markdown file stays visible as escaped text (blocks that are only HTML are dimmed), and only `http(s)://`, `#anchor` and relative links become links. The search range highlight works in both modes. The formatted view has a left line-number gutter (the source line each block, list item and table row starts on).
 
 ## [0.42.0] - 2026-11-04
 
