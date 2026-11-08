@@ -1399,7 +1399,7 @@ active source and mode, e.g. `mode: all repos (45 found)`. With a `path` it is a
 - **Security**: it listens on `127.0.0.1` only; requests whose `Host` is not `127.0.0.1:<port>` or
   `localhost:<port>` are refused (DNS rebinding); POST/DELETE with a foreign `Origin` are refused;
   `/view` serves only files that are in the active source's index (an untracked `.env` in the root
-  is refused) and whose real path is inside the source root (`../` and symlink escapes are rejected); everything rendered is HTML-escaped and a strict CSP is set (including `frame-ancestors 'none'`, so no other site can frame the page); a POST body over 64 KiB gets a `413 body too large`. `/view` without `s`/`e` shows the plain file, nothing highlighted. There is no
+  is refused) and whose real path is inside the source root (`../` and symlink escapes are rejected); everything rendered is HTML-escaped and a strict CSP is set (including `frame-ancestors 'none'`, so no other site can frame the page); a POST body over 64 KiB gets a `413 body too large`. `/view` without `s`/`e` shows the plain file, nothing highlighted. `.md` files open formatted (`/view?p=…&raw=1` gives the numbered-lines view; a `formatted | lines` switch sits beside the path): raw HTML in the file stays escaped text, and only `http(s)://`, `#anchor` and relative links become links. There is no
   authentication, so do not forward the port. The *open in PyCharm* button
   POSTs `/api/open {path, line}` and the server runs `<editor> --line N <abs path>` detached (no shell; same
   Host/Origin checks and indexed-only rule as `/view`). The launcher is the `editor` field of

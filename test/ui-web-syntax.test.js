@@ -17,3 +17,23 @@ for (const f of files) {
     assert.doesNotThrow(() => new vm.Script(readFileSync(join(dir, f), "utf8"), { filename: f }));
   });
 }
+
+test("viewer scroll: the formatted md view scrolls to its highlight when #L<n> names nothing; a real anchor wins", () => {
+  const run = (hash, ids) => {
+    let scrolled = 0;
+    const on = { scrollIntoView: () => scrolled++ };
+    let ready = () => {};
+    const document = {
+      documentElement: { setAttribute() {} },
+      addEventListener: (_, f) => (ready = f),
+      querySelector: (sel) => (sel.includes(".blk.on") ? on : null),
+      getElementById: (id) => (ids.includes(id) ? {} : null),
+    };
+    vm.runInNewContext(readFileSync(join(dir, "theme.js"), "utf8"), { document, location: { hash }, localStorage: { getItem: () => null }, decodeURIComponent });
+    ready();
+    return scrolled;
+  };
+  assert.equal(run("#L7", []), 1, "fragment matches no element (formatted view) → scroll to the highlight");
+  assert.equal(run("", []), 1, "no fragment → scroll");
+  assert.equal(run("#sub", ["sub"]), 0, "an in-page anchor that exists is left to the browser");
+});
