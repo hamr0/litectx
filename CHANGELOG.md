@@ -5,11 +5,20 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased]
+## [0.43.0] - 2026-11-08
 
 ### Added
 
-- **`litectx ui` file view shows `.md` files formatted** (headings, lists, code, tables, links, `#anchor` links), with a `formatted | lines` switch; `lines` (`/view?p=…&raw=1`) is the numbered-lines view as before. Other file types are unchanged. Routed by file extension. Raw HTML in a markdown file stays visible as escaped text (blocks that are only HTML are dimmed), and only `http(s)://`, `#anchor` and relative links become links. The search range highlight works in both modes. The formatted view has a left line-number gutter (the source line each block, list item and table row starts on).
+- **`litectx ui` file view shows `.md` files formatted** (headings, lists, code, tables, links, `#anchor` links), with a `formatted | lines` switch; `lines` (`/view?p=…&raw=1`) is the numbered-lines view as before. Other file types are unchanged. Routed by file extension. Raw HTML in a markdown file stays visible as escaped text (blocks that are only HTML are dimmed), and only `http(s)://`, `#anchor` and relative links become links. The search range highlight works in both modes. The formatted view has a left line-number gutter (the source line each block, list item and table row starts on). YAML front matter is shown dimmed as text. Heading `#anchor` ids are never empty or repeated. Table cells keep `|` inside code spans and honour `\|`. Bold and italic carry across wrapped list lines, and indented tables render.
+
+### Fixed
+
+- **The formatted view cannot be frozen by a hostile or odd `.md` file.** The renderer is linear on every input, with no size or time cap: a 2 MB file of `[` went from 13.7 s to 20 ms, 200 KB of nested lists from 15.6 s to about 0.2 s, and a table divider with a long whitespace run is no longer quadratic. Output is identical on real docs, except that spans over 1000 characters regain their styling.
+- **A link beginning `/\` no longer navigates off-site.** Browsers read `/\evil.com` as `//evil.com`; any link containing a backslash is now refused.
+
+### Changed
+
+- **The first `index()` after upgrading does one full re-index.** The index self-heal stamp is a hash of the top-level `src/*.js`, and `src/store.js` changed (comment-only), so the stamp differs. Nothing is lost; searches work as before once it finishes.
 
 ## [0.42.0] - 2026-11-04
 
