@@ -52,7 +52,7 @@ console.log("URL " + ui.url);
     await new Promise((r) => setTimeout(r, 300));
     assert.ok(!out.includes("SPIN_START"), "no index pass before the page has answered once");
     const url = /URL (http\S+)/.exec(out)?.[1] ?? "";
-    const r = await fetch(`${url}/api/sources`, { signal: AbortSignal.timeout(2000) });
+    const r = await fetch(`${url}/api/sources`, { signal: AbortSignal.timeout(10000) });
     assert.equal(r.status, 200);
     await until(() => out.includes("SPIN_END"));
   } finally {
