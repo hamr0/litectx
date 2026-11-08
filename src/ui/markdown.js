@@ -178,7 +178,7 @@ function splitRow(r) {
   return cells;
 }
 
-const TABLE_RULE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const TABLE_RULE = /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*(\|\s*)?$/;
 const BLOCK_START = /^(#{1,6}\s|```|>|\s*([-*+]|\d+[.)])\s|(-{3,}|\*{3,}|_{3,})\s*$|\s*\|)/;
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)/;
 

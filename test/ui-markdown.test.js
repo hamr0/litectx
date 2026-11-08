@@ -200,6 +200,11 @@ test("perf: nested lists and a heading of unclosed < cost about the same as thei
   assertPairwise("# [x](" + "<a ".repeat(26000), "# [x](y) " + "<a> ".repeat(20000), 1);
 });
 
+test("perf: a table divider line with a long whitespace run costs about the same as a well-formed table of equal size (was quadratic)", () => {
+  const bad = "|a|\n|-" + " ".repeat(20000) + "x\n"; // TABLE_RULE's \s* around an optional | backtracked quadratically
+  assertPairwise(bad, "|a|\n|-|-|\n", bad.length);
+});
+
 test("perf: an unclosed span in a large input costs about the same as the well-formed span of equal size (bounded spans were 7-50x)", () => {
   // Each hostile input is timed against a WELL-FORMED input of the same size and the same span kind, not a wall clock or plain text:
   // that does the same rendering work, so a loaded box slows both sides alike. Scanner ~1x or less; the bounded-regex code was 7x (links) to 50x (*a).
