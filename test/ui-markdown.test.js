@@ -2,7 +2,7 @@
 // every hostile input must come out as inert text, never as a live link, tag or handler.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderMd, safeHref } from "../src/ui/markdown.js";
+import { renderMd, replaceLinks, safeHref } from "../src/ui/markdown.js";
 
 test("headings get GitHub-style ids: lowercase, punctuation dropped, spaces to -, duplicates -1/-2", () => {
   const h = renderMd("# Hello, World!\n\n## Hello, World!\n\n### Hello, World!\n\n## `code` & *Em*\n");
@@ -117,6 +117,40 @@ test("security: <script>, <img onerror>, and HTML in link text or a URL are esca
 test("security: the allowlist function", () => {
   for (const ok of ["https://a.dev/x", "http://a.dev", "#frag", "docs/a.md", "./a.md", "../a.md", "a.md#x", "/abs/p", "a?b=c:d", "../y.md#h", "#a", "https://x.y/p"]) assert.equal(safeHref(ok), true, ok);
   for (const bad of ["javascript:x", "JAVASCRIPT:x", "//e.com", "data:x", "mailto:a@b", "file:///x", "https://", " javascript:x", "a\tb", "&#106;x", "\\\\e.com", "/\\evil.com", "/\\\\evil.com", "a\\b"]) assert.equal(safeHref(bad), false, bad);
+});
+
+test("replaceLinks: the !?[text](url) scanner, strict (inline links) and non-strict (heading slugs)", () => {
+  const f = (/** @type {string} */ t, strict = true) => replaceLinks(t, strict, (_, text, url) => `<${text}|${url}>`);
+  // expected values follow the regex `!?\[([^\]]*)\]\(url\)`: text may hold `[` and newlines but never `]`
+  const same = ["", "plain", "[a", "[a(b)", "[a] (b)", "[a]](b)", "[a](b", "]( [a]", "[a]("];
+  for (const t of same) assert.equal(f(t), t, JSON.stringify(t));
+  const cases = [
+    ["[a](b)", "<a|b>"],
+    ["![a](b)", "<a|b>", "a leading ! belongs to the match"],
+    ["x ![a](b) y", "x <a|b> y"],
+    ["a![x](y)", "a<x|y>"],
+    ["![a](b)![c](d)", "<a|b><c|d>", "a ! right after a match still binds"],
+    ["[a](b) [c](d)", "<a|b> <c|d>"],
+    ["[[a](b)", "<[a|b>", "nested [: all share the first ]"],
+    ["[a][b](c)", "[a]<b|c>", "] not followed by ( moves on to the next ["],
+    ["[a](b)(c)", "<a|b>(c)", "match ends at the first )"],
+    ["[a](b(c))", "<a|b(c>)", "a paren url ends at its first )"],
+    ["[](u)", "<|u>", "empty text is fine"],
+    ["[a\nb](c)", "<a\nb|c>", "text crosses a newline"],
+    ["[a](x [b](c)", "[a](x <b|c>", "strict: a failed url does not hide a later link"],
+  ];
+  for (const [t, want, why] of cases) assert.equal(f(t), want, why ?? JSON.stringify(t));
+  // strict needs 1+ url chars and no whitespace; non-strict takes any run up to the first )
+  for (const t of ["[a]()", "[a](b c)", "[a](b\nc)"]) assert.equal(f(t), t, "strict refuses " + JSON.stringify(t));
+  assert.equal(f("[a]()", false), "<a|>");
+  assert.equal(f("[a](b c)", false), "<a|b c>");
+  assert.equal(f("[a](b\nc)", false), "<a|b\nc>");
+  assert.equal(f("[a](x [b](c)", false), "<a|x [b](c>", "non-strict: the url runs to the first )");
+  assert.equal(f("[a](b", false), "[a](b");
+  // fn gets the whole match first
+  const seen = [];
+  replaceLinks("k ![t](u) z", true, (m, text, url) => (seen.push([m, text, url]), ""));
+  assert.deepEqual(seen, [["![t](u)", "t", "u"]]);
 });
 
 /** best of 3 wall-clock ms for one render (min cuts scheduler/load noise) @param {string} src */

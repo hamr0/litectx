@@ -44,41 +44,37 @@ function stripTags(s) {
   return out + s.slice(pos);
 }
 
+const URL_END_STRICT = /[)\s]/g; // what stops a strict url run
+const URL_END_LOOSE = /\)/g;
+
 /**
  * Replace every `!?[text](url)` with `fn(match, text, url)`, in one left-to-right pass. Same matches as the regex
- * `!?\[([^\]]*)\]\(url\)`, but never rescans: all `[` before one `]` share it, and a url run is found once.
+ * `!?\[([^\]]*)\]\(url\)`, but never rescans. Strategy: `p` walks the `[`; `q` is the first `]` after it, so all
+ * `[` before one `]` share it. `stop` is the first url-end char at or after the url start; `q` only moves right, so
+ * every url start lies at or after the last one and `stop` stays valid until a start passes it.
  * @param {string} t @param {boolean} strict url = 1+ chars without whitespace or `)` (else any run up to `)`)
  * @param {(m: string, text: string, url: string) => string} fn
  */
-function replaceLinks(t, strict, fn) {
+export function replaceLinks(t, strict, fn) {
+  const urlEnd = strict ? URL_END_STRICT : URL_END_LOOSE;
   let out = "";
-  let pos = 0;
+  let pos = 0; // end of what is already copied to out
   let p = 0;
-  let q = -2; // first `]` after p, cached
-  let pe = -2; // first `)` at or after the url start, cached (non-strict)
-  let runFrom = 0;
-  let runEnd = -1; // strict: the `)`/whitespace/end that stops a url run, valid for any start in [runFrom, runEnd]
+  let q = -1;
+  let stop = -1;
   while ((p = t.indexOf("[", p)) >= 0) {
-    if (q !== -1 && q <= p) q = t.indexOf("]", p + 1);
-    if (q < 0) break;
+    if (q <= p) q = t.indexOf("]", p + 1);
+    if (q < 0) break; // no `]` left, so no later `[` can close either
     if (t[q + 1] !== "(") { p = q; continue; }
     const x = q + 2;
-    let e;
-    if (strict) {
-      if (x < runFrom || x > runEnd) {
-        runFrom = x;
-        runEnd = x;
-        while (runEnd < t.length && t[runEnd] !== ")" && !WS.test(t[runEnd])) runEnd++;
-      }
-      e = runEnd < t.length && t[runEnd] === ")" && runEnd > x ? runEnd : -1;
-    } else {
-      if (pe !== -1 && pe < x) pe = t.indexOf(")", x);
-      e = pe;
+    if (stop < x) {
+      urlEnd.lastIndex = x;
+      stop = urlEnd.exec(t)?.index ?? t.length;
     }
-    if (e < 0) { p = q; continue; }
-    const start = p > pos && t[p - 1] === "!" ? p - 1 : p;
-    out += t.slice(pos, start) + fn(t.slice(start, e + 1), t.slice(p + 1, q), t.slice(x, e));
-    pos = p = e + 1;
+    if (t[stop] !== ")" || (strict && stop === x)) { p = q; continue; }
+    const start = t[p - 1] === "!" ? p - 1 : p;
+    out += t.slice(pos, start) + fn(t.slice(start, stop + 1), t.slice(p + 1, q), t.slice(x, stop));
+    pos = p = stop + 1;
   }
   return out + t.slice(pos);
 }
