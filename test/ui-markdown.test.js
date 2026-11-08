@@ -164,6 +164,18 @@ function best(src) {
   return m;
 }
 
+/**
+ * Pairwise perf check: render `hostile` repeated to ~n chars against `ok` (well-formed, same size and kind) repeated alike.
+ * Same rendering work on both sides, so a loaded box slows them equally; a ratio over 4 means the hostile input costs more per
+ * char than the well-formed one (the old quadratic/cubic code was 8x to 50x+ at these sizes).
+ * @param {string} bad @param {string} ok @param {number} n
+ */
+function assertPairwise(bad, ok, n) {
+  const hostile = best(bad.repeat(Math.ceil(n / bad.length)));
+  const closed = best(ok.repeat(Math.ceil(n / ok.length)));
+  assert.ok(hostile < 4 * Math.max(closed, 2), `${JSON.stringify(bad)}: ${hostile.toFixed(1)} ms vs well-formed ${closed.toFixed(1)} ms`);
+}
+
 test("perf: a heading line with a long whitespace run costs about the same as a plain one of equal size (was cubic: 1500 spaces ~1.5 s)", () => {
   // relative, not absolute: a loaded box slows both sides alike. Old code is ~1000x the plain line, new ~1x.
   const plain = best("# a" + "b".repeat(1500) + "x");
@@ -177,14 +189,15 @@ test("headings: closing # run and surrounding space are stripped", () => {
   assert.match(renderMd("# C#"), />C<\/h1>/, "trailing # is a closing run, as before");
 });
 
-test("perf: unclosed [ / ]( / * / _ runs scale linearly (were quadratic: 4x the input = ~16x the time)", () => {
-  const cases = [(/** @type {number} */ n) => "[".repeat(n), (n) => "[x](".repeat(n / 4), (n) => " *a".repeat(n / 3), (n) => " *a*a".repeat(n / 5), (n) => " _a_a".repeat(n / 5)];
-  for (const mk of cases) {
-    // quadratic would be 16x for 4x the input, linear 4x
-    const small = best(mk(10000));
-    const big = best(mk(40000));
-    assert.ok(big < 9 * Math.max(small, 2), `${JSON.stringify(mk(8).slice(0, 8))}: 4x input took ${(big / small).toFixed(1)}x (${small.toFixed(1)} -> ${big.toFixed(1)} ms)`);
-  }
+test("perf: unclosed [ / ]( / * / _ runs cost about the same as the well-formed span of equal size (were quadratic)", () => {
+  for (const [bad, ok] of [["[", "[x](y) "], ["[x](", "[x](y) "], [" *a", " *a* "], [" *a*a", " *a* "], [" _a_a", " _a_ "]]) assertPairwise(bad, ok, 40000);
+});
+
+test("perf: nested lists and a heading of unclosed < cost about the same as their well-formed equivalents (were ~cubic / quadratic)", () => {
+  assertPairwise("- a\n  - b\n", "- a\n- b\n", 80000);
+  assertPairwise("1. a\n   - b\n", "1. a\n2. b\n", 80000);
+  assertPairwise("# " + "<a ".repeat(26000), "# " + "<a> ".repeat(20000), 1);
+  assertPairwise("# [x](" + "<a ".repeat(26000), "# [x](y) " + "<a> ".repeat(20000), 1);
 });
 
 test("perf: an unclosed span in a large input costs about the same as the well-formed span of equal size (bounded spans were 7-50x)", () => {
@@ -196,15 +209,6 @@ test("perf: an unclosed span in a large input costs about the same as the well-f
     const hostile = best(bad.repeat(N / bad.length));
     const closed = best(ok.repeat(N / ok.length));
     assert.ok(hostile < 4 * Math.max(closed, 4), `${JSON.stringify(bad)}: ${hostile.toFixed(1)} ms vs well-formed ${closed.toFixed(1)} ms`);
-  }
-});
-
-test("perf: nested lists and a heading of unclosed < scale linearly (were ~cubic / quadratic)", () => {
-  const cases = [(/** @type {number} */ n) => "- a\n  - b\n".repeat(n / 10), (n) => "1. a\n   - b\n".repeat(n / 12), (n) => "# " + "<a ".repeat(n / 3), (n) => "# [x](" + "<a ".repeat(n / 3)];
-  for (const mk of cases) {
-    const small = best(mk(20000));
-    const big = best(mk(80000));
-    assert.ok(big < 9 * Math.max(small, 2), `${JSON.stringify(mk(12).slice(0, 12))}: 4x input took ${(big / small).toFixed(1)}x (${small.toFixed(1)} -> ${big.toFixed(1)} ms)`);
   }
 });
 
