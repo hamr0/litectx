@@ -153,12 +153,15 @@ test("perf: unclosed [ / ]( / * / _ runs scale linearly (were quadratic: 4x the 
   }
 });
 
-test("perf: an unclosed span in a large input costs about the same as plain text of equal size (bounded spans were ~1 s per 200 KB)", () => {
-  // relative to plain text, so a loaded box slows both sides alike; the bounded-regex code took 1.2-5 s here (~300x+), the scanner ~30 ms
-  const plain = best("a".repeat(200000));
-  for (const mk of [(/** @type {number} */ n) => "[".repeat(n), (n) => "![".repeat(n / 2), (n) => "[a](".repeat(n / 4), (n) => " *a".repeat(n / 3), (n) => " _a_a".repeat(n / 5), (n) => "**a".repeat(n / 3)]) {
-    const t = best(mk(200000));
-    assert.ok(t < 100 * Math.max(plain, 4), `${JSON.stringify(mk(8).slice(0, 8))}: ${t.toFixed(1)} ms vs plain ${plain.toFixed(1)} ms`);
+test("perf: an unclosed span in a large input costs about the same as the well-formed span of equal size (bounded spans were 7-50x)", () => {
+  // Each hostile input is timed against a WELL-FORMED input of the same size and the same span kind, not a wall clock or plain text:
+  // that does the same rendering work, so a loaded box slows both sides alike. Scanner ~1x or less; the bounded-regex code was 7x (links) to 50x (*a).
+  const N = 200000;
+  const pairs = [["[", "[a](b) "], ["![", "![a](b) "], ["[a](", "[a](b) "], [" *a", " *a* "], [" _a_a", " _a_ "], ["**a", "**a** "]];
+  for (const [bad, ok] of pairs) {
+    const hostile = best(bad.repeat(N / bad.length));
+    const closed = best(ok.repeat(N / ok.length));
+    assert.ok(hostile < 4 * Math.max(closed, 4), `${JSON.stringify(bad)}: ${hostile.toFixed(1)} ms vs well-formed ${closed.toFixed(1)} ms`);
   }
 });
 
