@@ -5,6 +5,12 @@ All notable changes to this project are documented here, following
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Docs
+
+- README: the suite section is now a short map of the bare suite (Hands / Rails / Apps) plus what this pairs well with, linking the full list on github.com/hamr0.
+
 ## [0.43.0] - 2026-11-08
 
 ### Added
