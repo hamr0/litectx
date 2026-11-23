@@ -94,22 +94,13 @@ Every claim below is a committed benchmark; the core ones run in CI on every pus
 
 **What it doesn't claim.** litectx scaffolds *search* — it doesn't replace the model's reasoning. A strong model saw no net speed win from in-loop recall; a weaker model got a consistent nudge, not a rescue. The durable wins are cross-session memory and impact's safety check.
 
-## The bare ecosystem
+## bare suite
 
-Local-first, composable agent infrastructure. Same API patterns throughout —
-mix and match, each module works standalone.
+- **Hands** · [barebrowse](https://github.com/hamr0/barebrowse) · [baremobile](https://github.com/hamr0/baremobile) · [beeperbox](https://github.com/hamr0/beeperbox)
+- **Rails** · [bareagent](https://github.com/hamr0/bareagent) · [bareguard](https://github.com/hamr0/bareguard) · [barebox](https://github.com/hamr0/barebox) · **litectx**
+- **Apps** · [fwdloop](https://github.com/hamr0/fwdloop) · [bareloop](https://github.com/hamr0/bareloop)
 
-**Core** — the brain, the gate, the memory.
-
-- **[bareagent](https://npmjs.com/package/bare-agent)** — the think→act→observe loop. *Goal in → coordinated actions out.* Replaces LangChain, CrewAI, AutoGen.
-- **[bareguard](https://npmjs.com/package/bareguard)** — the single gate every action passes through. *Action in → allow / deny / ask-a-human out.* Replaces hand-rolled allowlists and scattered policy code.
-- **[litectx](https://npmjs.com/package/litectx)** — code + memory graph with activation decay, plus lightweight context engineering (write · select · compress · isolate). *Query in → ranked context out.*
-
-**Optional reach** — give the agent hands.
-
-- **[barebrowse](https://npmjs.com/package/barebrowse)** — a real browser for agents. *URL in → pruned snapshot out.* Replaces Playwright, Selenium, Puppeteer.
-- **[baremobile](https://npmjs.com/package/baremobile)** — Android + iOS device control. *Screen in → pruned snapshot out.* Replaces Appium, Espresso, XCUITest.
-- **[beeperbox](https://github.com/hamr0/beeperbox)** — 50+ messaging networks via one MCP server (headless Beeper Desktop in Docker). *Chat in → unified message stream out.* Replaces Twilio, per-platform bot APIs.
+Pairs well with [bareagent](https://github.com/hamr0/bareagent) (give the loop memory). → [The whole suite](https://github.com/hamr0)
 
 ## Docs
 
